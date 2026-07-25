@@ -8,7 +8,7 @@ import fastifyCors from "@fastify/cors";
 import { ensureDataDirs, DATA_DIR } from "./env.js";
 import { Hub } from "./hub.js";
 import { initAuth, issueToken, registerUser, verifyToken, verifyUser } from "./auth.js";
-import { initDb } from "./db.js";
+import { closeDb, initDb } from "./db.js";
 import { store } from "./store.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -92,13 +92,23 @@ async function main() {
   await app.listen({ port: PORT, host: HOST });
   console.log(`[cca] server listening on http://${HOST}:${PORT}`);
 
+  let shuttingDown = false;
   const shutdown = async () => {
-    await hub.shutdown();
-    await app.close();
-    process.exit(0);
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      await hub.shutdown();
+      await app.close();
+      await closeDb();
+    } catch (err) {
+      console.error("[cca] shutdown failed", err);
+      process.exitCode = 1;
+    } finally {
+      process.exit();
+    }
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.once("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown());
 }
 
 main().catch((err) => {

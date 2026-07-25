@@ -1,31 +1,32 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: mysql:8.4
     environment:
-      - POSTGRES_USER=${PG_USER:-cca}
-      - POSTGRES_PASSWORD=${PG_PASSWORD:-cca}
-      - POSTGRES_DB=${PG_DB:-cca}
+      - MYSQL_USER=${MYSQL_USER:-cca}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-cca}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-cca}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-cca-root}
     volumes:
-      - pg-data:/var/lib/postgresql/data
+      - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-cca} -d $${POSTGRES_DB:-cca}"]
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_PASSWORD}\" mysql --protocol=TCP --host=127.0.0.1 --user=\"$${MYSQL_USER}\" --database=\"$${MYSQL_DATABASE}\" --execute=\"SELECT 1\" --silent"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
     restart: unless-stopped
 
   agent:
     build: .
     ports:
-      - "7001:7001"
+      - "${APP_PORT:-8787}:8787"
     volumes:
       - agent-data:/data
       # 挂载你的代码目录,供 Agent 操作
       - ${WORKSPACE_DIR:-./workspace}:/workspace
     environment:
-      - PORT=7001
-      # Postgres 连接串;指向 compose 内的 db 服务。指向外部实例时修改 DATABASE_URL 即可,db 服务可删除
-      - DATABASE_URL=postgres://${PG_USER:-cca}:${PG_PASSWORD:-cca}@db:5432/${PG_DB:-cca}
+      - PORT=8787
+      # MySQL 连接串;指向 compose 内的 db 服务
+      - DATABASE_URL=mysql://${MYSQL_USER:-cca}:${MYSQL_PASSWORD:-cca}@db:3306/${MYSQL_DATABASE:-cca}
       # 管理员账户(首次启动时创建);其他用户通过注册页面创建,均为普通用户
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
@@ -36,4 +37,4 @@ services:
 
 volumes:
   agent-data:
-  pg-data:
+  mysql-data:

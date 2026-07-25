@@ -22,7 +22,7 @@ apps/server (Fastify + @github/copilot-sdk)
 Copilot CLI runtime(会话、工具、MCP、技能)
 ```
 
-数据存储:配置 `DATABASE_URL` 时使用 Postgres(settings/projects/threads/users,启动自动建表,并从旧 JSON 文件自动迁移);未配置时回退 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。会话消息历史由 Copilot CLI 持久化在数据目录的 `copilot-home/` 下。
+数据存储:配置 `DATABASE_URL` 时使用 MySQL(settings/projects/threads/users,启动自动建表,并从旧 JSON 文件自动迁移);未配置时回退 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。会话消息历史由 Copilot CLI 持久化在数据目录的 `copilot-home/` 下。
 
 ## 本地开发
 
@@ -40,16 +40,30 @@ npm start          # server 于 :8787 提供 API + 静态页面
 
 ## Docker 云端部署
 
+内置 MySQL 的开发部署:
+
 ```bash
 docker compose up -d --build
 # 打开 http://localhost:8787,添加项目目录(如 /workspace/your-repo)
 ```
 
-compose 会同时拉起 `postgres:16-alpine`(`db` 服务,`pg-data` volume 持久化,健康检查通过后才启动 agent),通过 `DATABASE_URL` 指向它;`PG_USER`/`PG_PASSWORD`/`PG_DB` 可在 `.env` 覆盖。使用外部 PG 实例时,改掉 `DATABASE_URL` 并删除 `db` 服务即可。compose 默认把 `./workspace` 挂到容器的 `/workspace`,把宿主代码放进去即可被 Agent 操作。
+compose 会同时拉起 `mysql:8.4`(`db` 服务,`mysql-data` volume 持久化,健康检查通过后才启动 agent),通过 `DATABASE_URL` 指向它;`MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_DATABASE`/`MYSQL_ROOT_PASSWORD` 可在 `.env` 覆盖。compose 默认把 `./workspace` 挂到容器的 `/workspace`,把宿主代码放进去即可被 Agent 操作。
+
+使用外部 MySQL 的生产部署:
+
+```bash
+cp .env.prod.example .env
+# 配置 .env 中的 DATABASE_URL 和管理员密码
+docker compose -f docker-compose-prod.yml up -d --build
+# 默认打开 http://localhost:8787
+```
+
+生产 Compose 只启动 `agent`,不会拉起 MySQL。可用 `APP_PORT` 修改宿主机端口,用 `WORKSPACE_DIR` 修改代码目录;容器内服务固定监听 `8787`。`.env` 已被 git 忽略。
+外部 MySQL 用户需要目标数据库的 `CREATE`/`SELECT`/`INSERT`/`UPDATE`/`DELETE` 权限;`DATABASE_URL` 密码中的 URL 保留字符需要百分号编码。
 
 ## 使用
 
-1. 打开页面,使用管理员账户登录(docker-compose 中 `ADMIN_USERNAME`/`ADMIN_PASSWORD`,默认 `admin`/`admin123`),或注册普通账户
+1. 打开页面,使用管理员账户登录(开发 Compose 默认 `admin`/`admin123`;生产 Compose 使用 `.env` 中的配置),或注册普通账户
 2. 左侧边栏「添加项目目录」→ 填服务器上的绝对路径
 2. 设置 → 模型:添加一个 OpenAI 兼容服务(填 baseUrl、apiKey、模型列表;Responses 协议选 `openai-responses`)
 3. 设置 → 通用:选择默认模型

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { SECRET_FILE, USERS_FILE } from "./env.js";
-import { query, usingPostgres } from "./db.js";
+import { enqueueWrite, query, transaction, usingMysql } from "./db.js";
 
 export type Role = "admin" | "user";
 
@@ -55,16 +55,27 @@ function saveUsers() {
 }
 
 function persistUser(user: User) {
-  void query(
-    `INSERT INTO users (username, role, password_hash, salt, created_at)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (username) DO UPDATE SET role = EXCLUDED.role, password_hash = EXCLUDED.password_hash, salt = EXCLUDED.salt`,
-    [user.username, user.role, user.passwordHash, user.salt, user.createdAt],
-  ).catch((err) => console.error("[cca] db write failed", err));
+  enqueueWrite(() =>
+    query(
+      `INSERT INTO users (username, role, password_hash, salt, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE role = ?, password_hash = ?, salt = ?`,
+      [
+        user.username,
+        user.role,
+        user.passwordHash,
+        user.salt,
+        user.createdAt,
+        user.role,
+        user.passwordHash,
+        user.salt,
+      ],
+    ),
+  );
 }
 
 function saveUser(user: User) {
-  if (usingPostgres()) persistUser(user);
+  if (usingMysql()) persistUser(user);
   else saveUsers();
 }
 
@@ -78,26 +89,34 @@ function sign(data: string): string {
 
 export async function initAuth() {
   secret = loadSecret();
-  if (usingPostgres()) {
-    const rows = await query("SELECT username, role, password_hash, salt, created_at FROM users");
+  if (usingMysql()) {
+    const rows = await query<{
+      username: string;
+      role: Role;
+      password_hash: string;
+      salt: string;
+      created_at: number | string;
+    }>("SELECT username, role, password_hash, salt, created_at FROM users");
     users = rows.rows.map((r) => ({
-      username: r.username as string,
-      role: r.role as Role,
-      passwordHash: r.password_hash as string,
-      salt: r.salt as string,
+      username: r.username,
+      role: r.role,
+      passwordHash: r.password_hash,
+      salt: r.salt,
       createdAt: Number(r.created_at),
     }));
     if (users.length === 0) {
       const jsonUsers = loadUsers();
       if (jsonUsers.length > 0) {
-        console.log("[cca] migrating users -> postgres");
-        for (const u of jsonUsers) {
-          await query(
-            `INSERT INTO users (username, role, password_hash, salt, created_at)
-             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (username) DO NOTHING`,
-            [u.username, u.role, u.passwordHash, u.salt, u.createdAt],
-          );
-        }
+        console.log("[cca] migrating users -> mysql");
+        await transaction(async (txQuery) => {
+          for (const u of jsonUsers) {
+            await txQuery(
+              `INSERT INTO users (username, role, password_hash, salt, created_at)
+               VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE username = ?`,
+              [u.username, u.role, u.passwordHash, u.salt, u.createdAt, u.username],
+            );
+          }
+        });
         users = jsonUsers;
       }
     }
@@ -107,7 +126,7 @@ export async function initAuth() {
 
   const adminUsername = process.env.ADMIN_USERNAME || "admin";
   const adminPassword = process.env.ADMIN_PASSWORD || "admin123";
-  const existing = users.find((u) => u.username === adminUsername);
+  const existing = users.find((u) => u.username.toLowerCase() === adminUsername.toLowerCase());
   if (!existing) {
     const salt = crypto.randomBytes(16).toString("hex");
     const admin: User = {
