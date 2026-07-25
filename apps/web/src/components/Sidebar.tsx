@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Bot, FolderGit2, FolderPlus, Loader2, MessageSquare, Plus, Settings, Trash2 } from "lucide-react";
+import { Bot, FolderGit2, FolderPlus, Loader2, LogOut, MessageSquare, Plus, Settings, ShieldCheck, Trash2, User } from "lucide-react";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
 import { Button, Dialog, Field, Input } from "./ui/primitives";
@@ -12,6 +12,8 @@ export function Sidebar() {
   const addProject = useApp((s) => s.addProject);
   const removeProject = useApp((s) => s.removeProject);
   const deleteThread = useApp((s) => s.deleteThread);
+  const user = useApp((s) => s.user);
+  const logout = useApp((s) => s.logout);
   const location = useLocation();
   const navigate = useNavigate();
   const [addOpen, setAddOpen] = useState(false);
@@ -101,6 +103,25 @@ export function Sidebar() {
       </div>
 
       <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
+        <div className="mb-1 flex items-center gap-2 rounded-md px-2 py-1.5">
+          <User className="h-4 w-4 shrink-0 text-zinc-400" />
+          <span className="min-w-0 flex-1 truncate text-sm">{user?.username}</span>
+          {user?.role === "admin" && (
+            <span title="管理员">
+              <ShieldCheck className="h-3.5 w-3.5 text-blue-500" />
+            </span>
+          )}
+          <button
+            title="退出登录"
+            className="text-zinc-400 hover:text-red-500"
+            onClick={() => {
+              logout();
+              navigate("/");
+            }}
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        </div>
         <button
           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
           onClick={() => setAddOpen(true)}

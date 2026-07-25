@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   AppSettings,
+  AuthUser,
   ChatMessage,
   ModelRef,
   Project,
@@ -11,7 +12,23 @@ import type {
   ThreadMeta,
   ToolActivity,
 } from "@cca/protocol";
-import { connect, onEvent, onReconnect, request } from "./client";
+import { connect, disconnect, onAuthFail, onEvent, onReconnect, request } from "./client";
+
+const TOKEN_KEY = "cca-token";
+
+async function authFetch(path: string, body: unknown, token?: string) {
+  const res = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: {
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) throw new Error(data.error ?? `请求失败 (${res.status})`);
+  return data as { token?: string; user: AuthUser };
+}
 
 export interface ModelOption {
   ref: ModelRef;
@@ -37,6 +54,8 @@ const emptyThread: ThreadState = {
 };
 
 interface AppState {
+  user: AuthUser | null;
+  authReady: boolean;
   connected: boolean;
   projects: Project[];
   threads: ThreadMeta[];
@@ -48,6 +67,9 @@ interface AppState {
   activeThreadId: string | null;
 
   init: () => void;
+  login: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string) => Promise<void>;
+  logout: () => void;
   refreshModels: () => Promise<void>;
   addProject: (path: string, name?: string) => Promise<Project>;
   removeProject: (projectId: string) => Promise<void>;
@@ -137,7 +159,29 @@ export const useApp = create<AppState>((set, get) => {
 
   let initialized = false;
 
+  function resetSessionState() {
+    set({
+      connected: false,
+      projects: [],
+      threads: [],
+      runningThreadIds: [],
+      settings: null,
+      skills: [],
+      models: [],
+      threadStates: {},
+      activeThreadId: null,
+    });
+  }
+
+  function startSession(token: string, user: AuthUser) {
+    localStorage.setItem(TOKEN_KEY, token);
+    set({ user, authReady: true });
+    connect(token);
+  }
+
   return {
+    user: null,
+    authReady: false,
     connected: false,
     projects: [],
     threads: [],
@@ -152,6 +196,9 @@ export const useApp = create<AppState>((set, get) => {
       if (initialized) return;
       initialized = true;
       onEvent(handleServerMessage);
+      onAuthFail(() => {
+        get().logout();
+      });
       onReconnect(() => {
         set({ connected: true });
         void request({ type: "shell.subscribe" }).catch(() => {});
@@ -160,7 +207,37 @@ export const useApp = create<AppState>((set, get) => {
           void get().openThread(active);
         }
       });
-      connect();
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (!token) {
+        set({ authReady: true });
+        return;
+      }
+      authFetch("/api/auth/me", null, token)
+        .then((data) => {
+          set({ user: data.user, authReady: true });
+          connect(token);
+        })
+        .catch(() => {
+          localStorage.removeItem(TOKEN_KEY);
+          set({ authReady: true });
+        });
+    },
+
+    login: async (username, password) => {
+      const data = await authFetch("/api/auth/login", { username, password });
+      startSession(data.token!, data.user);
+    },
+
+    register: async (username, password) => {
+      const data = await authFetch("/api/auth/register", { username, password });
+      startSession(data.token!, data.user);
+    },
+
+    logout: () => {
+      localStorage.removeItem(TOKEN_KEY);
+      disconnect();
+      resetSessionState();
+      set({ user: null });
     },
 
     refreshModels: async () => {

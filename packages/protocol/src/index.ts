@@ -57,9 +57,15 @@ export interface ThreadMeta {
   projectId: string;
   title: string;
   model?: ModelRef;
+  userId?: string;
   createdAt: number;
   updatedAt: number;
   archived: boolean;
+}
+
+export interface AuthUser {
+  username: string;
+  role: "admin" | "user";
 }
 
 export interface SkillInfo {
@@ -133,6 +139,7 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: "reply"; id: string; ok: true; data?: unknown }
   | { type: "reply"; id: string; ok: false; error: string }
+  | { type: "auth.error"; message: string }
   | { type: "shell"; data: ShellState }
   | { type: "settings"; data: AppSettings }
   | { type: "skills"; data: SkillInfo[] }

@@ -11,9 +11,11 @@ import { CopilotManager } from "./copilot.js";
 import { searchFiles } from "./files.js";
 import { deleteSkill, listSkills, saveSkill } from "./skills.js";
 import { flattenModels } from "@cca/protocol";
+import { verifyToken, type TokenPayload } from "./auth.js";
 
 interface ClientConn {
   socket: WebSocket;
+  user: TokenPayload;
   shellSubscribed: boolean;
   threadSubs: Set<string>;
 }
@@ -31,8 +33,14 @@ export class Hub {
     });
   }
 
-  handleConnection(socket: WebSocket) {
-    const conn: ClientConn = { socket, shellSubscribed: false, threadSubs: new Set() };
+  handleConnection(socket: WebSocket, token: string | undefined) {
+    const user = token ? verifyToken(token) : null;
+    if (!user) {
+      socket.send(JSON.stringify({ type: "auth.error", message: "未授权,请重新登录" }));
+      socket.close(4401, "unauthorized");
+      return;
+    }
+    const conn: ClientConn = { socket, user, shellSubscribed: false, threadSubs: new Set() };
     this.clients.add(conn);
     socket.on("message", (raw) => {
       void this.onMessage(conn, raw.toString()).catch((err) => {
@@ -45,6 +53,12 @@ export class Hub {
       }
       this.clients.delete(conn);
     });
+  }
+
+  private canAccess(conn: ClientConn, thread: ThreadMeta | undefined): boolean {
+    if (!thread) return false;
+    if (conn.user.role === "admin") return true;
+    return !thread.userId || thread.userId === conn.user.username;
   }
 
   private send(conn: ClientConn, msg: ServerMessage) {
@@ -66,24 +80,26 @@ export class Hub {
     });
   }
 
-  private shellState(): ShellState {
+  private shellState(conn: ClientConn): ShellState {
     return {
       projects: store.projects,
-      threads: [...store.threads].sort((a, b) => b.updatedAt - a.updatedAt),
+      threads: [...store.threads]
+        .filter((t) => this.canAccess(conn, t))
+        .sort((a, b) => b.updatedAt - a.updatedAt),
       runningThreadIds: this.manager.runningThreadIds(),
     };
   }
 
   broadcastShell() {
-    const state = this.shellState();
     for (const conn of this.clients) {
-      if (conn.shellSubscribed) this.send(conn, { type: "shell", data: state });
+      if (conn.shellSubscribed) this.send(conn, { type: "shell", data: this.shellState(conn) });
     }
   }
 
   private broadcastThread(threadId: string, event: import("@cca/protocol").ThreadEvent) {
+    const thread = store.getThread(threadId);
     for (const conn of this.clients) {
-      if (conn.threadSubs.has(threadId)) {
+      if (conn.threadSubs.has(threadId) && this.canAccess(conn, thread)) {
         this.send(conn, { type: "thread.event", threadId, event });
       }
     }
@@ -114,7 +130,7 @@ export class Hub {
       switch (msg.type) {
         case "shell.subscribe": {
           conn.shellSubscribed = true;
-          this.send(conn, { type: "shell", data: this.shellState() });
+          this.send(conn, { type: "shell", data: this.shellState(conn) });
           this.send(conn, { type: "settings", data: store.settings });
           this.send(conn, { type: "skills", data: listSkills() });
           this.reply(conn, msg.id);
@@ -140,6 +156,7 @@ export class Hub {
             projectId: msg.projectId,
             title: "新会话",
             model: msg.model ?? store.settings.defaultModel,
+            userId: conn.user.username,
             createdAt: Date.now(),
             updatedAt: Date.now(),
             archived: false,
@@ -150,6 +167,7 @@ export class Hub {
           break;
         }
         case "thread.delete": {
+          if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权操作该会话");
           await this.manager.deleteThread(msg.threadId);
           store.deleteThread(msg.threadId);
           this.broadcastShell();
@@ -159,6 +177,7 @@ export class Hub {
         case "thread.setModel": {
           const thread = store.getThread(msg.threadId);
           if (!thread) throw new Error("会话不存在");
+          if (!this.canAccess(conn, thread)) throw new Error("无权操作该会话");
           store.upsertThread({ ...thread, model: msg.model });
           await this.manager.deleteThread(msg.threadId);
           this.broadcastShell();
@@ -166,6 +185,7 @@ export class Hub {
           break;
         }
         case "thread.subscribe": {
+          if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权访问该会话");
           const snapshot = await this.manager.subscribe(msg.threadId);
           conn.threadSubs.add(msg.threadId);
           this.send(conn, { type: "thread.event", threadId: msg.threadId, event: snapshot });
@@ -179,12 +199,14 @@ export class Hub {
           break;
         }
         case "turn.start": {
+          if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权操作该会话");
           this.reply(conn, msg.id);
           await this.manager.sendMessage(msg.threadId, msg.text, msg.attachments);
           this.broadcastShell();
           break;
         }
         case "turn.interrupt": {
+          if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权操作该会话");
           await this.manager.interrupt(msg.threadId);
           this.reply(conn, msg.id);
           break;

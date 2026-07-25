@@ -1,15 +1,39 @@
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=${PG_USER:-cca}
+      - POSTGRES_PASSWORD=${PG_PASSWORD:-cca}
+      - POSTGRES_DB=${PG_DB:-cca}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-cca} -d $${POSTGRES_DB:-cca}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   agent:
     build: .
     ports:
-      - "8787:8787"
+      - "7001:7001"
     volumes:
       - agent-data:/data
       # 挂载你的代码目录,供 Agent 操作
       - ${WORKSPACE_DIR:-./workspace}:/workspace
     environment:
-      - PORT=8787
+      - PORT=7001
+      # Postgres 连接串;指向 compose 内的 db 服务。指向外部实例时修改 DATABASE_URL 即可,db 服务可删除
+      - DATABASE_URL=postgres://${PG_USER:-cca}:${PG_PASSWORD:-cca}@db:5432/${PG_DB:-cca}
+      # 管理员账户(首次启动时创建);其他用户通过注册页面创建,均为普通用户
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   agent-data:
+  pg-data:

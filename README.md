@@ -10,6 +10,7 @@
 - **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),输入框 `/技能名` 调用
 - **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
 - **项目管理**:一个项目 = 服务器上的一个工作目录,会话在其 cwd 中执行
+- **用户系统**:登录/注册;管理员由环境变量 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 创建,注册用户为普通用户;会话按用户隔离,管理员可见全部
 
 ## 架构
 
@@ -21,7 +22,7 @@ apps/server (Fastify + @github/copilot-sdk)
 Copilot CLI runtime(会话、工具、MCP、技能)
 ```
 
-数据默认存于 `~/.cloud-coding-agent`(可用 `CCA_DATA_DIR` 覆盖):设置、项目、会话元数据、技能、Copilot 会话状态。
+数据存储:配置 `DATABASE_URL` 时使用 Postgres(settings/projects/threads/users,启动自动建表,并从旧 JSON 文件自动迁移);未配置时回退 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。会话消息历史由 Copilot CLI 持久化在数据目录的 `copilot-home/` 下。
 
 ## 本地开发
 
@@ -44,11 +45,12 @@ docker compose up -d --build
 # 打开 http://localhost:8787,添加项目目录(如 /workspace/your-repo)
 ```
 
-compose 默认把 `./workspace` 挂到容器的 `/workspace`,把宿主代码放进去即可被 Agent 操作。会话/技能/配置持久化在 `agent-data` volume。
+compose 会同时拉起 `postgres:16-alpine`(`db` 服务,`pg-data` volume 持久化,健康检查通过后才启动 agent),通过 `DATABASE_URL` 指向它;`PG_USER`/`PG_PASSWORD`/`PG_DB` 可在 `.env` 覆盖。使用外部 PG 实例时,改掉 `DATABASE_URL` 并删除 `db` 服务即可。compose 默认把 `./workspace` 挂到容器的 `/workspace`,把宿主代码放进去即可被 Agent 操作。
 
 ## 使用
 
-1. 左侧边栏「添加项目目录」→ 填服务器上的绝对路径
+1. 打开页面,使用管理员账户登录(docker-compose 中 `ADMIN_USERNAME`/`ADMIN_PASSWORD`,默认 `admin`/`admin123`),或注册普通账户
+2. 左侧边栏「添加项目目录」→ 填服务器上的绝对路径
 2. 设置 → 模型:添加一个 OpenAI 兼容服务(填 baseUrl、apiKey、模型列表;Responses 协议选 `openai-responses`)
 3. 设置 → 通用:选择默认模型
 4. 回到首页,输入任务开聊;`@` 引用文件,`/` 选择技能
