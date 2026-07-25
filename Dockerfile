@@ -14,7 +14,10 @@ ENV NODE_ENV=production
 ENV PORT=8787
 ENV CCA_DATA_DIR=/data
 COPY --from=build /app /app
-RUN mkdir -p /data
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /data
 EXPOSE 8787
 VOLUME ["/data"]
 CMD ["npm", "run", "start", "-w", "@cca/server"]

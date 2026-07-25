@@ -1,5 +1,7 @@
 export type WireApi = "completions" | "responses";
 export type ProviderType = "openai" | "azure" | "anthropic";
+export const REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export interface ModelEntry {
   id: string;
@@ -17,6 +19,11 @@ export interface ModelProviderConfig {
   azureApiVersion?: string;
   models: ModelEntry[];
 }
+
+export type ProviderModelDiscoveryConfig = Pick<
+  ModelProviderConfig,
+  "type" | "baseUrl" | "apiKey" | "azureApiVersion"
+>;
 
 export interface McpServerConfig {
   id: string;
@@ -44,12 +51,30 @@ export interface AppSettings {
 export interface ModelRef {
   providerId: string;
   modelId: string;
+  reasoningEffort?: ReasoningEffort;
+}
+
+export interface ModelOption {
+  ref: ModelRef;
+  label: string;
+  supportedReasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
 }
 
 export interface Project {
   id: string;
   name: string;
   path: string;
+}
+
+export interface DirectoryBrowseEntry {
+  name: string;
+  fullPath: string;
+}
+
+export interface DirectoryBrowseResult {
+  parentPath: string;
+  entries: DirectoryBrowseEntry[];
 }
 
 export interface ThreadMeta {
@@ -119,6 +144,7 @@ export type ThreadEvent =
 
 export type ClientMessage =
   | { id: string; type: "shell.subscribe" }
+  | { id: string; type: "directories.browse"; partialPath: string }
   | { id: string; type: "project.add"; path: string; name?: string }
   | { id: string; type: "project.remove"; projectId: string }
   | { id: string; type: "thread.create"; projectId: string; model?: ModelRef }
@@ -134,6 +160,7 @@ export type ClientMessage =
   | { id: string; type: "skill.save"; name: string; description: string; content: string }
   | { id: string; type: "skill.delete"; name: string }
   | { id: string; type: "models.list" }
+  | { id: string; type: "provider.models.discover"; provider: ProviderModelDiscoveryConfig }
   | { id: string; type: "files.search"; projectId: string; query: string };
 
 export type ServerMessage =
@@ -152,11 +179,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
   disabledSkills: [],
 };
 
-export function flattenModels(settings: AppSettings): { ref: ModelRef; label: string }[] {
-  const out: { ref: ModelRef; label: string }[] = [];
+export function flattenModels(settings: AppSettings): ModelOption[] {
+  const out: ModelOption[] = [];
   for (const p of settings.providers) {
     for (const m of p.models) {
-      out.push({ ref: { providerId: p.id, modelId: m.id }, label: `${p.name} / ${m.name ?? m.id}` });
+      out.push({
+        ref: { providerId: p.id, modelId: m.id },
+        label: `${p.name} / ${m.name ?? m.id}`,
+        supportedReasoningEfforts:
+          m.reasoningEffort === false
+            ? []
+            : m.reasoningEffort === true
+              ? [...REASONING_EFFORTS]
+              : undefined,
+      });
     }
   }
   return out;

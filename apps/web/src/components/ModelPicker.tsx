@@ -7,9 +7,13 @@ import { cn } from "../lib/utils";
 export function ModelPicker({
   value,
   onChange,
+  disabled = false,
+  direction = "up",
 }: {
   value: ModelRef | undefined;
   onChange: (ref: ModelRef) => void;
+  disabled?: boolean;
+  direction?: "up" | "down";
 }) {
   const models = useApp((s) => s.models);
   const settings = useApp((s) => s.settings);
@@ -30,6 +34,10 @@ export function ModelPicker({
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
   const current = value ?? settings?.defaultModel;
   const currentLabel =
     models.find((m) => m.ref.providerId === current?.providerId && m.ref.modelId === current?.modelId)
@@ -40,7 +48,12 @@ export function ModelPicker({
   return (
     <div className="relative" ref={ref}>
       <button
-        className="flex items-center gap-1.5 rounded-md border border-zinc-300 px-2.5 py-1.5 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        type="button"
+        aria-label="选择模型"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        disabled={disabled}
+        className="flex h-8 items-center gap-1.5 rounded-md border border-zinc-300 px-2.5 text-xs hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
         onClick={() => setOpen((v) => !v)}
       >
         <Cpu className="h-3.5 w-3.5 text-zinc-500" />
@@ -48,7 +61,14 @@ export function ModelPicker({
         <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 z-50 mb-1 w-80 rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+        <div
+          role="menu"
+          aria-label="模型列表"
+          className={cn(
+            "absolute left-0 z-50 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900",
+            direction === "up" ? "bottom-full mb-1" : "top-full mt-1",
+          )}
+        >
           <div className="border-b border-zinc-100 p-2 dark:border-zinc-800">
             <input
               autoFocus
@@ -56,6 +76,9 @@ export function ModelPicker({
               placeholder="搜索模型…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setOpen(false);
+              }}
             />
           </div>
           <div className="max-h-72 overflow-y-auto p-1">
@@ -69,6 +92,9 @@ export function ModelPicker({
                 current?.providerId === m.ref.providerId && current?.modelId === m.ref.modelId;
               return (
                 <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selected}
                   key={`${m.ref.providerId}:${m.ref.modelId}`}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800",

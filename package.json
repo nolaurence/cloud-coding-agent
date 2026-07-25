@@ -13,6 +13,7 @@
     "dev:web": "npm run dev -w @cca/web",
     "build": "npm run build -w @cca/web && npm run build -w @cca/server",
     "start": "node apps/server/dist/index.js",
+    "test": "npm run test -w @cca/server",
     "typecheck": "npm run typecheck -w @cca/protocol && npm run typecheck -w @cca/server && npm run typecheck -w @cca/web"
   },
   "devDependencies": {

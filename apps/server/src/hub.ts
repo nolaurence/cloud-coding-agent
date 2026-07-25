@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import type {
   ClientMessage,
+  ModelOption,
   ServerMessage,
   ShellState,
   ThreadMeta,
@@ -9,9 +10,11 @@ import type {
 import { store } from "./store.js";
 import { CopilotManager } from "./copilot.js";
 import { searchFiles } from "./files.js";
+import { browseDirectories, resolveProjectDirectory } from "./directories.js";
 import { deleteSkill, listSkills, saveSkill } from "./skills.js";
-import { flattenModels } from "@cca/protocol";
+import { flattenModels, REASONING_EFFORTS } from "@cca/protocol";
 import { verifyToken, type TokenPayload } from "./auth.js";
+import { discoverProviderModels } from "./providers.js";
 
 interface ClientConn {
   socket: WebSocket;
@@ -59,6 +62,10 @@ export class Hub {
     if (!thread) return false;
     if (conn.user.role === "admin") return true;
     return !thread.userId || thread.userId === conn.user.username;
+  }
+
+  private requireAdmin(conn: ClientConn) {
+    if (conn.user.role !== "admin") throw new Error("仅管理员可以管理项目目录");
   }
 
   private send(conn: ClientConn, msg: ServerMessage) {
@@ -136,15 +143,23 @@ export class Hub {
           this.reply(conn, msg.id);
           break;
         }
+        case "directories.browse": {
+          this.requireAdmin(conn);
+          this.reply(conn, msg.id, await browseDirectories(msg.partialPath));
+          break;
+        }
         case "project.add": {
-          const name = msg.name?.trim() || msg.path.split(/[\\/]/).filter(Boolean).pop() || msg.path;
-          const project = { id: randomUUID(), name, path: msg.path };
+          this.requireAdmin(conn);
+          const projectPath = await resolveProjectDirectory(msg.path);
+          const name = msg.name?.trim() || projectPath.split(/[\\/]/).filter(Boolean).pop() || projectPath;
+          const project = { id: randomUUID(), name, path: projectPath };
           store.addProject(project);
           this.broadcastShell();
           this.reply(conn, msg.id, project);
           break;
         }
         case "project.remove": {
+          this.requireAdmin(conn);
           store.removeProject(msg.projectId);
           this.broadcastShell();
           this.reply(conn, msg.id);
@@ -178,8 +193,18 @@ export class Hub {
           const thread = store.getThread(msg.threadId);
           if (!thread) throw new Error("会话不存在");
           if (!this.canAccess(conn, thread)) throw new Error("无权操作该会话");
+          if (
+            msg.model.reasoningEffort &&
+            !REASONING_EFFORTS.includes(msg.model.reasoningEffort)
+          ) {
+            throw new Error("不支持的推理强度");
+          }
+          await this.manager.setThreadModel(
+            msg.threadId,
+            thread.model ?? store.settings.defaultModel,
+            msg.model,
+          );
           store.upsertThread({ ...thread, model: msg.model });
-          await this.manager.deleteThread(msg.threadId);
           this.broadcastShell();
           this.reply(conn, msg.id);
           break;
@@ -249,17 +274,24 @@ export class Hub {
         }
         case "models.list": {
           const configured = flattenModels(store.settings);
-          let copilotModels: { ref: { providerId: string; modelId: string }; label: string }[] = [];
+          let copilotModels: ModelOption[] = [];
           try {
             const models = await this.manager.listModels();
             copilotModels = models.map((m) => ({
               ref: { providerId: "copilot", modelId: m.id },
               label: `GitHub Copilot / ${m.name ?? m.id}`,
+              supportedReasoningEfforts: m.supportedReasoningEfforts,
+              defaultReasoningEffort: m.defaultReasoningEffort,
             }));
           } catch {
             // copilot auth not available; ignore
           }
           this.reply(conn, msg.id, [...configured, ...copilotModels]);
+          break;
+        }
+        case "provider.models.discover": {
+          const models = await discoverProviderModels(msg.provider);
+          this.reply(conn, msg.id, models);
           break;
         }
         case "files.search": {

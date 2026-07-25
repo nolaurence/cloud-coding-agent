@@ -198,7 +198,7 @@ export function Composer({
         <textarea
           ref={textareaRef}
           autoFocus={autoFocus}
-          className="max-h-48 min-h-20 w-full resize-y bg-transparent px-3.5 py-3 text-sm outline-none placeholder:text-zinc-400"
+          className="max-h-48 min-h-20 w-full resize-none bg-transparent px-3.5 py-3 text-sm outline-none placeholder:text-zinc-400"
           placeholder={placeholder ?? "描述你的任务… 输入 @ 引用文件,/ 选择技能,Enter 发送"}
           value={text}
           onChange={(e) => {

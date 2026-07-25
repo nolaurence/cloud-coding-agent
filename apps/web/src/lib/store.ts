@@ -3,8 +3,12 @@ import type {
   AppSettings,
   AuthUser,
   ChatMessage,
+  DirectoryBrowseResult,
   ModelRef,
+  ModelEntry,
+  ModelOption,
   Project,
+  ProviderModelDiscoveryConfig,
   ServerMessage,
   ShellState,
   SkillInfo,
@@ -28,11 +32,6 @@ async function authFetch(path: string, body: unknown, token?: string) {
   const data = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) throw new Error(data.error ?? `请求失败 (${res.status})`);
   return data as { token?: string; user: AuthUser };
-}
-
-export interface ModelOption {
-  ref: ModelRef;
-  label: string;
 }
 
 interface ThreadState {
@@ -71,6 +70,8 @@ interface AppState {
   register: (username: string, password: string) => Promise<void>;
   logout: () => void;
   refreshModels: () => Promise<void>;
+  discoverProviderModels: (provider: ProviderModelDiscoveryConfig) => Promise<ModelEntry[]>;
+  browseDirectories: (partialPath: string) => Promise<DirectoryBrowseResult>;
   addProject: (path: string, name?: string) => Promise<Project>;
   removeProject: (projectId: string) => Promise<void>;
   createThread: (projectId: string, model?: ModelRef) => Promise<ThreadMeta>;
@@ -247,6 +248,14 @@ export const useApp = create<AppState>((set, get) => {
       } catch {
         // ignore
       }
+    },
+
+    discoverProviderModels: async (provider) => {
+      return request<ModelEntry[]>({ type: "provider.models.discover", provider });
+    },
+
+    browseDirectories: async (partialPath) => {
+      return request<DirectoryBrowseResult>({ type: "directories.browse", partialPath });
     },
 
     addProject: async (path, name) => {

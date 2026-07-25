@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { ModelProviderConfig, ProviderType, WireApi } from "@cca/protocol";
 import { useApp } from "../../lib/store";
 import { Button, Dialog, Field, Input, Select, Textarea } from "../../components/ui/primitives";
@@ -17,9 +17,12 @@ const emptyProvider = (): ModelProviderConfig => ({
 export function ProvidersSettings() {
   const settings = useApp((s) => s.settings);
   const updateSettings = useApp((s) => s.updateSettings);
+  const discoverProviderModels = useApp((s) => s.discoverProviderModels);
   const [editing, setEditing] = useState<ModelProviderConfig | null>(null);
   const [modelsText, setModelsText] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [discovering, setDiscovering] = useState(false);
 
   if (!settings) return null;
 
@@ -32,6 +35,33 @@ export function ProvidersSettings() {
     setEditing({ ...target, id: target.id || `p-${Date.now()}` });
     setModelsText(target.models.map((m) => (m.name ? `${m.id} | ${m.name}` : m.id)).join("\n"));
     setError("");
+    setNotice("");
+  };
+
+  const discoverModels = async () => {
+    if (!editing || discovering) return;
+    if (!editing.baseUrl.trim()) {
+      setError("请先填写 Base URL");
+      return;
+    }
+
+    setDiscovering(true);
+    setError("");
+    setNotice("");
+    try {
+      const models = await discoverProviderModels({
+        type: editing.type,
+        baseUrl: editing.baseUrl,
+        apiKey: editing.apiKey,
+        azureApiVersion: editing.azureApiVersion,
+      });
+      setModelsText(models.map((m) => (m.name ? `${m.id} | ${m.name}` : m.id)).join("\n"));
+      setNotice(`已获取 ${models.length} 个模型`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "获取模型失败");
+    } finally {
+      setDiscovering(false);
+    }
   };
 
   const submit = () => {
@@ -156,7 +186,25 @@ export function ProvidersSettings() {
                 />
               </Field>
             )}
-            <Field label={"模型列表(每行一个,格式:模型id 或 模型id | 显示名)"}>
+            <div className="mb-3">
+              <div className="mb-1 flex min-h-7 flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  模型列表(每行一个,格式:模型id 或 模型id | 显示名)
+                </div>
+                {editing.type === "openai" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 self-end whitespace-nowrap"
+                    disabled={discovering || !editing.baseUrl.trim()}
+                    onClick={() => void discoverModels()}
+                  >
+                    {discovering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    {discovering ? "获取中" : "自动获取"}
+                  </Button>
+                )}
+              </div>
               <Textarea
                 rows={5}
                 className="mono"
@@ -164,13 +212,16 @@ export function ProvidersSettings() {
                 onChange={(e) => setModelsText(e.target.value)}
                 placeholder={"gpt-4o | GPT-4o\ndeepseek-chat"}
               />
-            </Field>
-            {error && <div className="mb-2 text-xs text-red-500">{error}</div>}
+            </div>
+            <div aria-live="polite">
+              {error && <div className="mb-2 text-xs text-red-500">{error}</div>}
+              {!error && notice && <div className="mb-2 text-xs text-emerald-600 dark:text-emerald-400">{notice}</div>}
+            </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setEditing(null)}>
                 取消
               </Button>
-              <Button onClick={submit}>保存</Button>
+              <Button disabled={discovering} onClick={submit}>保存</Button>
             </div>
           </>
         )}

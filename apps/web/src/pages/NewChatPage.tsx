@@ -4,6 +4,7 @@ import type { ModelRef } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
+import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
 import { Select } from "../components/ui/primitives";
 
 export function NewChatPage() {
@@ -17,12 +18,13 @@ export function NewChatPage() {
   const [creating, setCreating] = useState(false);
 
   const effectiveProjectId = projectId || projects[0]?.id || "";
+  const effectiveModel = model ?? settings?.defaultModel;
 
   const onSend = async (text: string, attachments: { path: string; displayName?: string }[]) => {
     if (!effectiveProjectId || creating) return;
     setCreating(true);
     try {
-      const thread = await createThread(effectiveProjectId, model ?? settings?.defaultModel);
+      const thread = await createThread(effectiveProjectId, effectiveModel);
       await sendMessage(thread.id, text, attachments);
       navigate(`/thread/${thread.id}`);
     } finally {
@@ -43,9 +45,10 @@ export function NewChatPage() {
           </div>
         ) : (
           <>
-            <div className="mb-3 flex items-center gap-2">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
               <Select
-                className="w-auto"
+                className="w-full sm:w-auto"
+                disabled={creating}
                 value={effectiveProjectId}
                 onChange={(e) => setProjectId(e.target.value)}
               >
@@ -55,7 +58,14 @@ export function NewChatPage() {
                   </option>
                 ))}
               </Select>
-              <ModelPicker value={model} onChange={setModel} />
+              <ModelPicker value={effectiveModel} onChange={setModel} disabled={creating} />
+              <ReasoningEffortPicker
+                model={effectiveModel}
+                disabled={creating}
+                onChange={(reasoningEffort) => {
+                  if (effectiveModel) setModel({ ...effectiveModel, reasoningEffort });
+                }}
+              />
             </div>
             <Composer
               projectId={effectiveProjectId}

@@ -130,6 +130,9 @@ export class CopilotManager {
     }
     if (modelRef) {
       config.model = modelRef.modelId;
+      if (modelRef.reasoningEffort) {
+        config.reasoningEffort = modelRef.reasoningEffort;
+      }
       if (providerConfig) {
         config.provider = {
           type: providerConfig.type,
@@ -464,6 +467,32 @@ export class CopilotManager {
     this.shellChanged();
   }
 
+  async setThreadModel(
+    threadId: string,
+    currentModel: ModelRef | undefined,
+    nextModel: ModelRef,
+  ): Promise<void> {
+    const rt = this.threads.get(threadId);
+    if (!rt) return;
+    if (rt.running) throw new Error("当前任务运行中,请等待完成后再切换模型或推理强度");
+
+    const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
+    if (!session) return;
+
+    const currentProviderId = currentModel?.providerId ?? "copilot";
+    if (currentProviderId === nextModel.providerId) {
+      await session.setModel(
+        nextModel.modelId,
+        nextModel.reasoningEffort ? { reasoningEffort: nextModel.reasoningEffort } : undefined,
+      );
+      return;
+    }
+
+    await session.disconnect();
+    rt.session = null;
+    rt.attaching = null;
+  }
+
   async deleteThread(threadId: string): Promise<void> {
     const rt = this.threads.get(threadId);
     if (rt?.session) {
@@ -486,7 +515,14 @@ export class CopilotManager {
     const client = await this.ensureClient();
     try {
       const models = await client.listModels();
-      return models.map((m) => ({ id: m.id, name: m.name }));
+      return models.map((m) => ({
+        id: m.id,
+        name: m.name,
+        supportedReasoningEfforts: m.capabilities.supports.reasoningEffort
+          ? m.supportedReasoningEfforts
+          : [],
+        defaultReasoningEffort: m.defaultReasoningEffort,
+      }));
     } catch {
       return [];
     }

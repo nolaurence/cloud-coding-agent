@@ -3,7 +3,8 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Bot, FolderGit2, FolderPlus, Loader2, LogOut, MessageSquare, Plus, Settings, ShieldCheck, Trash2, User } from "lucide-react";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
-import { Button, Dialog, Field, Input } from "./ui/primitives";
+import { Button } from "./ui/primitives";
+import { ProjectDirectoryPicker } from "./ProjectDirectoryPicker";
 
 export function Sidebar() {
   const projects = useApp((s) => s.projects);
@@ -17,9 +18,6 @@ export function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
   const [addOpen, setAddOpen] = useState(false);
-  const [path, setPath] = useState("");
-  const [name, setName] = useState("");
-  const [error, setError] = useState("");
 
   const threadsByProject = (projectId: string) =>
     threads.filter((t) => t.projectId === projectId && !t.archived);
@@ -50,17 +48,19 @@ export function Sidebar() {
               <span className="min-w-0 flex-1 truncate" title={project.path}>
                 {project.name}
               </span>
-              <button
-                className="opacity-0 group-hover:opacity-100"
-                title="移除项目"
-                onClick={() => {
-                  if (confirm(`移除项目 ${project.name}?(不会删除磁盘文件)`)) {
-                    void removeProject(project.id);
-                  }
-                }}
-              >
-                <Trash2 className="h-3.5 w-3.5 text-zinc-400 hover:text-red-500" />
-              </button>
+              {user?.role === "admin" && (
+                <button
+                  className="opacity-0 group-hover:opacity-100"
+                  title="移除项目"
+                  onClick={() => {
+                    if (confirm(`移除项目 ${project.name}?(不会删除磁盘文件)`)) {
+                      void removeProject(project.id);
+                    }
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5 text-zinc-400 hover:text-red-500" />
+                </button>
+              )}
             </div>
             {threadsByProject(project.id).map((thread) => {
               const active = location.pathname === `/thread/${thread.id}`;
@@ -122,12 +122,14 @@ export function Sidebar() {
             <LogOut className="h-4 w-4" />
           </button>
         </div>
-        <button
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
-          onClick={() => setAddOpen(true)}
-        >
-          <FolderPlus className="h-4 w-4" /> 添加项目目录
-        </button>
+        {user?.role === "admin" && (
+          <button
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
+            onClick={() => setAddOpen(true)}
+          >
+            <FolderPlus className="h-4 w-4" /> 添加项目目录
+          </button>
+        )}
         <Link
           to="/settings/general"
           className={cn(
@@ -141,42 +143,9 @@ export function Sidebar() {
         </Link>
       </div>
 
-      <Dialog open={addOpen} onClose={() => setAddOpen(false)} title="添加项目目录">
-        <Field label="目录绝对路径(服务器上的路径)">
-          <Input
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            placeholder="例如 /workspace/my-repo 或 D:\code\my-repo"
-          />
-        </Field>
-        <Field label="显示名称(可选)">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="默认取目录名" />
-        </Field>
-        {error && <div className="mb-2 text-xs text-red-500">{error}</div>}
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={() => setAddOpen(false)}>
-            取消
-          </Button>
-          <Button
-            onClick={() => {
-              if (!path.trim()) {
-                setError("请填写路径");
-                return;
-              }
-              addProject(path.trim(), name.trim() || undefined)
-                .then(() => {
-                  setAddOpen(false);
-                  setPath("");
-                  setName("");
-                  setError("");
-                })
-                .catch((e: Error) => setError(e.message));
-            }}
-          >
-            添加
-          </Button>
-        </div>
-      </Dialog>
+      {addOpen && (
+        <ProjectDirectoryPicker onClose={() => setAddOpen(false)} onAdd={(projectPath) => addProject(projectPath)} />
+      )}
     </aside>
   );
 }
