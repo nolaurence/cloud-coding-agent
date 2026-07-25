@@ -1,0 +1,27 @@
+{
+  "name": "@cca/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc --noEmit",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cca/protocol": "*",
+    "@fastify/cors": "^10.0.2",
+    "@fastify/static": "^8.0.4",
+    "@fastify/websocket": "^11.0.2",
+    "@github/copilot": "^1.0.75",
+    "@github/copilot-sdk": "^1.0.8",
+    "fastify": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

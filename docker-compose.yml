@@ -1,0 +1,15 @@
+services:
+  agent:
+    build: .
+    ports:
+      - "8787:8787"
+    volumes:
+      - agent-data:/data
+      # 挂载你的代码目录,供 Agent 操作
+      - ${WORKSPACE_DIR:-./workspace}:/workspace
+    environment:
+      - PORT=8787
+    restart: unless-stopped
+
+volumes:
+  agent-data:

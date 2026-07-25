@@ -1,0 +1,25 @@
+{
+  "name": "cloud-coding-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w @cca/server",
+    "dev:web": "npm run dev -w @cca/web",
+    "build": "npm run build -w @cca/web && npm run build -w @cca/server",
+    "start": "node apps/server/dist/index.js",
+    "typecheck": "npm run typecheck -w @cca/protocol && npm run typecheck -w @cca/server && npm run typecheck -w @cca/web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}
