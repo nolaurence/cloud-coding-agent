@@ -17,7 +17,12 @@ import { deleteSkill, listSkills, saveSkill } from "./skills.js";
 import { flattenModels, isReasoningEffort, normalizeModelRefReasoning } from "@cca/protocol";
 import { verifyToken, type TokenPayload } from "./auth.js";
 import { discoverProviderModels } from "./providers.js";
-import { listProjectFiles, projectDiff, readProjectFile } from "./workspace.js";
+import {
+  listProjectDirectory,
+  listProjectFiles,
+  projectDiff,
+  readProjectFile,
+} from "./workspace.js";
 import { TerminalManager } from "./terminals.js";
 import { bindGitProvider, listGitBindings, unbindGitProvider } from "./gitBindings.js";
 import { removeThreadUploads, removeUploadedImages, validateOwnedUploads } from "./uploads.js";
@@ -387,6 +392,12 @@ export class Hub {
           this.reply(conn, msg.id, listProjectFiles(project.path));
           break;
         }
+        case "project.directory.list": {
+          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
+          if (!project) throw new Error("项目不存在");
+          this.reply(conn, msg.id, listProjectDirectory(project.path, msg.path));
+          break;
+        }
         case "project.file.read": {
           const project = store.projects.find((candidate) => candidate.id === msg.projectId);
           if (!project) throw new Error("项目不存在");
@@ -404,11 +415,27 @@ export class Hub {
           if (!this.canAccess(conn, thread)) throw new Error("无权操作该会话");
           const project = store.projects.find((candidate) => candidate.id === thread?.projectId);
           if (!project) throw new Error("项目不存在");
-          this.reply(conn, msg.id, this.terminals.open(conn.user.username, msg.threadId, msg.terminalId, project.path));
+          this.reply(
+            conn,
+            msg.id,
+            this.terminals.open(
+              conn.user.username,
+              msg.threadId,
+              msg.terminalId,
+              project.path,
+              msg.cols,
+              msg.rows,
+            ),
+          );
           break;
         }
         case "terminal.write": {
           this.terminals.write(conn.user.username, msg.terminalId, msg.data);
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "terminal.resize": {
+          this.terminals.resize(conn.user.username, msg.terminalId, msg.cols, msg.rows);
           this.reply(conn, msg.id);
           break;
         }

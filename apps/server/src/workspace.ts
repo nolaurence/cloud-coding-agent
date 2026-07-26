@@ -2,12 +2,31 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { GitDiffResult, ProjectFileContent, ProjectFileEntry } from "@cca/protocol";
+import type {
+  GitDiffResult,
+  ProjectDirectoryEntry,
+  ProjectDirectoryListing,
+  ProjectFileContent,
+  ProjectFileEntry,
+} from "@cca/protocol";
 
 const execFileAsync = promisify(execFile);
 const MAX_FILE_SIZE = 1024 * 1024;
 const MAX_DIFF_SIZE = 2 * 1024 * 1024;
-const IGNORED_DIRECTORIES = new Set([".git", "node_modules", "dist", "build", ".next", "coverage"]);
+const IGNORED_DIRECTORIES = new Set([
+  ".git",
+  ".cache",
+  ".next",
+  ".pnpm-store",
+  ".turbo",
+  "__pycache__",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "out",
+  "target",
+]);
 
 function canonicalRoot(root: string): string {
   return fs.realpathSync(root);
@@ -25,17 +44,68 @@ function resolveInside(root: string, relativePath: string): string {
   return target;
 }
 
+function projectPath(root: string, target: string): string {
+  return path.relative(root, target).split(path.sep).join("/");
+}
+
+function sortedEntries(directory: string): fs.Dirent[] {
+  return fs
+    .readdirSync(directory, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        (entry.isFile() || entry.isDirectory()) &&
+        !entry.isSymbolicLink() &&
+        !(entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name)),
+    )
+    .sort((left, right) => {
+      if (left.isDirectory() !== right.isDirectory()) return left.isDirectory() ? -1 : 1;
+      return left.name.localeCompare(right.name);
+    });
+}
+
+export function listProjectDirectory(root: string, relativePath = ""): ProjectDirectoryListing {
+  const canonical = canonicalRoot(root);
+  const directory = relativePath ? resolveInside(canonical, relativePath) : canonical;
+  const directoryStat = fs.statSync(directory);
+  if (!directoryStat.isDirectory()) throw new Error("目标不是目录");
+
+  const entries: ProjectDirectoryEntry[] = [];
+  for (const entry of sortedEntries(directory)) {
+    const fullPath = path.join(directory, entry.name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(fullPath);
+    } catch {
+      continue;
+    }
+    entries.push({
+      name: entry.name,
+      path: projectPath(canonical, fullPath),
+      kind: entry.isDirectory() ? "directory" : "file",
+      ...(entry.isFile() ? { size: stat.size } : {}),
+      modifiedAt: stat.mtimeMs,
+    });
+  }
+
+  return { path: projectPath(canonical, directory), entries };
+}
+
 export function listProjectFiles(root: string): ProjectFileEntry[] {
   const canonical = canonicalRoot(root);
   const entries: ProjectFileEntry[] = [];
   const walk = (directory: string, depth: number) => {
     if (depth > 12 || entries.length >= 5000) return;
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (entry.name.startsWith(".") && entry.name !== ".github") continue;
-      if (entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name)) continue;
+    let children: fs.Dirent[];
+    try {
+      children = sortedEntries(directory);
+    } catch (error) {
+      if (directory === canonical) throw error;
+      return;
+    }
+    for (const entry of children) {
+      if (entries.length >= 5000) return;
       const fullPath = path.join(directory, entry.name);
-      const relativePath = path.relative(canonical, fullPath).split(path.sep).join("/");
-      if (entry.isSymbolicLink()) continue;
+      const relativePath = projectPath(canonical, fullPath);
       if (entry.isDirectory()) {
         entries.push({ path: relativePath, kind: "directory" });
         walk(fullPath, depth + 1);
@@ -49,13 +119,14 @@ export function listProjectFiles(root: string): ProjectFileEntry[] {
 }
 
 export function readProjectFile(root: string, relativePath: string): ProjectFileContent {
+  const canonical = canonicalRoot(root);
   const target = resolveInside(root, relativePath);
   const stat = fs.statSync(target);
   if (!stat.isFile()) throw new Error("目标不是文件");
   if (stat.size > MAX_FILE_SIZE) throw new Error("文件超过 1 MB，无法预览");
   const buffer = fs.readFileSync(target);
   if (buffer.includes(0)) throw new Error("二进制文件无法预览");
-  return { path: relativePath, content: buffer.toString("utf8"), size: stat.size };
+  return { path: projectPath(canonical, target), content: buffer.toString("utf8"), size: stat.size };
 }
 
 export async function projectDiff(root: string): Promise<GitDiffResult> {

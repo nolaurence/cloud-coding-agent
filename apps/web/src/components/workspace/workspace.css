@@ -1,0 +1,17 @@
+.workspace-terminal .xterm {
+  height: 100%;
+  padding: 10px 12px;
+}
+
+.workspace-terminal .xterm-viewport {
+  scrollbar-color: #52525b transparent;
+  scrollbar-width: thin;
+}
+
+.workspace-terminal .xterm-helper-textarea:focus {
+  outline: none;
+}
+
+.workspace-source pre {
+  tab-size: 2;
+}

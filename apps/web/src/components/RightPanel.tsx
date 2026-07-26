@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   Code2,
   ExternalLink,
@@ -7,22 +7,21 @@ import {
   Globe2,
   PanelRightClose,
   RefreshCw,
-  Send,
   TerminalSquare,
 } from "lucide-react";
-import type {
-  GitDiffResult,
-  ProjectFileContent,
-  ProjectFileEntry,
-  ServerMessage,
-  TerminalEvent,
-} from "@cca/protocol";
-import { onEvent, request } from "../lib/client";
+import type { GitDiffResult } from "@cca/protocol";
+import { request } from "../lib/client";
 import { useThreadState } from "../lib/store";
-import { cn } from "../lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { FilesPanel } from "./workspace/FilesPanel";
+import "./workspace/workspace.css";
+
+const TerminalPanel = lazy(async () => {
+  const module = await import("./workspace/TerminalPanel");
+  return { default: module.TerminalPanel };
+});
 
 type PanelTab = "browser" | "terminal" | "files" | "diff" | "context";
 
@@ -49,7 +48,7 @@ export function RightPanel({
     <Tabs
       value={tab}
       onValueChange={(value) => setTab(value as PanelTab)}
-      className="flex h-full min-h-0 w-full flex-col gap-0 border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
+      className="flex h-full min-h-0 w-full flex-col gap-0 bg-white dark:bg-zinc-950"
     >
       <div className="flex h-11 shrink-0 items-center border-b border-zinc-200 px-1 dark:border-zinc-800">
         <TabsList variant="line" className="h-10 min-w-0 flex-1 justify-start overflow-x-auto rounded-none p-0">
@@ -62,7 +61,7 @@ export function RightPanel({
               className="h-10 flex-none px-2 text-xs"
             >
               <item.icon className="h-3.5 w-3.5" />
-              <span className="hidden 2xl:inline">{item.label}</span>
+              <span className="hidden lg:inline">{item.label}</span>
             </TabsTrigger>
           ))}
         </TabsList>
@@ -72,7 +71,11 @@ export function RightPanel({
       </div>
       <div className="min-h-0 flex-1">
         <TabsContent value="browser" className="h-full"><BrowserPanel /></TabsContent>
-        <TabsContent value="terminal" className="h-full"><TerminalPanel threadId={threadId} /></TabsContent>
+        <TabsContent value="terminal" className="h-full">
+          <Suspense fallback={<Empty text="正在加载终端…" />}>
+            <TerminalPanel threadId={threadId} />
+          </Suspense>
+        </TabsContent>
         <TabsContent value="files" className="h-full">
           {projectId ? <FilesPanel projectId={projectId} /> : <Empty text="项目不存在" />}
         </TabsContent>
@@ -104,65 +107,6 @@ function BrowserPanel() {
       </form>
       <iframe key={normalized} src={normalized} title="网页预览" className="min-h-0 flex-1 bg-white" sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts" />
       <div className="border-t border-zinc-200 px-2 py-1 text-[10px] text-zinc-400 dark:border-zinc-800">目标站点禁止 iframe 时，请使用右上角新窗口打开。</div>
-    </div>
-  );
-}
-
-function TerminalPanel({ threadId }: { threadId: string }) {
-  const terminalId = useMemo(() => `thread-${threadId}`, [threadId]);
-  const [output, setOutput] = useState("");
-  const [command, setCommand] = useState("");
-  const [error, setError] = useState("");
-  const outputRef = useRef<HTMLPreElement>(null);
-  useEffect(() => {
-    const handle = (message: ServerMessage) => {
-      if (message.type !== "terminal.event" || message.event.terminalId !== terminalId) return;
-      const event: TerminalEvent = message.event;
-      if (event.kind === "output") setOutput((value) => (value + event.data).slice(-200_000));
-      if (event.kind === "exit") setOutput((value) => `${value}\n[进程已退出: ${event.code ?? "未知"}]\n`);
-    };
-    const remove = onEvent(handle);
-    void request<{ history: string }>({ type: "terminal.open", threadId, terminalId })
-      .then((result) => setOutput(result.history))
-      .catch((reason) => setError(reason instanceof Error ? reason.message : "终端启动失败"));
-    return () => { remove(); void request({ type: "terminal.close", terminalId }).catch(() => {}); };
-  }, [terminalId, threadId]);
-  useEffect(() => { outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight }); }, [output]);
-  const submit = async () => {
-    if (!command.trim()) return;
-    const value = command;
-    setCommand("");
-    try { await request({ type: "terminal.write", terminalId, data: `${value}\n` }); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "命令发送失败"); }
-  };
-  return (
-    <div className="flex h-full flex-col bg-zinc-950 text-zinc-100">
-      <pre ref={outputRef} className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5">{output || "正在启动终端…"}</pre>
-      {error && <div className="px-3 py-1 text-xs text-red-400">{error}</div>}
-      <form className="flex border-t border-zinc-800 p-2" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-        <span className="px-2 py-1 text-emerald-400">$</span>
-        <Input className="min-w-0 flex-1 border-0 bg-transparent px-1 font-mono text-xs shadow-none focus-visible:ring-0 dark:bg-transparent" value={command} onChange={(event) => setCommand(event.target.value)} placeholder="输入命令" />
-        <Button type="submit" variant="ghost" size="icon-sm" className="text-zinc-300 hover:bg-zinc-800 hover:text-white" aria-label="执行" title="执行"><Send className="h-3.5 w-3.5" /></Button>
-      </form>
-    </div>
-  );
-}
-
-function FilesPanel({ projectId }: { projectId: string }) {
-  const [files, setFiles] = useState<ProjectFileEntry[]>([]);
-  const [selected, setSelected] = useState<ProjectFileContent | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => { void request<ProjectFileEntry[]>({ type: "project.files", projectId }).then(setFiles).catch((reason) => setError(reason.message)); }, [projectId]);
-  const open = (path: string) => void request<ProjectFileContent>({ type: "project.file.read", projectId, path }).then(setSelected).catch((reason) => setError(reason.message));
-  return selected ? (
-    <div className="flex h-full flex-col">
-      <Button type="button" variant="ghost" className="h-auto justify-start truncate rounded-none border-b border-zinc-200 px-3 py-2 text-left text-xs font-medium dark:border-zinc-800" onClick={() => setSelected(null)}>← {selected.path}</Button>
-      <pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-3 font-mono text-xs leading-5">{selected.content}</pre>
-    </div>
-  ) : (
-    <div className="h-full overflow-auto p-2">
-      {error && <div className="p-2 text-xs text-red-500">{error}</div>}
-      {files.map((entry) => <Button key={entry.path} type="button" variant="ghost" disabled={entry.kind === "directory"} onClick={() => open(entry.path)} className={cn("h-7 w-full justify-start gap-2 px-2 text-left text-xs font-normal", entry.kind === "directory" && "font-medium text-zinc-500 opacity-100")}><span>{entry.kind === "directory" ? "▾" : "·"}</span><span className="truncate">{entry.path}</span></Button>)}
     </div>
   );
 }

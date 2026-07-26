@@ -113,6 +113,7 @@ interface AppState {
   models: ModelOption[];
   threadStates: Record<string, ThreadState>;
   activeThreadId: string | null;
+  workspacePanelOpen: boolean;
 
   init: () => void;
   login: (username: string, password: string) => Promise<void>;
@@ -134,6 +135,7 @@ interface AppState {
   saveSkill: (name: string, description: string, content: string) => Promise<void>;
   deleteSkill: (name: string) => Promise<void>;
   searchFiles: (projectId: string, query: string) => Promise<string[]>;
+  setWorkspacePanelOpen: (open: boolean) => void;
 }
 
 function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
@@ -311,6 +313,7 @@ export const useApp = create<AppState>((set, get) => {
       models: [],
       threadStates: {},
       activeThreadId: null,
+      workspacePanelOpen: false,
     });
   }
 
@@ -332,6 +335,7 @@ export const useApp = create<AppState>((set, get) => {
     models: [],
     threadStates: {},
     activeThreadId: null,
+    workspacePanelOpen: false,
 
     init: () => {
       if (initialized) return;
@@ -380,6 +384,8 @@ export const useApp = create<AppState>((set, get) => {
       resetSessionState();
       set({ user: null });
     },
+
+    setWorkspacePanelOpen: (open) => set({ workspacePanelOpen: open }),
 
     refreshModels: async () => {
       try {

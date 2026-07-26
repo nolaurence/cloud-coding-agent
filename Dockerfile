@@ -1,5 +1,8 @@
 FROM node:22-slim AS build
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential python3 \
+    && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json* ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/

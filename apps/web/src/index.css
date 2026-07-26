@@ -5,6 +5,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
+  --app-scrollbar-width: 8px;
   color-scheme: light;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -118,8 +119,8 @@ button:disabled,
 }
 
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: var(--app-scrollbar-width);
+  height: var(--app-scrollbar-width);
 }
 *::-webkit-scrollbar-thumb {
   @apply rounded-full bg-zinc-300 dark:bg-zinc-700;

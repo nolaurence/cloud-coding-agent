@@ -170,6 +170,17 @@ export interface ProjectFileEntry {
   kind: "file" | "directory";
 }
 
+export interface ProjectDirectoryEntry extends ProjectFileEntry {
+  name: string;
+  size?: number;
+  modifiedAt: number;
+}
+
+export interface ProjectDirectoryListing {
+  path: string;
+  entries: ProjectDirectoryEntry[];
+}
+
 export interface ProjectFileContent {
   path: string;
   content: string;
@@ -194,10 +205,19 @@ export interface GitBinding {
   connectedAt: number;
 }
 
+export interface TerminalSnapshot {
+  terminalId: string;
+  cwd: string;
+  history: string;
+  running: boolean;
+  cols: number;
+  rows: number;
+}
+
 export type TerminalEvent =
-  | { kind: "opened"; terminalId: string; cwd: string; history: string; running: boolean }
+  | ({ kind: "opened" } & TerminalSnapshot)
   | { kind: "output"; terminalId: string; data: string }
-  | { kind: "exit"; terminalId: string; code: number | null };
+  | { kind: "exit"; terminalId: string; code: number | null; signal?: number };
 
 export interface ToolActivity {
   id: string;
@@ -250,10 +270,19 @@ export type ClientMessage =
   | { id: string; type: "provider.models.discover"; provider: ProviderModelDiscoveryConfig }
   | { id: string; type: "files.search"; projectId: string; query: string }
   | { id: string; type: "project.files"; projectId: string }
+  | { id: string; type: "project.directory.list"; projectId: string; path?: string }
   | { id: string; type: "project.file.read"; projectId: string; path: string }
   | { id: string; type: "project.diff"; projectId: string }
-  | { id: string; type: "terminal.open"; threadId: string; terminalId: string }
+  | {
+      id: string;
+      type: "terminal.open";
+      threadId: string;
+      terminalId: string;
+      cols?: number;
+      rows?: number;
+    }
   | { id: string; type: "terminal.write"; terminalId: string; data: string }
+  | { id: string; type: "terminal.resize"; terminalId: string; cols: number; rows: number }
   | { id: string; type: "terminal.close"; terminalId: string }
   | { id: string; type: "git.bindings" }
   | { id: string; type: "git.bind"; provider: GitProvider; token: string }

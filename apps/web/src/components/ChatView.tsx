@@ -561,7 +561,7 @@ export function ChatView({ threadId, bottomInset = 0 }: { threadId: string; bott
         onWheel={(event) => {
           if (event.deltaY < 0) pinnedRef.current = false;
         }}
-        className="h-full overflow-y-auto overflow-x-hidden overscroll-y-contain"
+        className="h-full min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain [scrollbar-gutter:stable_both-edges]"
       >
         <div
           className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-3 pt-4 sm:px-5 sm:pt-5"

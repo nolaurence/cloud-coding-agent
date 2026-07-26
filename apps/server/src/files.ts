@@ -37,10 +37,7 @@ export function searchFiles(rootPath: string, query: string): string[] {
     }
     for (const entry of entries) {
       if (results.length >= MAX_RESULTS * 4) return;
-      if (entry.name.startsWith(".") && entry.name !== ".agents" && entry.name !== ".github") {
-        if (IGNORED.has(entry.name) || entry.name.startsWith(".")) continue;
-      }
-      if (IGNORED.has(entry.name)) continue;
+      if (entry.isSymbolicLink() || IGNORED.has(entry.name)) continue;
       const full = path.join(dir, entry.name);
       const rel = path.relative(rootPath, full).split(path.sep).join("/");
       if (entry.isDirectory()) {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Menu, WifiOff } from "lucide-react";
+import { Menu, PanelRightOpen, WifiOff } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { useApp } from "../lib/store";
@@ -10,6 +10,8 @@ import { BrandLogo } from "./BrandLogo";
 export function AppLayout() {
   const connected = useApp((s) => s.connected);
   const threads = useApp((s) => s.threads);
+  const workspacePanelOpen = useApp((s) => s.workspacePanelOpen);
+  const setWorkspacePanelOpen = useApp((s) => s.setWorkspacePanelOpen);
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const threadPathMatch = location.pathname.match(/^\/thread\/([^/]+)$/);
@@ -21,7 +23,8 @@ export function AppLayout() {
 
   useEffect(() => {
     setSidebarOpen(false);
-  }, [location.pathname]);
+    if (!routeThreadId) setWorkspacePanelOpen(false);
+  }, [location.pathname, routeThreadId, setWorkspacePanelOpen]);
 
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 768px)");
@@ -70,6 +73,21 @@ export function AppLayout() {
             <BrandLogo className="h-5 w-5" />
             <span className="truncate text-sm font-medium">{mobileTitle}</span>
           </div>
+          {routeThreadId && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="打开工作区面板"
+              title="打开工作区面板"
+              aria-controls="thread-workspace-panel"
+              aria-expanded={workspacePanelOpen}
+              className="text-muted-foreground"
+              onClick={() => setWorkspacePanelOpen(true)}
+            >
+              <PanelRightOpen className="h-4 w-4" />
+            </Button>
+          )}
           {!connected && (
             <span
               className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
