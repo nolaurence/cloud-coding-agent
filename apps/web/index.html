@@ -1,8 +1,32 @@
 <!doctype html>
-<html lang="zh-CN" class="dark">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="theme-color" content="#ffffff" />
+    <script>
+      (() => {
+        const lightBackground = "#ffffff";
+        const darkBackground = "#09090b";
+        let theme = "system";
+        try {
+          const stored = window.localStorage.getItem("cca-theme");
+          if (stored === "light" || stored === "dark" || stored === "system") theme = stored;
+        } catch {
+          // System preference remains the safe default when storage is unavailable.
+        }
+        const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const isDark = theme === "dark" || (theme === "system" && systemDark);
+        const background = isDark ? darkBackground : lightBackground;
+        document.documentElement.classList.toggle("dark", isDark);
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.backgroundColor = background;
+        document.querySelector('meta[name="theme-color"]')?.setAttribute("content", background);
+      })();
+    </script>
     <title>Cloud Coding Agent</title>
   </head>
   <body>

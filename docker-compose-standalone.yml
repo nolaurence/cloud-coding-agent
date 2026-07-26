@@ -1,0 +1,28 @@
+services:
+  agent:
+    build: .
+    ports:
+      - "${APP_PORT:-8787}:8787"
+    volumes:
+      - agent-data:/data
+      - ${WORKSPACE_DIR:-./workspace}:/workspace
+    environment:
+      - PORT=8787
+      - DATABASE_URL=sqlite:/data/cca.db
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?请在 .env 中配置管理员密码}
+    init: true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8787/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  agent-data:

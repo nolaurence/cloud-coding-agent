@@ -1,13 +1,14 @@
-import { useState } from "react";
 import { useApp } from "../../lib/store";
+import { THEME_OPTIONS, useTheme, type ThemePreference } from "../../lib/theme";
 import { ModelPicker } from "../../components/ModelPicker";
 import { ReasoningEffortPicker } from "../../components/ReasoningEffortPicker";
-import { Button, Switch } from "../../components/ui/primitives";
+import { Button, Select } from "../../components/ui/primitives";
+import { GitBindingsSettings } from "./GitBindingsSettings";
 
 export function GeneralSettings() {
   const settings = useApp((s) => s.settings);
   const updateSettings = useApp((s) => s.updateSettings);
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  const { theme, resolvedTheme, setTheme } = useTheme();
 
   if (!settings) return null;
 
@@ -15,21 +16,30 @@ export function GeneralSettings() {
     <div className="flex flex-col gap-6">
       <section>
         <h2 className="mb-3 text-base font-semibold">外观</h2>
-        <div className="flex items-center justify-between rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
           <div>
-            <div className="text-sm">深色模式</div>
-            <div className="text-xs text-zinc-500">切换界面明暗主题</div>
+            <div className="text-sm">界面主题</div>
+            <div className="text-xs text-zinc-500">
+              当前显示：{resolvedTheme === "dark" ? "深色" : "浅色"}
+            </div>
           </div>
-          <Switch
-            checked={dark}
-            onChange={(v) => {
-              setDark(v);
-              document.documentElement.classList.toggle("dark", v);
-              localStorage.setItem("cca-theme", v ? "dark" : "light");
-            }}
-          />
+          <div className="w-36">
+            <Select
+              aria-label="界面主题"
+              value={theme}
+              onChange={(event) => setTheme(event.target.value as ThemePreference)}
+            >
+              {THEME_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </div>
         </div>
       </section>
+
+      <GitBindingsSettings />
 
       <section>
         <h2 className="mb-3 text-base font-semibold">默认模型</h2>

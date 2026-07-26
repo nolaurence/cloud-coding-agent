@@ -356,3 +356,22 @@ test("restores an unfinished streamed answer from session history", async (t) =>
     "保留下来的半截回答",
   );
 });
+
+test("registers the authenticated Git tool and fails closed for legacy threads", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const client = new FakeClient();
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "拉取远程更新");
+  const config = client.createdConfigs[0] as {
+    tools?: Array<{ name: string; handler?: (args: unknown) => Promise<unknown> }>;
+    systemMessage?: { content?: string };
+  };
+  const tool = config.tools?.find((candidate) => candidate.name === "authenticated_git");
+  assert.ok(tool?.handler);
+  assert.match(config.systemMessage?.content ?? "", /authenticated_git/);
+  await assert.rejects(tool.handler({ action: "fetch" }), /旧会话没有关联用户/);
+  await manager.interrupt(threadId);
+});

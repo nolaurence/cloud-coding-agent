@@ -9,10 +9,11 @@ import { GeneralSettings } from "./pages/settings/GeneralSettings";
 import { ProvidersSettings } from "./pages/settings/ProvidersSettings";
 import { McpSettings } from "./pages/settings/McpSettings";
 import { SkillsSettings } from "./pages/settings/SkillsSettings";
-import { GitBindingsSettings } from "./pages/settings/GitBindingsSettings";
 import { useApp } from "./lib/store";
+import { useTheme } from "./lib/theme";
 
 export default function App() {
+  useTheme();
   const user = useApp((s) => s.user);
   const authReady = useApp((s) => s.authReady);
 
@@ -43,7 +44,7 @@ export default function App() {
           <Route path="providers" element={<ProvidersSettings />} />
           <Route path="mcp" element={<McpSettings />} />
           <Route path="skills" element={<SkillsSettings />} />
-          <Route path="git" element={<GitBindingsSettings />} />
+          <Route path="git" element={<Navigate to="/settings/general" replace />} />
         </Route>
       </Route>
     </Routes>

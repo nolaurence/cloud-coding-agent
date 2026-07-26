@@ -15,6 +15,7 @@ import type {
 import { COPILOT_HOME } from "./env.js";
 import { store } from "./store.js";
 import { enabledSkillDirectories } from "./skills.js";
+import { createAuthenticatedGitTool } from "./gitOperations.js";
 
 interface ThreadRuntime {
   threadId: string;
@@ -229,6 +230,12 @@ export class CopilotManager {
       workingDirectory: project.path,
       onPermissionRequest: approveAll,
       mcpServers,
+      tools: [createAuthenticatedGitTool(thread.userId, project.path)],
+      systemMessage: {
+        mode: "append",
+        content:
+          "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
+      },
     };
     if (skills.dirs.length > 0) {
       config.skillDirectories = skills.dirs;

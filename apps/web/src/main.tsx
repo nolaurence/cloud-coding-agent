@@ -7,9 +7,6 @@ import "./index.css";
 
 useApp.getState().init();
 
-const theme = localStorage.getItem("cca-theme") ?? "dark";
-document.documentElement.classList.toggle("dark", theme === "dark");
-
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>

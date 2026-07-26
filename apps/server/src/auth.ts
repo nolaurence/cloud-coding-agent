@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { SECRET_FILE, USERS_FILE } from "./env.js";
-import { enqueueWrite, query, transaction, usingMysql } from "./db.js";
+import { databaseDialect, enqueueWrite, query, transaction, upsert, usingDatabase } from "./db.js";
 
 export type Role = "admin" | "user";
 
@@ -56,26 +56,23 @@ function saveUsers() {
 
 function persistUser(user: User) {
   enqueueWrite(() =>
-    query(
-      `INSERT INTO users (username, role, password_hash, salt, created_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE role = ?, password_hash = ?, salt = ?`,
-      [
-        user.username,
-        user.role,
-        user.passwordHash,
-        user.salt,
-        user.createdAt,
-        user.role,
-        user.passwordHash,
-        user.salt,
-      ],
-    ),
+    upsert({
+      table: "users",
+      values: {
+        username: user.username,
+        role: user.role,
+        password_hash: user.passwordHash,
+        salt: user.salt,
+        created_at: user.createdAt,
+      },
+      conflictColumns: ["username"],
+      updateColumns: ["role", "password_hash", "salt"],
+    }),
   );
 }
 
 function saveUser(user: User) {
-  if (usingMysql()) persistUser(user);
+  if (usingDatabase()) persistUser(user);
   else saveUsers();
 }
 
@@ -89,7 +86,7 @@ function sign(data: string): string {
 
 export async function initAuth() {
   secret = loadSecret();
-  if (usingMysql()) {
+  if (usingDatabase()) {
     const rows = await query<{
       username: string;
       role: Role;
@@ -107,13 +104,22 @@ export async function initAuth() {
     if (users.length === 0) {
       const jsonUsers = loadUsers();
       if (jsonUsers.length > 0) {
-        console.log("[cca] migrating users -> mysql");
+        console.log(`[cca] migrating users -> ${databaseDialect()}`);
         await transaction(async (txQuery) => {
           for (const u of jsonUsers) {
-            await txQuery(
-              `INSERT INTO users (username, role, password_hash, salt, created_at)
-               VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE username = ?`,
-              [u.username, u.role, u.passwordHash, u.salt, u.createdAt, u.username],
+            await upsert(
+              {
+                table: "users",
+                values: {
+                  username: u.username,
+                  role: u.role,
+                  password_hash: u.passwordHash,
+                  salt: u.salt,
+                  created_at: u.createdAt,
+                },
+                conflictColumns: ["username"],
+              },
+              txQuery,
             );
           }
         });

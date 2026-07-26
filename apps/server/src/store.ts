@@ -9,7 +9,7 @@ import {
 } from "@cca/protocol";
 import type { ModelOption } from "@cca/protocol";
 import { PROJECTS_FILE, SETTINGS_FILE, THREADS_FILE } from "./env.js";
-import { enqueueWrite, query, transaction, usingMysql } from "./db.js";
+import { databaseDialect, enqueueWrite, query, transaction, upsert, usingDatabase } from "./db.js";
 
 function readJson<T>(file: string, fallback: T): T {
   try {
@@ -47,8 +47,8 @@ class Store {
   }
 
   async init() {
-    if (usingMysql()) {
-      await this.initFromMysql();
+    if (usingDatabase()) {
+      await this.initFromDatabase();
     } else {
       const raw = readJson<AppSettings>(SETTINGS_FILE, DEFAULT_SETTINGS);
       this.settings = { ...DEFAULT_SETTINGS, ...raw };
@@ -85,39 +85,51 @@ class Store {
     return changed;
   }
 
-  private async initFromMysql() {
+  private async initFromDatabase() {
     const [settingsRows, projectRows, threadRows] = await Promise.all([
       query<{ data: unknown }>("SELECT data FROM settings WHERE id = 1"),
       query<Project>("SELECT id, name, path FROM projects"),
       query<{ data: unknown }>("SELECT data FROM threads"),
     ]);
-    const mysqlEmpty =
+    const databaseEmpty =
       settingsRows.rows.length === 0 && projectRows.rows.length === 0 && threadRows.rows.length === 0;
 
-    if (mysqlEmpty) {
+    if (databaseEmpty) {
       const jsonSettings = readJson<AppSettings | null>(SETTINGS_FILE, null);
       const jsonProjects = readJson<Project[]>(PROJECTS_FILE, []);
       const jsonThreads = readJson<ThreadMeta[]>(THREADS_FILE, []);
       if (jsonSettings || jsonProjects.length > 0 || jsonThreads.length > 0) {
-        console.log("[cca] migrating json store -> mysql");
+        console.log(`[cca] migrating json store -> ${databaseDialect()}`);
         await transaction(async (txQuery) => {
           if (jsonSettings) {
-            await txQuery("INSERT INTO settings (id, data) VALUES (1, ?) ON DUPLICATE KEY UPDATE id = 1", [
-              JSON.stringify(jsonSettings),
-            ]);
+            await upsert(
+              {
+                table: "settings",
+                values: { id: 1, data: JSON.stringify(jsonSettings) },
+                conflictColumns: ["id"],
+              },
+              txQuery,
+            );
           }
           for (const p of jsonProjects) {
-            await txQuery(
-              "INSERT INTO projects (id, name, path) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE id = ?",
-              [p.id, p.name, p.path, p.id],
+            await upsert(
+              {
+                table: "projects",
+                values: { id: p.id, name: p.name, path: p.path },
+                conflictColumns: ["id"],
+              },
+              txQuery,
             );
           }
           for (const t of jsonThreads) {
-            await txQuery("INSERT INTO threads (id, data) VALUES (?, ?) ON DUPLICATE KEY UPDATE id = ?", [
-              t.id,
-              JSON.stringify(t),
-              t.id,
-            ]);
+            await upsert(
+              {
+                table: "threads",
+                values: { id: t.id, data: JSON.stringify(t) },
+                conflictColumns: ["id"],
+              },
+              txQuery,
+            );
           }
         });
       }
@@ -137,12 +149,14 @@ class Store {
 
   saveSettings(settings: AppSettings) {
     this.settings = settings;
-    if (usingMysql()) {
+    if (usingDatabase()) {
       persist(() =>
-        query(
-          "INSERT INTO settings (id, data) VALUES (1, ?) ON DUPLICATE KEY UPDATE data = ?",
-          [JSON.stringify(settings), JSON.stringify(settings)],
-        ),
+        upsert({
+          table: "settings",
+          values: { id: 1, data: JSON.stringify(settings) },
+          conflictColumns: ["id"],
+          updateColumns: ["data"],
+        }),
       );
     } else {
       writeJson(SETTINGS_FILE, settings);
@@ -151,12 +165,13 @@ class Store {
 
   addProject(project: Project) {
     this.projects.push(project);
-    if (usingMysql()) {
+    if (usingDatabase()) {
       persist(() =>
-        query(
-          "INSERT INTO projects (id, name, path) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE id = ?",
-          [project.id, project.name, project.path, project.id],
-        ),
+        upsert({
+          table: "projects",
+          values: { id: project.id, name: project.name, path: project.path },
+          conflictColumns: ["id"],
+        }),
       );
     } else {
       writeJson(PROJECTS_FILE, this.projects);
@@ -165,7 +180,7 @@ class Store {
 
   removeProject(projectId: string) {
     this.projects = this.projects.filter((p) => p.id !== projectId);
-    if (usingMysql()) {
+    if (usingDatabase()) {
       persist(() => query("DELETE FROM projects WHERE id = ?", [projectId]));
     } else {
       writeJson(PROJECTS_FILE, this.projects);
@@ -176,12 +191,14 @@ class Store {
     const idx = this.threads.findIndex((t) => t.id === thread.id);
     if (idx >= 0) this.threads[idx] = thread;
     else this.threads.push(thread);
-    if (usingMysql()) {
+    if (usingDatabase()) {
       persist(() =>
-        query(
-          "INSERT INTO threads (id, data) VALUES (?, ?) ON DUPLICATE KEY UPDATE data = ?",
-          [thread.id, JSON.stringify(thread), JSON.stringify(thread)],
-        ),
+        upsert({
+          table: "threads",
+          values: { id: thread.id, data: JSON.stringify(thread) },
+          conflictColumns: ["id"],
+          updateColumns: ["data"],
+        }),
       );
     } else {
       writeJson(THREADS_FILE, this.threads);
@@ -190,7 +207,7 @@ class Store {
 
   deleteThread(threadId: string) {
     this.threads = this.threads.filter((t) => t.id !== threadId);
-    if (usingMysql()) {
+    if (usingDatabase()) {
       persist(() => query("DELETE FROM threads WHERE id = ?", [threadId]));
     } else {
       writeJson(THREADS_FILE, this.threads);
