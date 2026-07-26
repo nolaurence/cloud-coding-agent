@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Bot, FolderGit2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import type { ModelRef } from "@cca/protocol";
+import type { ModelRef, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
@@ -21,7 +21,7 @@ export function NewChatPage() {
   const effectiveProjectId = projectId || projects[0]?.id || "";
   const effectiveModel = model ?? settings?.defaultModel;
 
-  const onSend = async (text: string, attachments: { path: string; displayName?: string }[]) => {
+  const onSend = async (text: string, attachments: TurnAttachment[]) => {
     if (!effectiveProjectId || creating) return;
     setCreating(true);
     try {

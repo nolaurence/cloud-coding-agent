@@ -118,7 +118,7 @@ export function request<T = unknown>(msg: ClientMessageNoId): Promise<T> {
   });
 }
 
-export async function uploadImage(file: File): Promise<{ path: string; displayName: string }> {
+export async function uploadImage(file: File): Promise<{ path: string; displayName: string; imageId: string }> {
   if (!currentToken) throw new Error("未登录");
   const response = await fetch("/api/uploads/images", {
     method: "POST",
@@ -132,10 +132,24 @@ export async function uploadImage(file: File): Promise<{ path: string; displayNa
   const data = (await response.json().catch(() => ({}))) as {
     path?: string;
     displayName?: string;
+    id?: string;
     error?: string;
   };
-  if (!response.ok || !data.path) {
+  if (!response.ok || !data.path || !data.id) {
     throw new Error(data.error ?? `图片上传失败 (${response.status})`);
   }
-  return { path: data.path, displayName: data.displayName ?? file.name };
+  return { path: data.path, displayName: data.displayName ?? file.name, imageId: data.id };
+}
+
+export async function loadImage(id: string, threadId: string, signal?: AbortSignal): Promise<Blob> {
+  if (!currentToken) throw new Error("未登录");
+  const response = await fetch(
+    `/api/uploads/images/${encodeURIComponent(id)}?threadId=${encodeURIComponent(threadId)}`,
+    {
+    headers: { Authorization: `Bearer ${currentToken}` },
+    signal,
+    },
+  );
+  if (!response.ok) throw new Error(`图片加载失败 (${response.status})`);
+  return response.blob();
 }

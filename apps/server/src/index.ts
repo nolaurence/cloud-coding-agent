@@ -11,6 +11,7 @@ import { Hub } from "./hub.js";
 import { initAuth, issueToken, registerUser, verifyToken, verifyUser } from "./auth.js";
 import { closeDb, initDb } from "./db.js";
 import { store } from "./store.js";
+import { uploadDirectory, uploadUsage } from "./uploads.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -18,6 +19,7 @@ const HOST = process.env.HOST ?? "0.0.0.0";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.resolve(__dirname, "../../web/dist");
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+const MAX_USER_UPLOADS_SIZE = 200 * 1024 * 1024;
 const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
@@ -124,11 +126,37 @@ async function main() {
         return reply.code(400).send({ error: "图片文件名无效" });
       }
     }
-    const userDirectory = path.join(UPLOADS_DIR, encodeURIComponent(payload.username));
+    const userDirectory = uploadDirectory(payload.username);
     fs.mkdirSync(userDirectory, { recursive: true });
-    const imagePath = path.join(userDirectory, `${randomUUID()}${extension}`);
+    if (uploadUsage(userDirectory) + req.body.length > MAX_USER_UPLOADS_SIZE) {
+      return reply.code(413).send({ error: "图片存储已达到 200 MB 上限，请删除旧会话后重试" });
+    }
+    const id = `${randomUUID()}${extension}`;
+    const imagePath = path.join(userDirectory, id);
     fs.writeFileSync(imagePath, req.body, { mode: 0o600 });
-    return { path: imagePath, displayName };
+    return { id, path: imagePath, displayName };
+  });
+
+  app.get("/api/uploads/images/:id", async (req, reply) => {
+    const payload = authenticate(req.headers.authorization);
+    if (!payload) return reply.code(401).send({ error: "未授权" });
+
+    const { id } = req.params as { id: string };
+    const { threadId } = req.query as { threadId?: string };
+    if (!/^[0-9a-f-]+\.(?:jpg|png|gif|webp)$/.test(id)) {
+      return reply.code(400).send({ error: "图片标识无效" });
+    }
+    if (!threadId) return reply.code(400).send({ error: "缺少会话标识" });
+    const thread = store.getThread(threadId);
+    const canAccess = thread && (payload.role === "admin" || !thread.userId || thread.userId === payload.username);
+    if (!canAccess) return reply.code(403).send({ error: "无权访问该图片" });
+    const attachment = Object.values(thread.messageAttachments ?? {}).flat().find((item) => item.id === id);
+    if (!attachment) return reply.code(404).send({ error: "图片不存在" });
+    const imagePath = path.join(uploadDirectory(attachment.ownerId || thread.userId || ""), id);
+    if (!fs.existsSync(imagePath)) return reply.code(404).send({ error: "图片不存在" });
+    const extension = path.extname(id);
+    const mimeType = extension === ".jpg" ? "image/jpeg" : `image/${extension.slice(1)}`;
+    return reply.type(mimeType).send(fs.createReadStream(imagePath));
   });
 
   app.register(async (scope) => {

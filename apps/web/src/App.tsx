@@ -9,6 +9,7 @@ import { GeneralSettings } from "./pages/settings/GeneralSettings";
 import { ProvidersSettings } from "./pages/settings/ProvidersSettings";
 import { McpSettings } from "./pages/settings/McpSettings";
 import { SkillsSettings } from "./pages/settings/SkillsSettings";
+import { GitBindingsSettings } from "./pages/settings/GitBindingsSettings";
 import { useApp } from "./lib/store";
 
 export default function App() {
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="providers" element={<ProvidersSettings />} />
           <Route path="mcp" element={<McpSettings />} />
           <Route path="skills" element={<SkillsSettings />} />
+          <Route path="git" element={<GitBindingsSettings />} />
         </Route>
       </Route>
     </Routes>

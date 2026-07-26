@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Blocks, Cpu, Settings2, Sparkles } from "lucide-react";
+import { Blocks, Cpu, GitBranch, Settings2, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 const nav = [
@@ -7,6 +7,7 @@ const nav = [
   { to: "providers", label: "模型", icon: Cpu },
   { to: "mcp", label: "MCP 服务器", icon: Blocks },
   { to: "skills", label: "技能", icon: Sparkles },
+  { to: "git", label: "代码托管", icon: GitBranch },
 ];
 
 export function SettingsLayout() {

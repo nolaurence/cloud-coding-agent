@@ -46,7 +46,7 @@ export function Sidebar({
       .sort((a, b) => b.updatedAt - a.updatedAt);
 
   return (
-    <aside className="flex h-full w-[17rem] shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
+    <aside className="flex h-full w-[17rem] shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:rounded-xl md:border dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex h-12 items-center gap-2 px-4">
         <Bot className="h-5 w-5 text-zinc-800 dark:text-zinc-100" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">云端编码助手</span>

@@ -22,7 +22,7 @@ export function AppLayout() {
 
   return (
     <div className="flex h-dvh overflow-hidden bg-white dark:bg-zinc-950">
-      <div className="hidden h-full md:block">
+      <div className="m-[10px] hidden min-h-0 shrink-0 md:block">
         <Sidebar />
       </div>
 

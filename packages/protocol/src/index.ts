@@ -118,6 +118,7 @@ export interface ThreadMeta {
   createdAt: number;
   updatedAt: number;
   archived: boolean;
+  messageAttachments?: Record<string, MessageAttachment[]>;
 }
 
 export interface AuthUser {
@@ -144,11 +145,59 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
+  attachments?: MessageAttachment[];
   reasoning?: string;
   streaming?: boolean;
   turnId: string;
   createdAt: number;
 }
+
+export interface MessageAttachment {
+  id: string;
+  displayName: string;
+  kind: "image";
+  ownerId: string;
+}
+
+export interface TurnAttachment {
+  path: string;
+  displayName?: string;
+  imageId?: string;
+}
+
+export interface ProjectFileEntry {
+  path: string;
+  kind: "file" | "directory";
+}
+
+export interface ProjectFileContent {
+  path: string;
+  content: string;
+  size: number;
+}
+
+export interface GitDiffResult {
+  patch: string;
+  files: number;
+  additions: number;
+  deletions: number;
+  truncated: boolean;
+}
+
+export type GitProvider = "github" | "gitee";
+
+export interface GitBinding {
+  provider: GitProvider;
+  username: string;
+  avatarUrl?: string;
+  profileUrl: string;
+  connectedAt: number;
+}
+
+export type TerminalEvent =
+  | { kind: "opened"; terminalId: string; cwd: string; history: string; running: boolean }
+  | { kind: "output"; terminalId: string; data: string }
+  | { kind: "exit"; terminalId: string; code: number | null };
 
 export interface ToolActivity {
   id: string;
@@ -190,7 +239,7 @@ export type ClientMessage =
   | { id: string; type: "thread.setModel"; threadId: string; model: ModelRef }
   | { id: string; type: "thread.subscribe"; threadId: string }
   | { id: string; type: "thread.unsubscribe"; threadId: string }
-  | { id: string; type: "turn.start"; threadId: string; text: string; attachments?: { path: string; displayName?: string }[] }
+  | { id: string; type: "turn.start"; threadId: string; text: string; attachments?: TurnAttachment[] }
   | { id: string; type: "turn.interrupt"; threadId: string }
   | { id: string; type: "settings.get" }
   | { id: string; type: "settings.update"; settings: AppSettings }
@@ -199,7 +248,16 @@ export type ClientMessage =
   | { id: string; type: "skill.delete"; name: string }
   | { id: string; type: "models.list" }
   | { id: string; type: "provider.models.discover"; provider: ProviderModelDiscoveryConfig }
-  | { id: string; type: "files.search"; projectId: string; query: string };
+  | { id: string; type: "files.search"; projectId: string; query: string }
+  | { id: string; type: "project.files"; projectId: string }
+  | { id: string; type: "project.file.read"; projectId: string; path: string }
+  | { id: string; type: "project.diff"; projectId: string }
+  | { id: string; type: "terminal.open"; threadId: string; terminalId: string }
+  | { id: string; type: "terminal.write"; terminalId: string; data: string }
+  | { id: string; type: "terminal.close"; terminalId: string }
+  | { id: string; type: "git.bindings" }
+  | { id: string; type: "git.bind"; provider: GitProvider; token: string }
+  | { id: string; type: "git.unbind"; provider: GitProvider };
 
 export type ServerMessage =
   | { type: "reply"; id: string; ok: true; data?: unknown }
@@ -208,6 +266,7 @@ export type ServerMessage =
   | { type: "shell"; data: ShellState }
   | { type: "settings"; data: AppSettings }
   | { type: "skills"; data: SkillInfo[] }
+  | { type: "terminal.event"; event: TerminalEvent }
   | { type: "thread.event"; threadId: string; event: ThreadEvent };
 
 export const DEFAULT_SETTINGS: AppSettings = {

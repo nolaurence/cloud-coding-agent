@@ -10,6 +10,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import type { ChatMessage, ToolActivity } from "@cca/protocol";
+import { loadImage } from "../lib/client";
 import { useApp, useThreadState } from "../lib/store";
 import {
   deriveChatTimeline,
@@ -116,6 +117,48 @@ function MessageTime({ at }: { at: number }) {
   );
 }
 
+function MessageImage({ id, name, threadId }: { id: string; name: string; threadId: string }) {
+  const [src, setSrc] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectUrl = "";
+    void loadImage(id, threadId, controller.signal)
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setFailed(true);
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [id, threadId]);
+
+  if (failed) {
+    return (
+      <div className="flex h-28 w-44 items-center justify-center rounded-xl bg-zinc-200 px-3 text-center text-xs text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
+        图片加载失败
+      </div>
+    );
+  }
+  if (!src) {
+    return <div className="h-28 w-44 animate-pulse rounded-xl bg-zinc-200 dark:bg-zinc-700" />;
+  }
+  return (
+    <a href={src} target="_blank" rel="noreferrer" title={name}>
+      <img
+        src={src}
+        alt={name}
+        className="max-h-64 max-w-full rounded-xl object-contain"
+      />
+    </a>
+  );
+}
+
 function AssistantMessage({
   message,
   streaming = false,
@@ -143,17 +186,26 @@ function AssistantMessage({
 }
 
 function UserMessage({ message }: { message: ChatMessage }) {
+  const threadId = useApp((state) => state.activeThreadId);
   const skillMatch = message.text.match(
     /^Use these skills for this request: ([^\n]+)\.\n\n([\s\S]*)$/,
   );
   const skills = skillMatch?.[1]?.split(", ").filter(Boolean) ?? [];
   const content = skillMatch?.[2] ?? message.text;
+  const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
 
   return (
     <article className="group flex flex-col items-end gap-1">
       <div className="max-w-[88%] rounded-2xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm leading-6 text-zinc-900 sm:max-w-[80%] dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100">
+        {images.length > 0 && (
+          <div className={cn("grid gap-2", images.length > 1 && "grid-cols-2")}>
+            {images.map((image) => (
+              threadId ? <MessageImage key={image.id} id={image.id} name={image.displayName} threadId={threadId} /> : null
+            ))}
+          </div>
+        )}
         {skills.length > 0 && (
-          <div className="mb-1.5 flex flex-wrap gap-1.5 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400">
+          <div className={cn("flex flex-wrap gap-1.5 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400", images.length > 0 && "mt-2")}>
             {skills.map((skill) => (
               <span key={skill} className="inline-flex items-center gap-1">
                 <Sparkles className="h-3 w-3" />/{skill}
@@ -161,7 +213,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
             ))}
           </div>
         )}
-        <div className="whitespace-pre-wrap break-words">{content}</div>
+        {content && <div className={cn("whitespace-pre-wrap break-words", (images.length > 0 || skills.length > 0) && "mt-1.5")}>{content}</div>}
       </div>
       <div className="flex h-7 w-full max-w-[88%] items-center justify-end gap-1 pr-1 text-xs text-zinc-400 opacity-100 transition-opacity sm:max-w-[80%] sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
         <MessageTime at={message.createdAt} />

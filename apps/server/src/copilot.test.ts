@@ -169,6 +169,52 @@ test("keeps a request running across assistant tool turns until session.idle", a
   assert.equal(toolComplete?.kind === "tool.complete" ? toolComplete.activity.result : undefined, "updated src/index.ts");
 });
 
+test("attaches uploaded images to the emitted and restored user message", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "看一下截图", [
+    { path: "/tmp/image.png", displayName: "screenshot.png", imageId: "image.png" },
+  ]);
+  session.emit(sessionEvent("user.message", { content: "看一下截图" }));
+
+  const userEvent = emitted.find((event) => event.kind === "user.message");
+  assert.deepEqual(userEvent?.kind === "user.message" ? userEvent.message.attachments : undefined, [
+    { id: "image.png", displayName: "screenshot.png", kind: "image", ownerId: "" },
+  ]);
+  assert.deepEqual(store.getThread(threadId)?.messageAttachments, {
+    [userEvent?.kind === "user.message" ? userEvent.message.id : ""]: [
+      { id: "image.png", displayName: "screenshot.png", kind: "image", ownerId: "" },
+    ],
+  });
+});
+
+test("keeps attachments when the first image message updates the title", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.title = "新会话";
+  const session = new FakeSession();
+  const manager = new CopilotManager(() => new FakeClient(session) as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "看一下截图", [
+    { path: "/tmp/image.png", displayName: "screenshot.png", imageId: "image.png" },
+  ]);
+  const event = sessionEvent("user.message", { content: "看一下截图" });
+  session.emit(event);
+
+  assert.equal(store.getThread(threadId)?.title, "看一下截图");
+  assert.deepEqual(store.getThread(threadId)?.messageAttachments?.[event.id], [
+    { id: "image.png", displayName: "screenshot.png", kind: "image", ownerId: "" },
+  ]);
+});
+
 test("clears failed startup state so a message can be retried", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);

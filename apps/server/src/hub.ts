@@ -17,6 +17,10 @@ import { deleteSkill, listSkills, saveSkill } from "./skills.js";
 import { flattenModels, isReasoningEffort, normalizeModelRefReasoning } from "@cca/protocol";
 import { verifyToken, type TokenPayload } from "./auth.js";
 import { discoverProviderModels } from "./providers.js";
+import { listProjectFiles, projectDiff, readProjectFile } from "./workspace.js";
+import { TerminalManager } from "./terminals.js";
+import { bindGitProvider, listGitBindings, unbindGitProvider } from "./gitBindings.js";
+import { removeThreadUploads, removeUploadedImages, validateOwnedUploads } from "./uploads.js";
 
 interface ClientConn {
   socket: WebSocket;
@@ -28,6 +32,11 @@ interface ClientConn {
 export class Hub {
   private clients = new Set<ClientConn>();
   private manager = new CopilotManager();
+  private terminals = new TerminalManager((ownerId, event) => {
+    for (const conn of this.clients) {
+      if (conn.user.username === ownerId) this.send(conn, { type: "terminal.event", event });
+    }
+  });
 
   constructor() {
     this.manager.onThreadEvent((threadId, event) => {
@@ -236,8 +245,11 @@ export class Hub {
           break;
         }
         case "thread.delete": {
-          if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权操作该会话");
+          const thread = store.getThread(msg.threadId);
+          if (!this.canAccess(conn, thread)) throw new Error("无权操作该会话");
+          this.terminals.closeThread(msg.threadId);
           await this.manager.deleteThread(msg.threadId);
+          if (thread) removeThreadUploads(thread);
           store.deleteThread(msg.threadId);
           this.broadcastShell();
           this.reply(conn, msg.id);
@@ -277,7 +289,13 @@ export class Hub {
         }
         case "turn.start": {
           if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权操作该会话");
-          await this.manager.sendMessage(msg.threadId, msg.text, msg.attachments);
+          validateOwnedUploads(conn.user.username, msg.attachments);
+          try {
+            await this.manager.sendMessage(msg.threadId, msg.text, msg.attachments, conn.user.username);
+          } catch (error) {
+            removeUploadedImages(conn.user.username, msg.attachments);
+            throw error;
+          }
           this.broadcastShell();
           this.reply(conn, msg.id);
           break;
@@ -363,6 +381,55 @@ export class Hub {
           this.reply(conn, msg.id, searchFiles(project.path, msg.query));
           break;
         }
+        case "project.files": {
+          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
+          if (!project) throw new Error("项目不存在");
+          this.reply(conn, msg.id, listProjectFiles(project.path));
+          break;
+        }
+        case "project.file.read": {
+          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
+          if (!project) throw new Error("项目不存在");
+          this.reply(conn, msg.id, readProjectFile(project.path, msg.path));
+          break;
+        }
+        case "project.diff": {
+          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
+          if (!project) throw new Error("项目不存在");
+          this.reply(conn, msg.id, await projectDiff(project.path));
+          break;
+        }
+        case "terminal.open": {
+          const thread = store.getThread(msg.threadId);
+          if (!this.canAccess(conn, thread)) throw new Error("无权操作该会话");
+          const project = store.projects.find((candidate) => candidate.id === thread?.projectId);
+          if (!project) throw new Error("项目不存在");
+          this.reply(conn, msg.id, this.terminals.open(conn.user.username, msg.threadId, msg.terminalId, project.path));
+          break;
+        }
+        case "terminal.write": {
+          this.terminals.write(conn.user.username, msg.terminalId, msg.data);
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "terminal.close": {
+          this.terminals.close(conn.user.username, msg.terminalId);
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "git.bindings": {
+          this.reply(conn, msg.id, listGitBindings(conn.user.username));
+          break;
+        }
+        case "git.bind": {
+          this.reply(conn, msg.id, await bindGitProvider(conn.user.username, msg.provider, msg.token));
+          break;
+        }
+        case "git.unbind": {
+          unbindGitProvider(conn.user.username, msg.provider);
+          this.reply(conn, msg.id);
+          break;
+        }
         default: {
           this.replyError(conn, (msg as { id?: string }).id ?? "", "未知消息类型");
         }
@@ -373,6 +440,7 @@ export class Hub {
   }
 
   async shutdown() {
+    this.terminals.shutdown();
     await this.manager.shutdown();
   }
 }

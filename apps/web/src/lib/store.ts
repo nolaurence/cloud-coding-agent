@@ -15,6 +15,7 @@ import type {
   ThreadEvent,
   ThreadMeta,
   ToolActivity,
+  TurnAttachment,
 } from "@cca/protocol";
 import {
   connect,
@@ -127,7 +128,7 @@ interface AppState {
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
   openThread: (threadId: string) => Promise<void>;
   closeThread: (threadId: string) => Promise<void>;
-  sendMessage: (threadId: string, text: string, attachments?: { path: string; displayName?: string }[]) => Promise<void>;
+  sendMessage: (threadId: string, text: string, attachments?: TurnAttachment[]) => Promise<void>;
   interrupt: (threadId: string) => Promise<void>;
   updateSettings: (settings: AppSettings) => Promise<void>;
   saveSkill: (name: string, description: string, content: string) => Promise<void>;

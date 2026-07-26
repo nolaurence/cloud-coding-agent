@@ -11,6 +11,7 @@ export const SETTINGS_FILE = path.join(root, "settings.json");
 export const PROJECTS_FILE = path.join(root, "projects.json");
 export const THREADS_FILE = path.join(root, "threads.json");
 export const USERS_FILE = path.join(root, "users.json");
+export const GIT_BINDINGS_FILE = path.join(root, "git-bindings.json");
 export const SECRET_FILE = path.join(root, "secret.key");
 export const SKILLS_DIR = path.join(root, "skills");
 export const COPILOT_HOME = path.join(root, "copilot-home");

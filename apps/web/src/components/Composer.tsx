@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { uploadImage } from "../lib/client";
+import type { TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
 
@@ -70,7 +71,7 @@ export function Composer({
   running: boolean;
   onSend: (
     text: string,
-    attachments: { path: string; displayName?: string }[],
+    attachments: TurnAttachment[],
   ) => void | Promise<void>;
   onInterrupt?: () => void | Promise<void>;
   autoFocus?: boolean;
@@ -241,7 +242,7 @@ export function Composer({
 
   const buildPayload = () => {
     let prompt = text;
-    const attachments: { path: string; displayName?: string }[] = [];
+    const attachments: TurnAttachment[] = [];
     if (project) {
       const seen = new Set<string>();
       const fileTokens = [...text.matchAll(/@([^\s@/]+(?:\/[^\s@]+)*)/g)].map(

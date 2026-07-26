@@ -5,10 +5,12 @@ import { isReasoningEffort, normalizeReasoningEfforts } from "@cca/protocol";
 import type {
   AppSettings,
   ChatMessage,
+  MessageAttachment,
   ModelRef,
   ThreadEvent,
   ThreadMeta,
   ToolActivity,
+  TurnAttachment,
 } from "@cca/protocol";
 import { COPILOT_HOME } from "./env.js";
 import { store } from "./store.js";
@@ -29,6 +31,7 @@ interface ThreadRuntime {
     reasoning: string;
     startedAt: number;
   } | null;
+  pendingUserAttachments: MessageAttachment[];
   detachTimer: NodeJS.Timeout | null;
   subscribers: number;
 }
@@ -124,6 +127,7 @@ export class CopilotManager {
         running: false,
         currentTurnId: null,
         pendingAssistant: null,
+        pendingUserAttachments: [],
         detachTimer: null,
         subscribers: 0,
       };
@@ -314,18 +318,33 @@ export class CopilotManager {
           id: event.id,
           role: "user",
           text: data.content,
+          attachments: rt.pendingUserAttachments.length > 0 ? rt.pendingUserAttachments : undefined,
           turnId,
           createdAt: ts,
         };
+        rt.pendingUserAttachments = [];
         rt.messages.push(message);
         this.emit(threadId, { kind: "user.message", message });
 
         const thread = store.getThread(threadId);
-        if (thread && (thread.title === "新会话" || thread.title === "New chat")) {
-          const title = data.content.replace(/\s+/g, " ").trim().slice(0, 40) || thread.title;
-          store.upsertThread({ ...thread, title, updatedAt: ts });
-          this.emit(threadId, { kind: "title", title });
-          this.shellChanged();
+        if (thread) {
+          const title =
+            thread.title === "新会话" || thread.title === "New chat"
+              ? data.content.replace(/\s+/g, " ").trim().slice(0, 40) || thread.title
+              : thread.title;
+          store.upsertThread({
+            ...thread,
+            title,
+            messageAttachments: {
+              ...thread.messageAttachments,
+              ...(message.attachments ? { [message.id]: message.attachments } : {}),
+            },
+            updatedAt: ts,
+          });
+          if (title !== thread.title) {
+            this.emit(threadId, { kind: "title", title });
+            this.shellChanged();
+          }
         }
         break;
       }
@@ -506,6 +525,7 @@ export class CopilotManager {
               id: event.id,
               role: "user",
               text: data.content,
+              attachments: store.getThread(rt.threadId)?.messageAttachments?.[event.id],
               turnId,
               createdAt: ts,
             });
@@ -645,7 +665,8 @@ export class CopilotManager {
   async sendMessage(
     threadId: string,
     text: string,
-    attachments?: { path: string; displayName?: string }[],
+    attachments?: TurnAttachment[],
+    attachmentOwnerId = "",
   ): Promise<void> {
     const rt = this.runtime(threadId);
     if (rt.running) throw new Error("当前任务仍在运行,请等待完成或先停止任务");
@@ -654,6 +675,15 @@ export class CopilotManager {
     rt.running = true;
     rt.currentTurnId = turnId;
     rt.pendingAssistant = null;
+    rt.pendingUserAttachments =
+      attachments
+        ?.filter((attachment): attachment is TurnAttachment & { imageId: string } => Boolean(attachment.imageId))
+        .map((attachment) => ({
+          id: attachment.imageId,
+          displayName: attachment.displayName ?? "图片",
+          kind: "image" as const,
+          ownerId: attachmentOwnerId,
+        })) ?? [];
     this.emit(threadId, { kind: "turn.start", turnId });
     this.shellChanged();
     try {
@@ -671,6 +701,7 @@ export class CopilotManager {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (rt.running) {
+        rt.pendingUserAttachments = [];
         this.emit(threadId, { kind: "error", message });
         this.finishTurn(rt);
       }
