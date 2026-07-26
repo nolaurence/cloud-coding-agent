@@ -13,7 +13,7 @@ const nav = [
 export function SettingsLayout() {
   return (
     <div className="flex h-full flex-col sm:flex-row">
-      <nav className="flex w-full shrink-0 gap-1 overflow-x-auto border-b border-zinc-200 p-2 sm:block sm:w-44 sm:border-r sm:border-b-0 sm:p-3 dark:border-zinc-800">
+      <nav className="flex w-full shrink-0 gap-1 overflow-x-auto border-b border-zinc-200 p-2 sm:w-44 sm:flex-col sm:overflow-x-visible sm:border-r sm:border-b-0 sm:p-3 dark:border-zinc-800">
         <div className="mb-3 hidden px-2 text-xs font-semibold text-zinc-400 sm:block">设置</div>
         {nav.map((item) => (
           <NavLink
@@ -22,7 +22,7 @@ export function SettingsLayout() {
             className={({ isActive }) =>
               cn(
                 buttonVariants({ variant: isActive ? "secondary" : "ghost", size: "sm" }),
-                "shrink-0 justify-start",
+                "shrink-0 justify-start sm:w-full",
                 !isActive && "text-muted-foreground",
               )
             }
