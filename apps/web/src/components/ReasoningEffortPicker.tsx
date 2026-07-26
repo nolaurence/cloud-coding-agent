@@ -192,7 +192,7 @@ export function ReasoningEffortPicker({
         disabled={disabled}
         title={buttonLabel}
         className={cn(
-          "flex h-8 items-center justify-between gap-1 rounded-md border border-zinc-300 text-xs transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800",
+          "flex h-8 items-center justify-between gap-1 rounded-md text-xs transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800",
           compact ? "w-16 px-2 sm:w-32 sm:px-2.5" : "w-28 px-2.5 sm:w-32",
         )}
         onClick={() => setOpen((value) => !value)}

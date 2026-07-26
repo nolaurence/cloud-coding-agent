@@ -1,5 +1,5 @@
 import { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
-import { X } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 export function Button({
@@ -55,15 +55,18 @@ export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTex
 
 export function Select({ className, children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <select
-      className={cn(
-        "h-9 w-full rounded-md border border-zinc-300 bg-white px-2 text-sm outline-none dark:border-zinc-700 dark:bg-zinc-900",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </select>
+    <span className="relative block w-full">
+      <select
+        className={cn(
+          "h-9 w-full appearance-none rounded-md border border-zinc-300 bg-white px-3 pr-9 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-500",
+          className,
+        )}
+        {...props}
+      >
+        {children}
+      </select>
+      <ChevronDown className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+    </span>
   );
 }
 

@@ -3,10 +3,13 @@ import {
   ArrowUp,
   AtSign,
   FileText,
+  ImagePlus,
   Loader2,
   Sparkles,
   Square,
+  X,
 } from "lucide-react";
+import { uploadImage } from "../lib/client";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
 
@@ -25,6 +28,16 @@ interface CompletionItem {
 
 const actionButtonClass =
   "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-white transition-[background-color,color,transform] hover:bg-zinc-800 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:bg-zinc-200 disabled:text-zinc-400 max-[359px]:ml-auto dark:bg-white dark:text-black dark:hover:bg-zinc-200 dark:focus-visible:ring-offset-zinc-900 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-400";
+
+const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const MAX_IMAGES = 4;
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+
+interface PendingImage {
+  id: string;
+  file: File;
+  previewUrl: string;
+}
 
 function detectTrigger(text: string, caret: number): Trigger | null {
   const before = text.slice(0, caret);
@@ -75,7 +88,10 @@ export function Composer({
   const [submitting, setSubmitting] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [submitError, setSubmitError] = useState("");
+  const [images, setImages] = useState<PendingImage[]>([]);
+  const [draggingImage, setDraggingImage] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const project = projects.find((candidate) => candidate.id === projectId);
   const busy = running || submitting;
@@ -184,6 +200,44 @@ export function Composer({
     });
   };
 
+  const addImages = (files: Iterable<File>) => {
+    const candidates = [...files].filter((file) => file.type.startsWith("image/"));
+    if (candidates.length === 0) return;
+    setSubmitError("");
+    const valid: File[] = [];
+    for (const file of candidates) {
+      if (!ACCEPTED_IMAGE_TYPES.has(file.type)) {
+        setSubmitError("仅支持 JPG、PNG、GIF 和 WebP 图片");
+        continue;
+      }
+      if (file.size > MAX_IMAGE_SIZE) {
+        setSubmitError(`图片 ${file.name} 超过 10 MB`);
+        continue;
+      }
+      valid.push(file);
+    }
+    setImages((current) => {
+      const available = MAX_IMAGES - current.length;
+      if (valid.length > available) setSubmitError(`一次最多添加 ${MAX_IMAGES} 张图片`);
+      return [
+        ...current,
+        ...valid.slice(0, Math.max(0, available)).map((file) => ({
+          id: crypto.randomUUID(),
+          file,
+          previewUrl: URL.createObjectURL(file),
+        })),
+      ];
+    });
+  };
+
+  const removeImage = (id: string) => {
+    setImages((current) => {
+      const removed = current.find((image) => image.id === id);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return current.filter((image) => image.id !== id);
+    });
+  };
+
   const buildPayload = () => {
     let prompt = text;
     const attachments: { path: string; displayName?: string }[] = [];
@@ -224,13 +278,16 @@ export function Composer({
   const submit = async () => {
     if (busy) return;
     const { prompt, attachments } = buildPayload();
-    if (!prompt && attachments.length === 0) return;
+    if (!prompt && attachments.length === 0 && images.length === 0) return;
     setSubmitting(true);
     setSubmitError("");
     try {
-      await onSend(prompt, attachments);
+      const imageAttachments = await Promise.all(images.map((image) => uploadImage(image.file)));
+      await onSend(prompt, [...attachments, ...imageAttachments]);
       setText("");
       setTrigger(null);
+      images.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+      setImages([]);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "消息发送失败");
     } finally {
@@ -334,7 +391,54 @@ export function Composer({
         </div>
       )}
 
-      <div className="rounded-2xl border border-zinc-300 bg-white shadow-[0_12px_32px_-20px_rgba(0,0,0,0.28),0_3px_10px_-7px_rgba(0,0,0,0.2)] transition-colors focus-within:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-[0_12px_32px_-20px_rgba(0,0,0,0.65),0_3px_10px_-7px_rgba(0,0,0,0.4)] dark:focus-within:border-zinc-500">
+      <div
+        className={cn(
+          "rounded-2xl border border-zinc-300 bg-white shadow-[0_12px_32px_-20px_rgba(0,0,0,0.28),0_3px_10px_-7px_rgba(0,0,0,0.2)] transition-colors focus-within:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-[0_12px_32px_-20px_rgba(0,0,0,0.65),0_3px_10px_-7px_rgba(0,0,0,0.4)] dark:focus-within:border-zinc-500",
+          draggingImage && "border-blue-500 bg-blue-50/50 dark:border-blue-400 dark:bg-blue-950/20",
+        )}
+        onDragEnter={(event) => {
+          if ([...event.dataTransfer.items].some((item) => item.type.startsWith("image/"))) {
+            event.preventDefault();
+            setDraggingImage(true);
+          }
+        }}
+        onDragOver={(event) => {
+          if ([...event.dataTransfer.items].some((item) => item.type.startsWith("image/"))) {
+            event.preventDefault();
+          }
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingImage(false);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDraggingImage(false);
+          addImages(event.dataTransfer.files);
+        }}
+      >
+        {images.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto px-4 pt-3">
+            {images.map((image) => (
+              <div className="group relative h-16 w-16 shrink-0" key={image.id}>
+                <img
+                  src={image.previewUrl}
+                  alt={image.file.name}
+                  className="h-full w-full rounded-lg border border-zinc-200 object-cover dark:border-zinc-700"
+                />
+                <button
+                  type="button"
+                  aria-label={`移除图片 ${image.file.name}`}
+                  title="移除图片"
+                  className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-zinc-800 text-white shadow hover:bg-black"
+                  onClick={() => removeImage(image.id)}
+                  disabled={submitting}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           autoFocus={autoFocus}
@@ -350,6 +454,15 @@ export function Composer({
             requestAnimationFrame(updateTrigger);
           }}
           onKeyDown={onKeyDown}
+          onPaste={(event) => {
+            const pastedImages = [...event.clipboardData.files].filter((file) =>
+              file.type.startsWith("image/"),
+            );
+            if (pastedImages.length > 0) {
+              event.preventDefault();
+              addImages(pastedImages);
+            }
+          }}
           onClick={updateTrigger}
           onKeyUp={(event) => {
             if (!["Enter", "ArrowDown", "ArrowUp", "Tab"].includes(event.key)) updateTrigger();
@@ -372,6 +485,27 @@ export function Composer({
             {footerControls && (
               <div className="flex min-w-0 items-center gap-1">{footerControls}</div>
             )}
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              multiple
+              className="hidden"
+              onChange={(event) => {
+                if (event.target.files) addImages(event.target.files);
+                event.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              aria-label="添加图片"
+              title="添加图片"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              onClick={() => imageInputRef.current?.click()}
+              disabled={busy || images.length >= MAX_IMAGES}
+            >
+              <ImagePlus className="h-4 w-4" />
+            </button>
             <button
               type="button"
               aria-label="引用文件"
@@ -415,7 +549,7 @@ export function Composer({
               title="发送消息"
               className={actionButtonClass}
               onClick={() => void submit()}
-              disabled={!text.trim() || busy}
+              disabled={(!text.trim() && images.length === 0) || busy}
               aria-busy={submitting}
             >
               {submitting ? (

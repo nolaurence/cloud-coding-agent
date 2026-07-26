@@ -1,11 +1,12 @@
 import path from "node:path";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import fastifyStatic from "@fastify/static";
 import fastifyCors from "@fastify/cors";
-import { ensureDataDirs, DATA_DIR } from "./env.js";
+import { ensureDataDirs, DATA_DIR, UPLOADS_DIR } from "./env.js";
 import { Hub } from "./hub.js";
 import { initAuth, issueToken, registerUser, verifyToken, verifyUser } from "./auth.js";
 import { closeDb, initDb } from "./db.js";
@@ -16,6 +17,31 @@ const HOST = process.env.HOST ?? "0.0.0.0";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.resolve(__dirname, "../../web/dist");
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+};
+
+function hasImageSignature(buffer: Buffer, mimeType: string): boolean {
+  if (mimeType === "image/jpeg") return buffer.length >= 3 && buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+  if (mimeType === "image/png") return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (mimeType === "image/gif") {
+    const signature = buffer.subarray(0, 6).toString("ascii");
+    return signature === "GIF87a" || signature === "GIF89a";
+  }
+  if (mimeType === "image/webp") {
+    return buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP";
+  }
+  return false;
+}
+
+function authenticate(header: string | undefined) {
+  const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+  return token ? verifyToken(token) : null;
+}
 
 async function main() {
   ensureDataDirs();
@@ -32,6 +58,11 @@ async function main() {
   const app = Fastify({ logger: false });
   await app.register(fastifyCors, { origin: true });
   await app.register(fastifyWebsocket);
+  app.addContentTypeParser(
+    Object.keys(IMAGE_EXTENSIONS),
+    { parseAs: "buffer", bodyLimit: MAX_IMAGE_SIZE },
+    (_req, body, done) => done(null, body),
+  );
 
   const hub = new Hub();
 
@@ -63,13 +94,41 @@ async function main() {
   });
 
   app.get("/api/auth/me", async (req, reply) => {
-    const header = req.headers.authorization;
-    const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
-    const payload = token ? verifyToken(token) : null;
+    const payload = authenticate(req.headers.authorization);
     if (!payload) {
       return reply.code(401).send({ error: "未授权" });
     }
     return { user: { username: payload.username, role: payload.role } };
+  });
+
+  app.post("/api/uploads/images", async (req, reply) => {
+    const payload = authenticate(req.headers.authorization);
+    if (!payload) return reply.code(401).send({ error: "未授权" });
+
+    const mimeType = req.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    const extension = IMAGE_EXTENSIONS[mimeType];
+    if (!extension) return reply.code(415).send({ error: "仅支持 JPG、PNG、GIF 和 WebP 图片" });
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return reply.code(400).send({ error: "图片内容为空" });
+    }
+    if (!hasImageSignature(req.body, mimeType)) {
+      return reply.code(415).send({ error: "图片内容与文件类型不匹配" });
+    }
+
+    const rawName = req.headers["x-file-name"];
+    let displayName = "图片" + extension;
+    if (typeof rawName === "string") {
+      try {
+        displayName = path.basename(decodeURIComponent(rawName)).slice(0, 200) || displayName;
+      } catch {
+        return reply.code(400).send({ error: "图片文件名无效" });
+      }
+    }
+    const userDirectory = path.join(UPLOADS_DIR, encodeURIComponent(payload.username));
+    fs.mkdirSync(userDirectory, { recursive: true });
+    const imagePath = path.join(userDirectory, `${randomUUID()}${extension}`);
+    fs.writeFileSync(imagePath, req.body, { mode: 0o600 });
+    return { path: imagePath, displayName };
   });
 
   app.register(async (scope) => {

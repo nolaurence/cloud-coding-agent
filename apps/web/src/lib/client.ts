@@ -117,3 +117,25 @@ export function request<T = unknown>(msg: ClientMessageNoId): Promise<T> {
     socket.send(JSON.stringify({ ...msg, id }));
   });
 }
+
+export async function uploadImage(file: File): Promise<{ path: string; displayName: string }> {
+  if (!currentToken) throw new Error("未登录");
+  const response = await fetch("/api/uploads/images", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${currentToken}`,
+      "Content-Type": file.type,
+      "X-File-Name": encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  const data = (await response.json().catch(() => ({}))) as {
+    path?: string;
+    displayName?: string;
+    error?: string;
+  };
+  if (!response.ok || !data.path) {
+    throw new Error(data.error ?? `图片上传失败 (${response.status})`);
+  }
+  return { path: data.path, displayName: data.displayName ?? file.name };
+}
