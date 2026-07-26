@@ -32,6 +32,7 @@ const actionButtonClass =
 const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const MAX_IMAGES = 4;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+let nextImageId = 0;
 
 interface PendingImage {
   id: string;
@@ -222,7 +223,7 @@ export function Composer({
       return [
         ...current,
         ...valid.slice(0, Math.max(0, available)).map((file) => ({
-          id: crypto.randomUUID(),
+          id: `image-${++nextImageId}`,
           file,
           previewUrl: URL.createObjectURL(file),
         })),
