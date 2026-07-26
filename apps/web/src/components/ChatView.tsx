@@ -198,6 +198,10 @@ function AssistantMessage({
 
 function UserMessage({ message }: { message: ChatMessage }) {
   const threadId = useApp((state) => state.activeThreadId);
+  const currentUsername = useApp((state) => state.user?.username);
+  const thread = useApp((state) =>
+    state.threads.find((candidate) => candidate.id === state.activeThreadId),
+  );
   const skillMatch = message.text.match(
     /^Use these skills for this request: ([^\n]+)\.\n\n([\s\S]*)$/,
   );
@@ -206,7 +210,13 @@ function UserMessage({ message }: { message: ChatMessage }) {
   const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
 
   return (
-    <article className="group/user flex justify-end py-1">
+    <article className="group/user flex flex-col items-end py-1">
+      {message.authorId &&
+        (thread?.shared || thread?.access === "readonly" || thread?.access === "collaborate") && (
+          <div className="mb-1 px-2 text-[11px] text-muted-foreground">
+            {message.authorId === currentUsername ? "你" : message.authorId}
+          </div>
+        )}
       <div className="relative max-w-[80%] rounded-3xl bg-muted px-4 py-2.5 text-foreground">
         <CopyAction
           text={message.text}

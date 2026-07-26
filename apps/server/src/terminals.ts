@@ -202,6 +202,14 @@ export class TerminalManager {
     }
   }
 
+  closeOwnerThread(ownerId: string, threadId: string) {
+    for (const session of [...this.sessions.values()]) {
+      if (session.ownerId === ownerId && session.threadId === threadId) {
+        this.close(session.ownerId, session.id);
+      }
+    }
+  }
+
   shutdown() {
     for (const session of [...this.sessions.values()]) this.close(session.ownerId, session.id);
   }

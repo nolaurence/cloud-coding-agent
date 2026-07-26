@@ -357,6 +357,50 @@ test("restores an unfinished streamed answer from session history", async (t) =>
   );
 });
 
+test("records the current collaborator as the message and attachment author", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.userId = "thread-owner";
+  const session = new FakeSession();
+  const manager = new CopilotManager(() => new FakeClient(session) as unknown as CopilotClient);
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(
+    threadId,
+    "协作者消息",
+    [{ path: "/tmp/image.png", displayName: "image.png", imageId: "image.png" }],
+    "collaborator",
+  );
+  const event = sessionEvent("user.message", { content: "协作者消息" });
+  session.emit(event);
+
+  const messageEvent = emitted.find((candidate) => candidate.kind === "user.message");
+  assert.equal(
+    messageEvent?.kind === "user.message" ? messageEvent.message.authorId : undefined,
+    "collaborator",
+  );
+  assert.equal(store.getThread(threadId)?.messageAuthors?.[event.id], "collaborator");
+  assert.equal(store.getThread(threadId)?.messageAttachments?.[event.id]?.[0]?.ownerId, "collaborator");
+});
+
+test("a new subscriber does not replace the actor session during a running turn", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.userId = "thread-owner";
+  const client = new FakeClient();
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "协作者正在处理", undefined, "collaborator");
+  assert.equal(client.createdConfigs.length, 1);
+
+  await manager.subscribe(threadId, "readonly-viewer");
+  assert.equal(client.createdConfigs.length, 1);
+  assert.equal(manager.isRunning(threadId), true);
+});
+
 test("registers the authenticated Git tool and fails closed for legacy threads", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);

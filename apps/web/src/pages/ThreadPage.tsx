@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { FolderGit2, PanelRightOpen } from "lucide-react";
+import { FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import type { ModelRef } from "@cca/protocol";
 import { useApp, useThreadState } from "../lib/store";
@@ -9,6 +9,7 @@ import { ModelPicker } from "../components/ModelPicker";
 import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
 import { RightPanel } from "../components/RightPanel";
 import { RightPanelResizeHandle } from "../components/RightPanelResizeHandle";
+import { ThreadShareDialog } from "../components/ThreadShareDialog";
 import { useResizableWidth } from "../hooks/useResizableWidth";
 import { Button } from "@/components/ui/button";
 
@@ -23,6 +24,7 @@ const RESIZE_HANDLE_WIDTH = 8;
 export function ThreadPage() {
   const { threadId } = useParams<{ threadId: string }>();
   const threads = useApp((s) => s.threads);
+  const user = useApp((s) => s.user);
   const projects = useApp((s) => s.projects);
   const settings = useApp((s) => s.settings);
   const sendMessage = useApp((s) => s.sendMessage);
@@ -30,9 +32,18 @@ export function ThreadPage() {
   const setThreadModel = useApp((s) => s.setThreadModel);
   const panelOpen = useApp((s) => s.workspacePanelOpen);
   const setPanelOpen = useApp((s) => s.setWorkspacePanelOpen);
+  const shareDialogOpen = useApp((s) => s.shareDialogOpen);
+  const setShareDialogOpen = useApp((s) => s.setShareDialogOpen);
   const state = useThreadState(threadId);
   const thread = threads.find((t) => t.id === threadId);
   const project = projects.find((candidate) => candidate.id === thread?.projectId);
+  const canManageThread = Boolean(
+    thread &&
+      (thread.access === "owner" ||
+        user?.role === "admin" ||
+        (thread.userId && thread.userId === user?.username)),
+  );
+  const canInteract = canManageThread || thread?.access === "collaborate";
   const [switchingModel, setSwitchingModel] = useState(false);
   const [modelError, setModelError] = useState("");
   const [composerHeight, setComposerHeight] = useState(0);
@@ -94,15 +105,26 @@ export function ThreadPage() {
   }, []);
 
   useEffect(() => {
+    if (!canManageThread && panelOpen) setPanelOpen(false);
+  }, [canManageThread, panelOpen, setPanelOpen]);
+
+  useEffect(() => {
+    if (!canManageThread && shareDialogOpen) setShareDialogOpen(false);
+  }, [canManageThread, setShareDialogOpen, shareDialogOpen]);
+
+  useEffect(() => {
     const element = composerOverlayRef.current;
-    if (!element) return;
+    if (!canInteract || !element) {
+      setComposerHeight(0);
+      return;
+    }
     const measure = () => setComposerHeight(Math.ceil(element.getBoundingClientRect().height));
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [canInteract, threadId]);
 
   if (!threadId) return null;
 
@@ -120,58 +142,75 @@ export function ThreadPage() {
                 </div>
               )}
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label="打开工作区面板"
-              title="打开工作区面板"
-              aria-controls="thread-workspace-panel"
-              aria-expanded={panelOpen}
-              className="text-muted-foreground"
-              onClick={() => setPanelOpen(true)}
-            >
-              <PanelRightOpen className="h-4 w-4" />
-            </Button>
+            {canManageThread && (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="分享会话"
+                  title="分享会话"
+                  className="text-muted-foreground"
+                  onClick={() => setShareDialogOpen(true)}
+                >
+                  <Share2 className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="打开工作区面板"
+                  title="打开工作区面板"
+                  aria-controls="thread-workspace-panel"
+                  aria-expanded={panelOpen}
+                  className="text-muted-foreground"
+                  onClick={() => setPanelOpen(true)}
+                >
+                  <PanelRightOpen className="h-4 w-4" />
+                </Button>
+              </>
+            )}
           </div>
         </header>
         <div className="relative min-h-0 flex-1 overflow-hidden">
-          <ChatView threadId={threadId} bottomInset={composerHeight} />
-          <div ref={composerOverlayRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-2">
-            <div
-              aria-hidden="true"
-              className="absolute inset-y-0 left-0 right-[var(--app-scrollbar-width)] bg-white dark:bg-zinc-950"
-            />
-            <div className="relative mx-auto max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
-              <div className="pointer-events-auto">
-                <Composer
-                  key={threadId}
-                  threadId={threadId}
-                  projectId={thread?.projectId}
-                  running={state.running}
-                  onSend={(text, attachments) => sendMessage(threadId, text, attachments)}
-                  onInterrupt={() => interrupt(threadId)}
-                  footerError={modelError}
-                  footerControls={
-                    <>
-                      <ModelPicker value={effectiveModel} onChange={(ref) => void onModelChange(ref)} disabled={state.running || switchingModel} />
-                      <ReasoningEffortPicker
-                        compact
-                        model={effectiveModel}
-                        disabled={state.running || switchingModel}
-                        onChange={(reasoningEffort) => {
-                          if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
-                        }}
-                      />
-                    </>
-                  }
-                />
+          <ChatView threadId={threadId} bottomInset={canInteract ? composerHeight : 0} />
+          {canInteract && (
+            <div ref={composerOverlayRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-2">
+              <div
+                aria-hidden="true"
+                className="absolute inset-y-0 left-0 right-[var(--app-scrollbar-width)] bg-white dark:bg-zinc-950"
+              />
+              <div className="relative mx-auto max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
+                <div className="pointer-events-auto">
+                  <Composer
+                    key={threadId}
+                    threadId={threadId}
+                    projectId={thread?.projectId}
+                    running={state.running}
+                    onSend={(text, attachments) => sendMessage(threadId, text, attachments)}
+                    onInterrupt={() => interrupt(threadId)}
+                    footerError={canManageThread ? modelError : undefined}
+                    footerControls={canManageThread ? (
+                      <>
+                        <ModelPicker value={effectiveModel} onChange={(ref) => void onModelChange(ref)} disabled={state.running || switchingModel} />
+                        <ReasoningEffortPicker
+                          compact
+                          model={effectiveModel}
+                          disabled={state.running || switchingModel}
+                          onChange={(reasoningEffort) => {
+                            if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
+                          }}
+                        />
+                      </>
+                    ) : undefined}
+                  />
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
-      {panelOpen && (
+      {canManageThread && panelOpen && (
         <>
           <RightPanelResizeHandle
             handlers={resizeHandlers}
@@ -188,6 +227,14 @@ export function ThreadPage() {
             <RightPanel threadId={threadId} projectId={thread?.projectId} onClose={() => setPanelOpen(false)} />
           </div>
         </>
+      )}
+      {thread && canManageThread && (
+        <ThreadShareDialog
+          threadId={thread.id}
+          threadTitle={thread.title}
+          open={shareDialogOpen}
+          onOpenChange={setShareDialogOpen}
+        />
       )}
     </div>
   );

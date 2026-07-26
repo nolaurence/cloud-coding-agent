@@ -7,7 +7,9 @@ import type {
   ModelRef,
   ServerMessage,
   ShellState,
+  ThreadAccess,
   ThreadMeta,
+  UserRole,
 } from "@cca/protocol";
 import { store } from "./store.js";
 import { CopilotManager } from "./copilot.js";
@@ -22,10 +24,19 @@ import {
   listProjectFiles,
   projectDiff,
   readProjectFile,
+  writeProjectFile,
 } from "./workspace.js";
 import { TerminalManager } from "./terminals.js";
 import { bindGitProvider, listGitBindings, unbindGitProvider } from "./gitBindings.js";
 import { removeThreadUploads, removeUploadedImages, validateOwnedUploads } from "./uploads.js";
+import {
+  createThreadShare,
+  deleteThreadShare,
+  getSharedThreadAccess,
+  getThreadShare,
+  redeemThreadShare,
+  revokeThreadShare,
+} from "./threadShares.js";
 
 interface ClientConn {
   socket: WebSocket;
@@ -74,14 +85,36 @@ export class Hub {
     });
   }
 
-  private canAccess(conn: ClientConn, thread: ThreadMeta | undefined): boolean {
-    if (!thread) return false;
-    if (conn.user.role === "admin") return true;
-    return !thread.userId || thread.userId === conn.user.username;
+  private threadAccess(conn: ClientConn, thread: ThreadMeta | undefined): ThreadAccess | null {
+    if (!thread) return null;
+    if (conn.user.role === "admin" || thread.userId === conn.user.username) return "owner";
+    if (!thread.userId) return "collaborate";
+    return getSharedThreadAccess(thread.id, conn.user.username);
+  }
+
+  private canRead(conn: ClientConn, thread: ThreadMeta | undefined): boolean {
+    return this.threadAccess(conn, thread) !== null;
+  }
+
+  private canInteract(conn: ClientConn, thread: ThreadMeta | undefined): boolean {
+    const access = this.threadAccess(conn, thread);
+    return access === "owner" || access === "collaborate";
+  }
+
+  private canManage(conn: ClientConn, thread: ThreadMeta | undefined): boolean {
+    return this.threadAccess(conn, thread) === "owner";
+  }
+
+  private threadMeta(conn: ClientConn, thread: ThreadMeta): ThreadMeta {
+    return {
+      ...thread,
+      access: this.threadAccess(conn, thread) ?? undefined,
+      shared: getThreadShare(thread.id).active,
+    };
   }
 
   private requireAdmin(conn: ClientConn) {
-    if (conn.user.role !== "admin") throw new Error("仅管理员可以管理项目目录");
+    if (conn.user.role !== "admin") throw new Error("仅管理员可以执行此操作");
   }
 
   private send(conn: ClientConn, msg: ServerMessage) {
@@ -104,12 +137,14 @@ export class Hub {
   }
 
   private shellState(conn: ClientConn): ShellState {
+    const visibleThreads = [...store.threads]
+      .filter((thread) => this.canRead(conn, thread))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const visibleIds = new Set(visibleThreads.map((thread) => thread.id));
     return {
       projects: store.projects,
-      threads: [...store.threads]
-        .filter((t) => this.canAccess(conn, t))
-        .sort((a, b) => b.updatedAt - a.updatedAt),
-      runningThreadIds: this.manager.runningThreadIds(),
+      threads: visibleThreads.map((thread) => this.threadMeta(conn, thread)),
+      runningThreadIds: this.manager.runningThreadIds().filter((threadId) => visibleIds.has(threadId)),
     };
   }
 
@@ -122,15 +157,59 @@ export class Hub {
   private broadcastThread(threadId: string, event: import("@cca/protocol").ThreadEvent) {
     const thread = store.getThread(threadId);
     for (const conn of this.clients) {
-      if (conn.threadSubs.has(threadId) && this.canAccess(conn, thread)) {
+      if (conn.threadSubs.has(threadId) && this.canRead(conn, thread)) {
         this.send(conn, { type: "thread.event", threadId, event });
       }
     }
   }
 
+  private settingsFor(conn: ClientConn): AppSettings {
+    if (conn.user.role === "admin") return store.settings;
+    return {
+      ...store.settings,
+      providers: store.settings.providers.map(({ apiKey: _apiKey, ...provider }) => provider),
+      mcpServers: [],
+      skillDirectories: [],
+      disabledSkills: [],
+    };
+  }
+
   private broadcastSettings() {
     for (const conn of this.clients) {
-      if (conn.shellSubscribed) this.send(conn, { type: "settings", data: store.settings });
+      if (conn.shellSubscribed) this.send(conn, { type: "settings", data: this.settingsFor(conn) });
+    }
+  }
+
+  private reconcileThreadClients(threadId: string) {
+    const thread = store.getThread(threadId);
+    for (const conn of this.clients) {
+      if (conn.threadSubs.has(threadId) && !this.canRead(conn, thread)) {
+        conn.threadSubs.delete(threadId);
+        this.manager.unsubscribe(threadId);
+      }
+      if (conn.shellSubscribed) this.send(conn, { type: "shell", data: this.shellState(conn) });
+    }
+  }
+
+  updateUserRole(username: string, role: UserRole) {
+    for (const conn of this.clients) {
+      if (conn.user.username !== username) continue;
+      conn.user = { ...conn.user, role };
+      for (const threadId of [...conn.threadSubs]) {
+        if (this.canRead(conn, store.getThread(threadId))) continue;
+        conn.threadSubs.delete(threadId);
+        this.manager.unsubscribe(threadId);
+      }
+      for (const thread of store.threads) {
+        if (!this.canManage(conn, thread)) {
+          this.terminals.closeOwnerThread(username, thread.id);
+        }
+      }
+      this.send(conn, { type: "auth.user", user: { username, role } });
+      if (conn.shellSubscribed) {
+        this.send(conn, { type: "shell", data: this.shellState(conn) });
+        this.send(conn, { type: "settings", data: this.settingsFor(conn) });
+      }
     }
   }
 
@@ -192,7 +271,7 @@ export class Hub {
         case "shell.subscribe": {
           conn.shellSubscribed = true;
           this.send(conn, { type: "shell", data: this.shellState(conn) });
-          this.send(conn, { type: "settings", data: store.settings });
+          this.send(conn, { type: "settings", data: this.settingsFor(conn) });
           this.send(conn, { type: "skills", data: listSkills() });
           this.reply(conn, msg.id);
           break;
@@ -246,15 +325,16 @@ export class Hub {
           };
           store.upsertThread(thread);
           this.broadcastShell();
-          this.reply(conn, msg.id, thread);
+          this.reply(conn, msg.id, this.threadMeta(conn, thread));
           break;
         }
         case "thread.delete": {
           const thread = store.getThread(msg.threadId);
-          if (!this.canAccess(conn, thread)) throw new Error("无权操作该会话");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
           this.terminals.closeThread(msg.threadId);
           await this.manager.deleteThread(msg.threadId);
           if (thread) removeThreadUploads(thread);
+          await deleteThreadShare(msg.threadId);
           store.deleteThread(msg.threadId);
           this.broadcastShell();
           this.reply(conn, msg.id);
@@ -263,7 +343,7 @@ export class Hub {
         case "thread.setModel": {
           const thread = store.getThread(msg.threadId);
           if (!thread) throw new Error("会话不存在");
-          if (!this.canAccess(conn, thread)) throw new Error("无权操作该会话");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
           await this.validateReasoningEffort(msg.model);
           await this.manager.setThreadModel(
             msg.threadId,
@@ -276,12 +356,16 @@ export class Hub {
           break;
         }
         case "thread.subscribe": {
-          if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权访问该会话");
+          if (!this.canRead(conn, store.getThread(msg.threadId))) throw new Error("无权访问该会话");
           if (conn.threadSubs.has(msg.threadId)) {
             this.reply(conn, msg.id);
             break;
           }
-          const snapshot = await this.manager.subscribe(msg.threadId);
+          const snapshot = await this.manager.subscribe(msg.threadId, conn.user.username);
+          if (!this.canRead(conn, store.getThread(msg.threadId))) {
+            this.manager.unsubscribe(msg.threadId);
+            throw new Error("无权访问该会话");
+          }
           conn.threadSubs.add(msg.threadId);
           this.send(conn, { type: "thread.event", threadId: msg.threadId, event: snapshot });
           this.reply(conn, msg.id);
@@ -292,8 +376,44 @@ export class Hub {
           this.reply(conn, msg.id);
           break;
         }
+        case "thread.share.get": {
+          const thread = store.getThread(msg.threadId);
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话的分享");
+          this.reply(conn, msg.id, getThreadShare(msg.threadId));
+          break;
+        }
+        case "thread.share.create": {
+          const thread = store.getThread(msg.threadId);
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话的分享");
+          if (msg.mode !== "readonly" && msg.mode !== "collaborate") {
+            throw new Error("分享权限无效");
+          }
+          const share = await createThreadShare(msg.threadId, msg.mode, conn.user.username);
+          this.reconcileThreadClients(msg.threadId);
+          this.reply(conn, msg.id, share);
+          break;
+        }
+        case "thread.share.revoke": {
+          const thread = store.getThread(msg.threadId);
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话的分享");
+          await revokeThreadShare(msg.threadId);
+          this.reconcileThreadClients(msg.threadId);
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "thread.share.redeem": {
+          const redeemed = await redeemThreadShare(msg.token, conn.user.username);
+          const thread = store.getThread(redeemed.threadId);
+          if (!thread) {
+            await revokeThreadShare(redeemed.threadId);
+            throw new Error("分享的会话不存在");
+          }
+          if (conn.shellSubscribed) this.send(conn, { type: "shell", data: this.shellState(conn) });
+          this.reply(conn, msg.id, this.threadMeta(conn, thread));
+          break;
+        }
         case "turn.start": {
-          if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权操作该会话");
+          if (!this.canInteract(conn, store.getThread(msg.threadId))) throw new Error("当前分享仅允许查看");
           validateOwnedUploads(conn.user.username, msg.attachments);
           try {
             await this.manager.sendMessage(msg.threadId, msg.text, msg.attachments, conn.user.username);
@@ -306,16 +426,17 @@ export class Hub {
           break;
         }
         case "turn.interrupt": {
-          if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权操作该会话");
+          if (!this.canInteract(conn, store.getThread(msg.threadId))) throw new Error("当前分享仅允许查看");
           await this.manager.interrupt(msg.threadId);
           this.reply(conn, msg.id);
           break;
         }
         case "settings.get": {
-          this.reply(conn, msg.id, store.settings);
+          this.reply(conn, msg.id, this.settingsFor(conn));
           break;
         }
         case "settings.update": {
+          this.requireAdmin(conn);
           const prev = store.settings;
           const modelProvidersChanged =
             JSON.stringify(prev.providers) !== JSON.stringify(msg.settings.providers);
@@ -355,12 +476,14 @@ export class Hub {
           break;
         }
         case "skill.save": {
+          this.requireAdmin(conn);
           saveSkill(msg.name, msg.description, msg.content);
           this.broadcastSkills();
           this.reply(conn, msg.id);
           break;
         }
         case "skill.delete": {
+          this.requireAdmin(conn);
           deleteSkill(msg.name);
           this.broadcastSkills();
           this.reply(conn, msg.id);
@@ -376,6 +499,7 @@ export class Hub {
           break;
         }
         case "provider.models.discover": {
+          this.requireAdmin(conn);
           const models = await discoverProviderModels(msg.provider);
           this.reply(conn, msg.id, models);
           break;
@@ -404,6 +528,19 @@ export class Hub {
           this.reply(conn, msg.id, readProjectFile(project.path, msg.path));
           break;
         }
+        case "project.file.write": {
+          const thread = store.getThread(msg.threadId);
+          if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以直接编辑文件");
+          if (thread?.projectId !== msg.projectId) throw new Error("文件与当前会话项目不匹配");
+          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
+          if (!project) throw new Error("项目不存在");
+          this.reply(
+            conn,
+            msg.id,
+            writeProjectFile(project.path, msg.path, msg.content, msg.expectedVersion),
+          );
+          break;
+        }
         case "project.diff": {
           const project = store.projects.find((candidate) => candidate.id === msg.projectId);
           if (!project) throw new Error("项目不存在");
@@ -412,7 +549,7 @@ export class Hub {
         }
         case "terminal.open": {
           const thread = store.getThread(msg.threadId);
-          if (!this.canAccess(conn, thread)) throw new Error("无权操作该会话");
+          if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以使用终端");
           const project = store.projects.find((candidate) => candidate.id === thread?.projectId);
           if (!project) throw new Error("项目不存在");
           this.reply(

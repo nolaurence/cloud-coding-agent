@@ -33,6 +33,8 @@ interface ThreadRuntime {
     startedAt: number;
   } | null;
   pendingUserAttachments: MessageAttachment[];
+  pendingUserAuthorId: string;
+  sessionActorId: string;
   detachTimer: NodeJS.Timeout | null;
   subscribers: number;
 }
@@ -129,6 +131,8 @@ export class CopilotManager {
         currentTurnId: null,
         pendingAssistant: null,
         pendingUserAttachments: [],
+        pendingUserAuthorId: "",
+        sessionActorId: "",
         detachTimer: null,
         subscribers: 0,
       };
@@ -189,7 +193,7 @@ export class CopilotManager {
     if (emit) this.emit(rt.threadId, { kind: "assistant.message", message });
   }
 
-  private buildSessionConfig(thread: ThreadMeta, settings: AppSettings) {
+  private buildSessionConfig(thread: ThreadMeta, settings: AppSettings, actorId: string) {
     const modelRef = thread.model ?? settings.defaultModel;
     const providerConfig = modelRef
       ? settings.providers.find((p) => p.id === modelRef.providerId)
@@ -230,7 +234,7 @@ export class CopilotManager {
       workingDirectory: project.path,
       onPermissionRequest: approveAll,
       mcpServers,
-      tools: [createAuthenticatedGitTool(thread.userId, project.path)],
+      tools: [createAuthenticatedGitTool(actorId || thread.userId, project.path)],
       systemMessage: {
         mode: "append",
         content:
@@ -268,6 +272,7 @@ export class CopilotManager {
 
   private attachEventHandlers(rt: ThreadRuntime, session: CopilotSession) {
     session.on((event: SessionEvent) => {
+      if (rt.session !== session) return;
       try {
         this.handleSessionEvent(rt, event);
       } catch (err) {
@@ -325,11 +330,13 @@ export class CopilotManager {
           id: event.id,
           role: "user",
           text: data.content,
+          authorId: rt.pendingUserAuthorId || undefined,
           attachments: rt.pendingUserAttachments.length > 0 ? rt.pendingUserAttachments : undefined,
           turnId,
           createdAt: ts,
         };
         rt.pendingUserAttachments = [];
+        rt.pendingUserAuthorId = "";
         rt.messages.push(message);
         this.emit(threadId, { kind: "user.message", message });
 
@@ -345,6 +352,10 @@ export class CopilotManager {
             messageAttachments: {
               ...thread.messageAttachments,
               ...(message.attachments ? { [message.id]: message.attachments } : {}),
+            },
+            messageAuthors: {
+              ...thread.messageAuthors,
+              ...(message.authorId ? { [message.id]: message.authorId } : {}),
             },
             updatedAt: ts,
           });
@@ -470,17 +481,27 @@ export class CopilotManager {
     }
   }
 
-  private async attach(threadId: string): Promise<CopilotSession> {
+  private async attach(threadId: string, actorId?: string): Promise<CopilotSession> {
     const rt = this.runtime(threadId);
-    if (rt.session) return rt.session;
-    if (rt.attaching) return rt.attaching;
+    const thread = store.getThread(threadId);
+    if (!thread) throw new Error("会话不存在");
+    const requestedActorId = actorId || thread.userId || "";
+    if (rt.session && rt.sessionActorId === requestedActorId) return rt.session;
+    if (rt.attaching) {
+      await rt.attaching;
+      if (rt.session && rt.sessionActorId === requestedActorId) return rt.session;
+    }
+    if (rt.session) {
+      const previousSession = rt.session;
+      rt.session = null;
+      rt.sessionActorId = "";
+      await previousSession.disconnect().catch(() => {});
+    }
 
     const attaching = (async () => {
       const client = await this.ensureClient();
-      const thread = store.getThread(threadId);
-      if (!thread) throw new Error("会话不存在");
       const settings = store.settings;
-      const config = this.buildSessionConfig(thread, settings);
+      const config = this.buildSessionConfig(thread, settings, requestedActorId);
 
       let session: CopilotSession;
       const hasHistory = thread.createdAt < Date.now() - 1000 || rt.messages.length > 0;
@@ -495,6 +516,7 @@ export class CopilotManager {
       }
 
       rt.session = session;
+      rt.sessionActorId = requestedActorId;
       this.attachEventHandlers(rt, session);
       if (rt.messages.length === 0) {
         await this.rebuildHistory(rt, session);
@@ -532,6 +554,7 @@ export class CopilotManager {
               id: event.id,
               role: "user",
               text: data.content,
+              authorId: store.getThread(rt.threadId)?.messageAuthors?.[event.id],
               attachments: store.getThread(rt.threadId)?.messageAttachments?.[event.id],
               turnId,
               createdAt: ts,
@@ -617,7 +640,7 @@ export class CopilotManager {
     }
   }
 
-  async subscribe(threadId: string): Promise<ThreadEvent> {
+  async subscribe(threadId: string, actorId?: string): Promise<ThreadEvent> {
     const rt = this.runtime(threadId);
     rt.subscribers += 1;
     if (rt.detachTimer) {
@@ -625,7 +648,8 @@ export class CopilotManager {
       rt.detachTimer = null;
     }
     try {
-      await this.attach(threadId);
+      if (!rt.session && rt.attaching) await rt.attaching;
+      if (!rt.session) await this.attach(threadId, actorId);
     } catch (error) {
       rt.subscribers = Math.max(0, rt.subscribers - 1);
       if (rt.subscribers === 0 && !rt.session) this.threads.delete(threadId);
@@ -673,7 +697,7 @@ export class CopilotManager {
     threadId: string,
     text: string,
     attachments?: TurnAttachment[],
-    attachmentOwnerId = "",
+    actorId = "",
   ): Promise<void> {
     const rt = this.runtime(threadId);
     if (rt.running) throw new Error("当前任务仍在运行,请等待完成或先停止任务");
@@ -689,12 +713,13 @@ export class CopilotManager {
           id: attachment.imageId,
           displayName: attachment.displayName ?? "图片",
           kind: "image" as const,
-          ownerId: attachmentOwnerId,
+          ownerId: actorId,
         })) ?? [];
+    rt.pendingUserAuthorId = actorId;
     this.emit(threadId, { kind: "turn.start", turnId });
     this.shellChanged();
     try {
-      const session = await this.attach(threadId);
+      const session = await this.attach(threadId, actorId);
       await session.send({
         prompt: text,
         attachments: attachments?.map((a) => ({
@@ -709,6 +734,7 @@ export class CopilotManager {
       const message = error instanceof Error ? error.message : String(error);
       if (rt.running) {
         rt.pendingUserAttachments = [];
+        rt.pendingUserAuthorId = "";
         this.emit(threadId, { kind: "error", message });
         this.finishTurn(rt);
       }

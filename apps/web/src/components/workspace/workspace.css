@@ -12,6 +12,20 @@
   outline: none;
 }
 
-.workspace-source pre {
-  tab-size: 2;
+.workspace-file-editor {
+  background: #fff;
+  scrollbar-color: #d4d4d8 transparent;
+  scrollbar-width: thin;
+}
+
+.workspace-file-editor > div,
+.workspace-file-editor diffs-container {
+  display: block;
+  min-width: 100%;
+  min-height: 100%;
+}
+
+.dark .workspace-file-editor {
+  background: #09090b;
+  scrollbar-color: #52525b transparent;
 }

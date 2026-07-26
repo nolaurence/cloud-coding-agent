@@ -3,9 +3,11 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   FolderGit2,
   FolderPlus,
+  Eye,
   Loader2,
   LogOut,
   MessageSquare,
+  MessagesSquare,
   Plus,
   Settings,
   ShieldCheck,
@@ -114,34 +116,52 @@ export function Sidebar({
             {threadsByProject(project.id).map((thread) => {
               const active = location.pathname === `/thread/${thread.id}`;
               const running = runningIds.includes(thread.id);
+              const canManageThread =
+                thread.access === "owner" ||
+                user?.role === "admin" ||
+                thread.userId === user?.username;
               return (
                 <div key={thread.id} className="group relative">
                   <Link
                     to={`/thread/${thread.id}`}
                     onClick={onNavigate}
+                    title={
+                      thread.access === "readonly"
+                        ? `${thread.title}（只读分享）`
+                        : thread.access === "collaborate"
+                          ? `${thread.title}（可加入分享）`
+                          : thread.title
+                    }
                     className={cn(
                       buttonVariants({ variant: active ? "secondary" : "ghost", size: "sm" }),
-                      "w-full justify-start pr-9 font-normal",
+                      "w-full justify-start font-normal",
+                      canManageThread ? "pr-9" : "pr-2",
                       active ? "font-medium" : "text-muted-foreground",
                     )}
                   >
                     {running ? (
                       <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />
+                    ) : thread.access === "readonly" ? (
+                      <Eye className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                    ) : thread.access === "collaborate" ? (
+                      <MessagesSquare className="h-3.5 w-3.5 shrink-0 opacity-60" />
                     ) : (
                       <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-60" />
                     )}
                     <span className="min-w-0 flex-1 truncate">{thread.title}</span>
                   </Link>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    className="absolute top-1/2 right-1.5 -translate-y-1/2 opacity-100 md:opacity-0 md:group-hover:opacity-100"
-                    aria-label={`删除会话 ${thread.title}`}
-                    title="删除会话"
-                    onClick={() => setConfirmTarget({ kind: "thread", id: thread.id, name: thread.title, active })}
-                  >
-                    <Trash2 className="h-3.5 w-3.5 text-zinc-400 hover:text-red-500" />
-                  </Button>
+                  {canManageThread && (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className="absolute top-1/2 right-1.5 -translate-y-1/2 opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                      aria-label={`删除会话 ${thread.title}`}
+                      title="删除会话"
+                      onClick={() => setConfirmTarget({ kind: "thread", id: thread.id, name: thread.title, active })}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-zinc-400 hover:text-red-500" />
+                    </Button>
+                  )}
                 </div>
               );
             })}

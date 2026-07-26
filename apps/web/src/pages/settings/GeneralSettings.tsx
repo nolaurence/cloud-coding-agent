@@ -13,6 +13,7 @@ import {
 import { GitBindingsSettings } from "./GitBindingsSettings";
 
 export function GeneralSettings() {
+  const user = useApp((s) => s.user);
   const settings = useApp((s) => s.settings);
   const updateSettings = useApp((s) => s.updateSettings);
   const { theme, resolvedTheme, setTheme } = useTheme();
@@ -52,34 +53,38 @@ export function GeneralSettings() {
 
       <GitBindingsSettings />
 
-      <section>
-        <h2 className="mb-3 text-base font-semibold">默认模型</h2>
-        <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 px-4 py-3 xl:flex-row xl:items-center xl:justify-between dark:border-zinc-800">
-          <div>
-            <div className="text-sm">新会话默认使用的模型</div>
-            <div className="text-xs text-zinc-500">可在「模型」页添加 OpenAI / OpenAI Responses 协议的服务</div>
+      {user?.role === "admin" && (
+        <section>
+          <h2 className="mb-3 text-base font-semibold">默认模型</h2>
+          <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 px-4 py-3 xl:flex-row xl:items-center xl:justify-between dark:border-zinc-800">
+            <div>
+              <div className="text-sm">新会话默认使用的模型</div>
+              <div className="text-xs text-zinc-500">
+                可在「模型」页添加 OpenAI / OpenAI Responses 协议的服务
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <ModelPicker
+                value={settings.defaultModel}
+                direction="down"
+                onChange={(ref) => void updateSettings({ ...settings, defaultModel: ref })}
+              />
+              <ReasoningEffortPicker
+                model={settings.defaultModel}
+                direction="down"
+                onChange={(reasoningEffort) => {
+                  if (settings.defaultModel) {
+                    void updateSettings({
+                      ...settings,
+                      defaultModel: { ...settings.defaultModel, reasoningEffort },
+                    });
+                  }
+                }}
+              />
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <ModelPicker
-              value={settings.defaultModel}
-              direction="down"
-              onChange={(ref) => void updateSettings({ ...settings, defaultModel: ref })}
-            />
-            <ReasoningEffortPicker
-              model={settings.defaultModel}
-              direction="down"
-              onChange={(reasoningEffort) => {
-                if (settings.defaultModel) {
-                  void updateSettings({
-                    ...settings,
-                    defaultModel: { ...settings.defaultModel, reasoningEffort },
-                  });
-                }
-              }}
-            />
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section>
         <h2 className="mb-3 text-base font-semibold">运行环境</h2>

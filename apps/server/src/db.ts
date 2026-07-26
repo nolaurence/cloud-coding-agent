@@ -17,7 +17,13 @@ type ParsedDatabaseUrl =
   | { dialect: "sqlite"; filename: string };
 
 export interface UpsertSpec {
-  table: "settings" | "projects" | "threads" | "users";
+  table:
+    | "settings"
+    | "projects"
+    | "threads"
+    | "users"
+    | "registration_settings"
+    | "thread_shares";
   values: Record<string, DbValue>;
   conflictColumns: string[];
   updateColumns?: string[];
@@ -44,6 +50,14 @@ const MYSQL_CREATE_TABLES = [
     salt CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     created_at BIGINT NOT NULL
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS registration_settings (
+    id INT NOT NULL PRIMARY KEY,
+    data JSON NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS thread_shares (
+    thread_id VARCHAR(191) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
+    data JSON NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
 const SQLITE_CREATE_TABLES = `
@@ -66,6 +80,14 @@ const SQLITE_CREATE_TABLES = `
     password_hash TEXT COLLATE BINARY NOT NULL,
     salt TEXT COLLATE BINARY NOT NULL,
     created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS registration_settings (
+    id INTEGER NOT NULL PRIMARY KEY,
+    data TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS thread_shares (
+    thread_id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
+    data TEXT NOT NULL
   );
 `;
 

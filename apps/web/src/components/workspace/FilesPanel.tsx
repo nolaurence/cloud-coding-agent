@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   ArrowLeft,
+  Check,
   ChevronDown,
   ChevronRight,
   ChevronsDownUp,
+  Circle,
   FileCode2,
   Folder,
   FolderOpen,
   LoaderCircle,
+  LockKeyhole,
   RefreshCw,
   Search,
+  WrapText,
   X,
 } from "lucide-react";
 import type {
@@ -18,12 +22,26 @@ import type {
   ProjectDirectoryListing,
   ProjectFileContent,
   ProjectFileEntry,
+  ProjectFileWriteResult,
 } from "@cca/protocol";
 import { request } from "../../lib/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { FileSaveState, ProjectFileEditorHandle } from "./ProjectFileEditor";
+
+const ProjectFileEditor = lazy(async () => {
+  const module = await import("./ProjectFileEditor");
+  return { default: module.ProjectFileEditor };
+});
 
 type DirectoryChildren = Record<string, ProjectDirectoryEntry[]>;
+
+interface FilesPanelProps {
+  projectId: string;
+  threadId: string;
+  draftOwner: string;
+  editable: boolean;
+}
 
 function errorMessage(reason: unknown, fallback: string) {
   return reason instanceof Error ? reason.message : fallback;
@@ -68,9 +86,46 @@ function formatBytes(size: number) {
   return `${(size / (1_024 * 1_024)).toFixed(1)} MB`;
 }
 
-export function FilesPanel({ projectId }: { projectId: string }) {
+function SaveIndicator({ state, onRetry }: { state: FileSaveState; onRetry: () => void }) {
+  if (state.status === "saving") {
+    return (
+      <span className="flex w-14 shrink-0 items-center justify-end gap-1 text-[10px] text-zinc-500" aria-live="polite">
+        <LoaderCircle className="h-3 w-3 animate-spin" />保存中
+      </span>
+    );
+  }
+  if (state.status === "dirty") {
+    return (
+      <span className="flex w-14 shrink-0 items-center justify-end gap-1 text-[10px] text-amber-600 dark:text-amber-400" aria-live="polite">
+        <Circle className="h-2.5 w-2.5 fill-current" />未保存
+      </span>
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <button
+        type="button"
+        className="flex w-14 shrink-0 items-center justify-end gap-1 text-[10px] text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+        title={`${state.message}，点击重试`}
+        aria-label={`保存失败：${state.message}，点击重试`}
+        aria-live="assertive"
+        onClick={onRetry}
+      >
+        <AlertCircle className="h-3 w-3" />失败
+      </button>
+    );
+  }
+  return (
+    <span className="flex w-14 shrink-0 items-center justify-end gap-1 text-[10px] text-zinc-400" aria-live="polite">
+      <Check className="h-3 w-3" />已保存
+    </span>
+  );
+}
+
+export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesPanelProps) {
   const projectRef = useRef(projectId);
   projectRef.current = projectId;
+  const editorRef = useRef<ProjectFileEditorHandle | null>(null);
   const treeGenerationRef = useRef(0);
   const searchRequestRef = useRef(0);
   const previewRequestRef = useRef(0);
@@ -84,8 +139,12 @@ export function FilesPanel({ projectId }: { projectId: string }) {
   const [searchRefresh, setSearchRefresh] = useState(0);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selected, setSelected] = useState<ProjectFileContent | null>(null);
+  const [previewVersion, setPreviewVersion] = useState(0);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const [saveState, setSaveState] = useState<FileSaveState>({ status: "saved" });
+  const [saveRequest, setSaveRequest] = useState(0);
+  const [wordWrap, setWordWrap] = useState(false);
 
   const loadDirectory = useCallback(async (
     directory: string,
@@ -141,9 +200,12 @@ export function FilesPanel({ projectId }: { projectId: string }) {
     setSearchResults(null);
     setSelectedPath(null);
     setSelected(null);
+    setPreviewVersion(0);
     setPreviewError("");
+    setSaveState({ status: "saved" });
+    setSaveRequest(0);
     void loadDirectory("", true, generation);
-  }, [loadDirectory]);
+  }, [loadDirectory, threadId]);
 
   useEffect(() => {
     const normalized = query.trim();
@@ -181,10 +243,12 @@ export function FilesPanel({ projectId }: { projectId: string }) {
     setSelected(null);
     setPreviewLoading(true);
     setPreviewError("");
+    setSaveState({ status: "saved" });
     try {
       const content = await request<ProjectFileContent>({ type: "project.file.read", projectId, path });
       if (projectRef.current === requestProject && requestId === previewRequestRef.current) {
         setSelected(content);
+        setPreviewVersion((value) => value + 1);
       }
     } catch (reason) {
       if (projectRef.current === requestProject && requestId === previewRequestRef.current) {
@@ -279,8 +343,6 @@ export function FilesPanel({ projectId }: { projectId: string }) {
   };
 
   if (selectedPath) {
-    const lineCount = selected?.content.split("\n").length ?? 0;
-    const lineNumbers = Array.from({ length: lineCount }, (_, index) => index + 1).join("\n");
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex h-10 shrink-0 items-center gap-1 border-b border-zinc-200 px-2 dark:border-zinc-800">
@@ -296,20 +358,47 @@ export function FilesPanel({ projectId }: { projectId: string }) {
               setSelected(null);
               setPreviewLoading(false);
               setPreviewError("");
+              setSaveState({ status: "saved" });
             }}
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="min-w-0 flex-1 truncate font-mono text-xs" title={selectedPath}>{selectedPath}</div>
           {selected && <span className="shrink-0 text-[10px] text-zinc-400">{formatBytes(selected.size)}</span>}
+          {selected && (editable ? (
+            <SaveIndicator state={saveState} onRetry={() => setSaveRequest((value) => value + 1)} />
+          ) : (
+            <span className="flex w-14 shrink-0 items-center justify-end gap-1 text-[10px] text-zinc-400">
+              <LockKeyhole className="h-3 w-3" />只读
+            </span>
+          ))}
+          <Button
+            type="button"
+            variant={wordWrap ? "secondary" : "ghost"}
+            size="icon-sm"
+            aria-label={wordWrap ? "关闭自动换行" : "开启自动换行"}
+            aria-pressed={wordWrap}
+            title={wordWrap ? "关闭自动换行" : "开启自动换行"}
+            onClick={() => setWordWrap((value) => !value)}
+          >
+            <WrapText className="h-3.5 w-3.5" />
+          </Button>
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            disabled={previewLoading}
+            disabled={previewLoading || saveState.status === "saving"}
             aria-label="重新加载文件"
             title="重新加载文件"
-            onClick={() => void openFile(selectedPath)}
+            onClick={() => {
+              if (
+                editable
+                && (saveState.status === "dirty" || saveState.status === "error")
+                && !window.confirm("文件尚未保存，确定放弃修改并重新加载吗？")
+              ) return;
+              editorRef.current?.discard();
+              void openFile(selectedPath);
+            }}
           >
             <RefreshCw className={`h-3.5 w-3.5 ${previewLoading ? "animate-spin" : ""}`} />
           </Button>
@@ -324,15 +413,32 @@ export function FilesPanel({ projectId }: { projectId: string }) {
             <div className="max-w-sm text-xs text-red-600 dark:text-red-400">{previewError}</div>
             <Button type="button" variant="outline" size="sm" onClick={() => void openFile(selectedPath)}>重试</Button>
           </div>
-        ) : selected?.content === "" ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-zinc-400">空文件</div>
         ) : selected ? (
-          <div className="workspace-source min-h-0 flex-1 overflow-auto bg-white dark:bg-zinc-950">
-            <div className="flex min-h-full w-max min-w-full items-stretch">
-              <pre aria-hidden="true" className="sticky left-0 shrink-0 select-none border-r border-zinc-200 bg-zinc-50 px-3 py-3 text-right font-mono text-xs leading-5 text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-600">{lineNumbers}</pre>
-              <pre className="min-w-max flex-1 whitespace-pre px-3 py-3 font-mono text-xs leading-5 text-zinc-800 dark:text-zinc-200">{selected.content}</pre>
-            </div>
-          </div>
+          <Suspense fallback={<div className="flex min-h-0 flex-1 items-center justify-center text-xs text-zinc-500"><LoaderCircle className="mr-2 h-4 w-4 animate-spin" />正在加载编辑器…</div>}>
+            <ProjectFileEditor
+              ref={editorRef}
+              key={`${draftOwner}:${threadId}:${projectId}:${selected.path}:${previewVersion}:${editable}`}
+              projectId={projectId}
+              threadId={threadId}
+              draftOwner={draftOwner}
+              editable={editable}
+              file={selected}
+              wordWrap={wordWrap}
+              saveRequest={saveRequest}
+              onSaveStateChange={setSaveState}
+              onSaved={(result: ProjectFileWriteResult, content: string) => {
+                setSelected((current) => current?.path === result.path
+                  ? {
+                      ...current,
+                      content,
+                      size: result.size,
+                      modifiedAt: result.modifiedAt,
+                      version: result.version,
+                    }
+                  : current);
+              }}
+            />
+          </Suspense>
         ) : null}
       </div>
     );

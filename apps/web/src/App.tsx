@@ -9,6 +9,8 @@ import { GeneralSettings } from "./pages/settings/GeneralSettings";
 import { ProvidersSettings } from "./pages/settings/ProvidersSettings";
 import { McpSettings } from "./pages/settings/McpSettings";
 import { SkillsSettings } from "./pages/settings/SkillsSettings";
+import { UsersSettings } from "./pages/settings/UsersSettings";
+import { ShareThreadPage } from "./pages/ShareThreadPage";
 import { useApp } from "./lib/store";
 import { useTheme } from "./lib/theme";
 
@@ -35,18 +37,57 @@ export default function App() {
 
   return (
     <Routes>
+      <Route path="share/:token" element={<ShareThreadPage />} />
       <Route element={<AppLayout />}>
         <Route index element={<NewChatPage />} />
         <Route path="thread/:threadId" element={<ThreadPage />} />
         <Route path="settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="general" replace />} />
           <Route path="general" element={<GeneralSettings />} />
-          <Route path="providers" element={<ProvidersSettings />} />
-          <Route path="mcp" element={<McpSettings />} />
-          <Route path="skills" element={<SkillsSettings />} />
+          <Route
+            path="providers"
+            element={
+              user.role === "admin" ? (
+                <ProvidersSettings />
+              ) : (
+                <Navigate to="/settings/general" replace />
+              )
+            }
+          />
+          <Route
+            path="mcp"
+            element={
+              user.role === "admin" ? (
+                <McpSettings />
+              ) : (
+                <Navigate to="/settings/general" replace />
+              )
+            }
+          />
+          <Route
+            path="skills"
+            element={
+              user.role === "admin" ? (
+                <SkillsSettings />
+              ) : (
+                <Navigate to="/settings/general" replace />
+              )
+            }
+          />
+          <Route
+            path="users"
+            element={
+              user.role === "admin" ? (
+                <UsersSettings />
+              ) : (
+                <Navigate to="/settings/general" replace />
+              )
+            }
+          />
           <Route path="git" element={<Navigate to="/settings/general" replace />} />
         </Route>
       </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

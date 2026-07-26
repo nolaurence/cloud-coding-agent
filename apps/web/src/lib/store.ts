@@ -1,19 +1,26 @@
 import { create } from "zustand";
 import type {
+  AdminRegistrationState,
+  AdminUser,
   AppSettings,
   AuthUser,
   ChatMessage,
+  CreatedInvite,
+  CreatedThreadShare,
   DirectoryBrowseResult,
   ModelRef,
   ModelEntry,
   ModelOption,
   Project,
   ProviderModelDiscoveryConfig,
+  RegistrationPolicy,
   ServerMessage,
   ShellState,
   SkillInfo,
   ThreadEvent,
   ThreadMeta,
+  ThreadShareMode,
+  ThreadShareSummary,
   ToolActivity,
   TurnAttachment,
 } from "@cca/protocol";
@@ -28,19 +35,61 @@ import {
 } from "./client";
 
 const TOKEN_KEY = "cca-token";
+const SHARE_TOKENS_KEY = "cca-thread-share-tokens";
 
-async function authFetch(path: string, body: unknown, token?: string) {
+async function apiFetch<T>(
+  path: string,
+  options: { method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: unknown; auth?: boolean } = {},
+): Promise<T> {
+  const token = options.auth ? localStorage.getItem(TOKEN_KEY) : null;
+  if (options.auth && !token) throw new Error("未登录");
   const res = await fetch(path, {
-    method: body ? "POST" : "GET",
+    method: options.method ?? (options.body === undefined ? "GET" : "POST"),
     headers: {
-      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
   });
   const data = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) throw new Error(data.error ?? `请求失败 (${res.status})`);
-  return data as { token?: string; user: AuthUser };
+  return data as T;
+}
+
+function loadShareTokens(username: string): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(SHARE_TOKENS_KEY) ?? "{}") as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const tokens = (value as Record<string, unknown>)[username];
+    return Array.isArray(tokens)
+      ? tokens.filter((token): token is string => typeof token === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveShareTokens(username: string, tokens: readonly string[]) {
+  try {
+    const existing = JSON.parse(localStorage.getItem(SHARE_TOKENS_KEY) ?? "{}") as unknown;
+    const byUser = existing && typeof existing === "object" && !Array.isArray(existing)
+      ? existing as Record<string, unknown>
+      : {};
+    localStorage.setItem(
+      SHARE_TOKENS_KEY,
+      JSON.stringify({ ...byUser, [username]: [...new Set(tokens)] }),
+    );
+  } catch {
+    try {
+      localStorage.setItem(SHARE_TOKENS_KEY, JSON.stringify({ [username]: [...new Set(tokens)] }));
+    } catch {
+      // Sharing still works when browser storage is unavailable; only reconnect restore is skipped.
+    }
+  }
+}
+
+function rememberShareToken(username: string, token: string) {
+  saveShareTokens(username, [...loadShareTokens(username), token]);
 }
 
 interface ThreadState {
@@ -114,11 +163,19 @@ interface AppState {
   threadStates: Record<string, ThreadState>;
   activeThreadId: string | null;
   workspacePanelOpen: boolean;
+  shareDialogOpen: boolean;
 
   init: () => void;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string, inviteCode?: string) => Promise<void>;
   logout: () => void;
+  getRegistrationPolicy: () => Promise<RegistrationPolicy>;
+  getAdminUsers: () => Promise<AdminUser[]>;
+  setUserRole: (username: string, role: AdminUser["role"]) => Promise<AdminUser>;
+  getAdminRegistration: () => Promise<AdminRegistrationState>;
+  setInviteRequired: (inviteRequired: boolean) => Promise<AdminRegistrationState>;
+  createInvite: () => Promise<CreatedInvite>;
+  revokeInvite: (inviteId: string) => Promise<void>;
   refreshModels: () => Promise<void>;
   discoverProviderModels: (provider: ProviderModelDiscoveryConfig) => Promise<ModelEntry[]>;
   browseDirectories: (partialPath: string) => Promise<DirectoryBrowseResult>;
@@ -131,11 +188,16 @@ interface AppState {
   closeThread: (threadId: string) => Promise<void>;
   sendMessage: (threadId: string, text: string, attachments?: TurnAttachment[]) => Promise<void>;
   interrupt: (threadId: string) => Promise<void>;
+  getThreadShare: (threadId: string) => Promise<ThreadShareSummary>;
+  createThreadShare: (threadId: string, mode: ThreadShareMode) => Promise<CreatedThreadShare>;
+  revokeThreadShare: (threadId: string) => Promise<void>;
+  redeemThreadShare: (token: string) => Promise<ThreadMeta>;
   updateSettings: (settings: AppSettings) => Promise<void>;
   saveSkill: (name: string, description: string, content: string) => Promise<void>;
   deleteSkill: (name: string) => Promise<void>;
   searchFiles: (projectId: string, query: string) => Promise<string[]>;
   setWorkspacePanelOpen: (open: boolean) => void;
+  setShareDialogOpen: (open: boolean) => void;
 }
 
 function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
@@ -287,6 +349,8 @@ export const useApp = create<AppState>((set, get) => {
       void get().refreshModels();
     } else if (msg.type === "skills") {
       set({ skills: msg.data });
+    } else if (msg.type === "auth.user") {
+      set({ user: msg.user });
     } else if (msg.type === "thread.event") {
       set((s) => {
         const prev = s.threadStates[msg.threadId] ?? emptyThread;
@@ -314,6 +378,7 @@ export const useApp = create<AppState>((set, get) => {
       threadStates: {},
       activeThreadId: null,
       workspacePanelOpen: false,
+      shareDialogOpen: false,
     });
   }
 
@@ -336,6 +401,7 @@ export const useApp = create<AppState>((set, get) => {
     threadStates: {},
     activeThreadId: null,
     workspacePanelOpen: false,
+    shareDialogOpen: false,
 
     init: () => {
       if (initialized) return;
@@ -346,18 +412,30 @@ export const useApp = create<AppState>((set, get) => {
       });
       onConnectionChange((connected) => set({ connected }));
       onReconnect(() => {
-        void request({ type: "shell.subscribe" }).catch(() => {});
-        const active = get().activeThreadId;
-        if (active) {
-          void get().openThread(active);
-        }
+        void (async () => {
+          const username = get().user?.username;
+          if (!username) return;
+          const validTokens: string[] = [];
+          for (const shareToken of loadShareTokens(username)) {
+            try {
+              await request<ThreadMeta>({ type: "thread.share.redeem", token: shareToken });
+              validTokens.push(shareToken);
+            } catch {
+              // Invalid and revoked links should not be retried on every reconnect.
+            }
+          }
+          saveShareTokens(username, validTokens);
+          await request({ type: "shell.subscribe" }).catch(() => {});
+          const active = get().activeThreadId;
+          if (active) await get().openThread(active).catch(() => {});
+        })();
       });
       const token = localStorage.getItem(TOKEN_KEY);
       if (!token) {
         set({ authReady: true });
         return;
       }
-      authFetch("/api/auth/me", null, token)
+      apiFetch<{ user: AuthUser }>("/api/auth/me", { auth: true })
         .then((data) => {
           set({ user: data.user, authReady: true });
           connect(token);
@@ -369,12 +447,16 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     login: async (username, password) => {
-      const data = await authFetch("/api/auth/login", { username, password });
+      const data = await apiFetch<{ token: string; user: AuthUser }>("/api/auth/login", {
+        body: { username, password },
+      });
       startSession(data.token!, data.user);
     },
 
-    register: async (username, password) => {
-      const data = await authFetch("/api/auth/register", { username, password });
+    register: async (username, password, inviteCode) => {
+      const data = await apiFetch<{ token: string; user: AuthUser }>("/api/auth/register", {
+        body: { username, password, inviteCode },
+      });
       startSession(data.token!, data.user);
     },
 
@@ -386,6 +468,38 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     setWorkspacePanelOpen: (open) => set({ workspacePanelOpen: open }),
+    setShareDialogOpen: (open) => set({ shareDialogOpen: open }),
+
+    getRegistrationPolicy: () => apiFetch<RegistrationPolicy>("/api/auth/registration"),
+
+    getAdminUsers: () => apiFetch<AdminUser[]>("/api/admin/users", { auth: true }),
+
+    setUserRole: (username, role) =>
+      apiFetch<AdminUser>(`/api/admin/users/${encodeURIComponent(username)}/role`, {
+        method: "PATCH",
+        body: { role },
+        auth: true,
+      }),
+
+    getAdminRegistration: () =>
+      apiFetch<AdminRegistrationState>("/api/admin/registration", { auth: true }),
+
+    setInviteRequired: (inviteRequired) =>
+      apiFetch<AdminRegistrationState>("/api/admin/registration", {
+        method: "PUT",
+        body: { inviteRequired },
+        auth: true,
+      }),
+
+    createInvite: () =>
+      apiFetch<CreatedInvite>("/api/admin/invites", { method: "POST", auth: true }),
+
+    revokeInvite: async (inviteId) => {
+      await apiFetch(`/api/admin/invites/${encodeURIComponent(inviteId)}`, {
+        method: "DELETE",
+        auth: true,
+      });
+    },
 
     refreshModels: async () => {
       try {
@@ -499,6 +613,28 @@ export const useApp = create<AppState>((set, get) => {
           runningThreadIds: state.runningThreadIds.filter((id) => id !== threadId),
         };
       });
+    },
+
+    getThreadShare: (threadId) =>
+      request<ThreadShareSummary>({ type: "thread.share.get", threadId }),
+
+    createThreadShare: (threadId, mode) =>
+      request<CreatedThreadShare>({ type: "thread.share.create", threadId, mode }),
+
+    revokeThreadShare: async (threadId) => {
+      await request({ type: "thread.share.revoke", threadId });
+    },
+
+    redeemThreadShare: async (token) => {
+      const thread = await request<ThreadMeta>({ type: "thread.share.redeem", token });
+      const username = get().user?.username;
+      if (username) rememberShareToken(username, token);
+      set((state) => ({
+        threads: state.threads.some((candidate) => candidate.id === thread.id)
+          ? state.threads.map((candidate) => (candidate.id === thread.id ? thread : candidate))
+          : [thread, ...state.threads],
+      }));
+      return thread;
     },
 
     updateSettings: async (settings) => {

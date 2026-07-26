@@ -138,3 +138,19 @@ test("terminal ids are isolated by owner and dimensions are validated", () => {
   assert.throws(() => manager.resize("alice", "shared", 80, 1000), /终端行数/);
   assert.throws(() => manager.open("alice", "thread-1", "invalid/id", "/workspace-a"), /终端标识/);
 });
+
+test("closes only one owner's terminals for a specific thread", () => {
+  const { manager, processes } = fixture();
+  manager.open("alice", "thread-1", "alice-one", "/workspace");
+  manager.open("alice", "thread-2", "alice-two", "/workspace");
+  manager.open("bob", "thread-1", "bob-one", "/workspace");
+
+  manager.closeOwnerThread("alice", "thread-1");
+
+  assert.equal(processes[0]?.killed, true);
+  assert.equal(processes[1]?.killed, false);
+  assert.equal(processes[2]?.killed, false);
+  assert.throws(() => manager.write("alice", "alice-one", "closed"), /终端不存在/);
+  manager.write("alice", "alice-two", "still open");
+  manager.write("bob", "bob-one", "still open");
+});

@@ -109,6 +109,47 @@ export interface DirectoryBrowseResult {
   entries: DirectoryBrowseEntry[];
 }
 
+export type UserRole = "admin" | "user";
+export type ThreadShareMode = "readonly" | "collaborate";
+export type ThreadAccess = "owner" | ThreadShareMode;
+
+export interface AdminUser {
+  username: string;
+  role: UserRole;
+  createdAt: number;
+  protected: boolean;
+}
+
+export interface RegistrationPolicy {
+  inviteRequired: boolean;
+}
+
+export interface InviteSummary {
+  id: string;
+  hint: string;
+  createdBy: string;
+  createdAt: number;
+}
+
+export interface AdminRegistrationState extends RegistrationPolicy {
+  invites: InviteSummary[];
+}
+
+export interface CreatedInvite extends InviteSummary {
+  code: string;
+}
+
+export interface ThreadShareSummary {
+  active: boolean;
+  mode?: ThreadShareMode;
+  createdAt?: number;
+  memberCount: number;
+}
+
+export interface CreatedThreadShare extends ThreadShareSummary {
+  token: string;
+}
+
 export interface ThreadMeta {
   id: string;
   projectId: string;
@@ -118,12 +159,15 @@ export interface ThreadMeta {
   createdAt: number;
   updatedAt: number;
   archived: boolean;
+  access?: ThreadAccess;
+  shared?: boolean;
   messageAttachments?: Record<string, MessageAttachment[]>;
+  messageAuthors?: Record<string, string>;
 }
 
 export interface AuthUser {
   username: string;
-  role: "admin" | "user";
+  role: UserRole;
 }
 
 export interface SkillInfo {
@@ -145,6 +189,7 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
+  authorId?: string;
   attachments?: MessageAttachment[];
   reasoning?: string;
   streaming?: boolean;
@@ -185,6 +230,15 @@ export interface ProjectFileContent {
   path: string;
   content: string;
   size: number;
+  modifiedAt: number;
+  version: string;
+}
+
+export interface ProjectFileWriteResult {
+  path: string;
+  size: number;
+  modifiedAt: number;
+  version: string;
 }
 
 export interface GitDiffResult {
@@ -259,6 +313,10 @@ export type ClientMessage =
   | { id: string; type: "thread.setModel"; threadId: string; model: ModelRef }
   | { id: string; type: "thread.subscribe"; threadId: string }
   | { id: string; type: "thread.unsubscribe"; threadId: string }
+  | { id: string; type: "thread.share.get"; threadId: string }
+  | { id: string; type: "thread.share.create"; threadId: string; mode: ThreadShareMode }
+  | { id: string; type: "thread.share.revoke"; threadId: string }
+  | { id: string; type: "thread.share.redeem"; token: string }
   | { id: string; type: "turn.start"; threadId: string; text: string; attachments?: TurnAttachment[] }
   | { id: string; type: "turn.interrupt"; threadId: string }
   | { id: string; type: "settings.get" }
@@ -272,6 +330,15 @@ export type ClientMessage =
   | { id: string; type: "project.files"; projectId: string }
   | { id: string; type: "project.directory.list"; projectId: string; path?: string }
   | { id: string; type: "project.file.read"; projectId: string; path: string }
+  | {
+      id: string;
+      type: "project.file.write";
+      threadId: string;
+      projectId: string;
+      path: string;
+      content: string;
+      expectedVersion: string;
+    }
   | { id: string; type: "project.diff"; projectId: string }
   | {
       id: string;
@@ -292,6 +359,7 @@ export type ServerMessage =
   | { type: "reply"; id: string; ok: true; data?: unknown }
   | { type: "reply"; id: string; ok: false; error: string }
   | { type: "auth.error"; message: string }
+  | { type: "auth.user"; user: AuthUser }
   | { type: "shell"; data: ShellState }
   | { type: "settings"; data: AppSettings }
   | { type: "skills"; data: SkillInfo[] }

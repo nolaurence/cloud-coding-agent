@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Menu, PanelRightOpen, WifiOff } from "lucide-react";
+import { Menu, PanelRightOpen, Share2, WifiOff } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { useApp } from "../lib/store";
@@ -9,22 +9,31 @@ import { BrandLogo } from "./BrandLogo";
 
 export function AppLayout() {
   const connected = useApp((s) => s.connected);
+  const user = useApp((s) => s.user);
   const threads = useApp((s) => s.threads);
   const workspacePanelOpen = useApp((s) => s.workspacePanelOpen);
   const setWorkspacePanelOpen = useApp((s) => s.setWorkspacePanelOpen);
+  const setShareDialogOpen = useApp((s) => s.setShareDialogOpen);
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const threadPathMatch = location.pathname.match(/^\/thread\/([^/]+)$/);
   const routeThreadId = threadPathMatch?.[1]
     ? decodeURIComponent(threadPathMatch[1])
     : undefined;
-  const mobileTitle =
-    threads.find((thread) => thread.id === routeThreadId)?.title ?? "云端编码助手";
+  const routeThread = threads.find((thread) => thread.id === routeThreadId);
+  const mobileTitle = routeThread?.title ?? "云端编码助手";
+  const canManageThread = Boolean(
+    routeThread &&
+      (routeThread.access === "owner" ||
+        user?.role === "admin" ||
+        (routeThread.userId && routeThread.userId === user?.username)),
+  );
 
   useEffect(() => {
     setSidebarOpen(false);
-    if (!routeThreadId) setWorkspacePanelOpen(false);
-  }, [location.pathname, routeThreadId, setWorkspacePanelOpen]);
+    setShareDialogOpen(false);
+    if (!routeThreadId || !canManageThread) setWorkspacePanelOpen(false);
+  }, [canManageThread, location.pathname, routeThreadId, setShareDialogOpen, setWorkspacePanelOpen]);
 
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 768px)");
@@ -73,20 +82,33 @@ export function AppLayout() {
             <BrandLogo className="h-5 w-5" />
             <span className="truncate text-sm font-medium">{mobileTitle}</span>
           </div>
-          {routeThreadId && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label="打开工作区面板"
-              title="打开工作区面板"
-              aria-controls="thread-workspace-panel"
-              aria-expanded={workspacePanelOpen}
-              className="text-muted-foreground"
-              onClick={() => setWorkspacePanelOpen(true)}
-            >
-              <PanelRightOpen className="h-4 w-4" />
-            </Button>
+          {routeThreadId && canManageThread && (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="分享会话"
+                title="分享会话"
+                className="text-muted-foreground"
+                onClick={() => setShareDialogOpen(true)}
+              >
+                <Share2 className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="打开工作区面板"
+                title="打开工作区面板"
+                aria-controls="thread-workspace-panel"
+                aria-expanded={workspacePanelOpen}
+                className="text-muted-foreground"
+                onClick={() => setWorkspacePanelOpen(true)}
+              >
+                <PanelRightOpen className="h-4 w-4" />
+              </Button>
+            </>
           )}
           {!connected && (
             <span

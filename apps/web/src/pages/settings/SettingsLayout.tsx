@@ -1,21 +1,31 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Blocks, Cpu, Settings2, Sparkles } from "lucide-react";
+import { Blocks, Cpu, Settings2, Sparkles, Users } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { useApp } from "../../lib/store";
 import { buttonVariants } from "@/components/ui/button";
 
-const nav = [
-  { to: "general", label: "通用", icon: Settings2 },
+const adminNav = [
   { to: "providers", label: "模型", icon: Cpu },
   { to: "mcp", label: "MCP 服务器", icon: Blocks },
   { to: "skills", label: "技能", icon: Sparkles },
 ];
 
 export function SettingsLayout() {
+  const user = useApp((state) => state.user);
+  const navItems =
+    user?.role === "admin"
+      ? [
+          { to: "general", label: "通用", icon: Settings2 },
+          ...adminNav,
+          { to: "users", label: "用户管理", icon: Users },
+        ]
+      : [{ to: "general", label: "通用", icon: Settings2 }];
+
   return (
     <div className="flex h-full flex-col sm:flex-row">
       <nav className="flex w-full shrink-0 gap-1 overflow-x-auto border-b border-zinc-200 p-2 sm:w-44 sm:flex-col sm:overflow-x-visible sm:border-r sm:border-b-0 sm:p-3 dark:border-zinc-800">
         <div className="mb-3 hidden px-2 text-xs font-semibold text-zinc-400 sm:block">设置</div>
-        {nav.map((item) => (
+        {navItems.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}

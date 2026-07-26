@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import type { GitDiffResult } from "@cca/protocol";
 import { request } from "../lib/client";
-import { useThreadState } from "../lib/store";
+import { useApp, useThreadState } from "../lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -43,6 +43,9 @@ export function RightPanel({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<PanelTab>("files");
+  const thread = useApp((state) => state.threads.find((candidate) => candidate.id === threadId));
+  const draftOwner = useApp((state) => state.user?.username ?? "anonymous");
+  const canManageWorkspace = thread?.access === "owner";
 
   return (
     <Tabs
@@ -72,12 +75,21 @@ export function RightPanel({
       <div className="min-h-0 flex-1">
         <TabsContent value="browser" className="h-full"><BrowserPanel /></TabsContent>
         <TabsContent value="terminal" className="h-full">
-          <Suspense fallback={<Empty text="正在加载终端…" />}>
-            <TerminalPanel threadId={threadId} />
-          </Suspense>
+          {canManageWorkspace ? (
+            <Suspense fallback={<Empty text="正在加载终端…" />}>
+              <TerminalPanel threadId={threadId} />
+            </Suspense>
+          ) : <Empty text="只有会话所有者可以使用终端" />}
         </TabsContent>
         <TabsContent value="files" className="h-full">
-          {projectId ? <FilesPanel projectId={projectId} /> : <Empty text="项目不存在" />}
+          {projectId ? (
+            <FilesPanel
+              projectId={projectId}
+              threadId={threadId}
+              draftOwner={draftOwner}
+              editable={canManageWorkspace}
+            />
+          ) : <Empty text="项目不存在" />}
         </TabsContent>
         <TabsContent value="diff" className="h-full">
           {projectId ? <DiffPanel projectId={projectId} /> : <Empty text="项目不存在" />}

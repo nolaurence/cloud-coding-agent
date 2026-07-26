@@ -8,10 +8,24 @@ import fastifyStatic from "@fastify/static";
 import fastifyCors from "@fastify/cors";
 import { ensureDataDirs, DATA_DIR, UPLOADS_DIR } from "./env.js";
 import { Hub } from "./hub.js";
-import { initAuth, issueToken, registerUser, verifyToken, verifyUser } from "./auth.js";
+import {
+  createInvite,
+  getAdminRegistrationState,
+  getPublicRegistrationPolicy,
+  initAuth,
+  issueToken,
+  listUsers,
+  registerUser,
+  revokeInvite,
+  setInviteRequired,
+  setUserRole,
+  verifyToken,
+  verifyUser,
+} from "./auth.js";
 import { closeDb, initDb } from "./db.js";
 import { store } from "./store.js";
 import { uploadDirectory, uploadUsage } from "./uploads.js";
+import { getSharedThreadAccess, initThreadShares } from "./threadShares.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -55,6 +69,7 @@ async function main() {
   }
   await store.init();
   await initAuth();
+  await initThreadShares();
   console.log(`[cca] data dir: ${DATA_DIR}`);
 
   const app = Fastify({ logger: false });
@@ -70,13 +85,15 @@ async function main() {
 
   app.get("/health", async () => ({ ok: true }));
 
+  app.get("/api/auth/registration", async () => getPublicRegistrationPolicy());
+
   app.post("/api/auth/register", async (req, reply) => {
-    const body = (req.body ?? {}) as { username?: string; password?: string };
+    const body = (req.body ?? {}) as { username?: string; password?: string; inviteCode?: string };
     if (!body.username || !body.password) {
       return reply.code(400).send({ error: "用户名和密码必填" });
     }
     try {
-      const user = registerUser(body.username, body.password);
+      const user = registerUser(body.username, body.password, body.inviteCode);
       return { token: issueToken(user), user: { username: user.username, role: user.role } };
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : "注册失败" });
@@ -101,6 +118,70 @@ async function main() {
       return reply.code(401).send({ error: "未授权" });
     }
     return { user: { username: payload.username, role: payload.role } };
+  });
+
+  app.get("/api/admin/users", async (req, reply) => {
+    const actor = authenticate(req.headers.authorization);
+    if (!actor) return reply.code(401).send({ error: "未授权" });
+    if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
+    return listUsers();
+  });
+
+  app.patch("/api/admin/users/:username/role", async (req, reply) => {
+    const actor = authenticate(req.headers.authorization);
+    if (!actor) return reply.code(401).send({ error: "未授权" });
+    if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
+    const { username } = req.params as { username: string };
+    const { role } = (req.body ?? {}) as { role?: "admin" | "user" };
+    if (role !== "admin" && role !== "user") {
+      return reply.code(400).send({ error: "用户角色无效" });
+    }
+    try {
+      const user = setUserRole(actor.username, username, role);
+      hub.updateUserRole(user.username, user.role);
+      return user;
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "修改角色失败" });
+    }
+  });
+
+  app.get("/api/admin/registration", async (req, reply) => {
+    const actor = authenticate(req.headers.authorization);
+    if (!actor) return reply.code(401).send({ error: "未授权" });
+    if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
+    return getAdminRegistrationState();
+  });
+
+  app.put("/api/admin/registration", async (req, reply) => {
+    const actor = authenticate(req.headers.authorization);
+    if (!actor) return reply.code(401).send({ error: "未授权" });
+    if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
+    const { inviteRequired } = (req.body ?? {}) as { inviteRequired?: boolean };
+    if (typeof inviteRequired !== "boolean") {
+      return reply.code(400).send({ error: "邀请码设置无效" });
+    }
+    setInviteRequired(inviteRequired);
+    return getAdminRegistrationState();
+  });
+
+  app.post("/api/admin/invites", async (req, reply) => {
+    const actor = authenticate(req.headers.authorization);
+    if (!actor) return reply.code(401).send({ error: "未授权" });
+    if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
+    return createInvite(actor.username);
+  });
+
+  app.delete("/api/admin/invites/:id", async (req, reply) => {
+    const actor = authenticate(req.headers.authorization);
+    if (!actor) return reply.code(401).send({ error: "未授权" });
+    if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
+    const { id } = req.params as { id: string };
+    try {
+      revokeInvite(id);
+      return reply.code(204).send();
+    } catch (error) {
+      return reply.code(404).send({ error: error instanceof Error ? error.message : "邀请码不存在" });
+    }
   });
 
   app.post("/api/uploads/images", async (req, reply) => {
@@ -148,7 +229,12 @@ async function main() {
     }
     if (!threadId) return reply.code(400).send({ error: "缺少会话标识" });
     const thread = store.getThread(threadId);
-    const canAccess = thread && (payload.role === "admin" || !thread.userId || thread.userId === payload.username);
+    const canAccess = thread && (
+      payload.role === "admin" ||
+      !thread.userId ||
+      thread.userId === payload.username ||
+      getSharedThreadAccess(threadId, payload.username) !== null
+    );
     if (!canAccess) return reply.code(403).send({ error: "无权访问该图片" });
     const attachment = Object.values(thread.messageAttachments ?? {}).flat().find((item) => item.id === id);
     if (!attachment) return reply.code(404).send({ error: "图片不存在" });

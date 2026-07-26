@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import type {
   GitDiffResult,
@@ -8,11 +9,13 @@ import type {
   ProjectDirectoryListing,
   ProjectFileContent,
   ProjectFileEntry,
+  ProjectFileWriteResult,
 } from "@cca/protocol";
 
 const execFileAsync = promisify(execFile);
 const MAX_FILE_SIZE = 1024 * 1024;
 const MAX_DIFF_SIZE = 2 * 1024 * 1024;
+const FILE_VERSION_PATTERN = /^[a-f0-9]{64}$/;
 const IGNORED_DIRECTORIES = new Set([
   ".git",
   ".cache",
@@ -46,6 +49,30 @@ function resolveInside(root: string, relativePath: string): string {
 
 function projectPath(root: string, target: string): string {
   return path.relative(root, target).split(path.sep).join("/");
+}
+
+function contentVersion(content: Buffer | string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function decodeUtf8Text(buffer: Buffer, operation: "预览" | "保存"): string {
+  if (buffer.includes(0)) throw new Error(`二进制文件无法${operation}`);
+  const content = buffer.toString("utf8");
+  if (!Buffer.from(content, "utf8").equals(buffer)) {
+    throw new Error(`非 UTF-8 文本无法${operation}`);
+  }
+  return content;
+}
+
+function encodeUtf8Text(content: unknown): Buffer {
+  if (typeof content !== "string" || content.includes("\0")) {
+    throw new Error("文件内容必须是 UTF-8 文本");
+  }
+  const encoded = Buffer.from(content, "utf8");
+  if (encoded.toString("utf8") !== content) {
+    throw new Error("文件内容包含无效的 Unicode 字符");
+  }
+  return encoded;
 }
 
 function sortedEntries(directory: string): fs.Dirent[] {
@@ -125,8 +152,52 @@ export function readProjectFile(root: string, relativePath: string): ProjectFile
   if (!stat.isFile()) throw new Error("目标不是文件");
   if (stat.size > MAX_FILE_SIZE) throw new Error("文件超过 1 MB，无法预览");
   const buffer = fs.readFileSync(target);
-  if (buffer.includes(0)) throw new Error("二进制文件无法预览");
-  return { path: projectPath(canonical, target), content: buffer.toString("utf8"), size: stat.size };
+  const content = decodeUtf8Text(buffer, "预览");
+  return {
+    path: projectPath(canonical, target),
+    content,
+    size: stat.size,
+    modifiedAt: stat.mtimeMs,
+    version: contentVersion(buffer),
+  };
+}
+
+export function writeProjectFile(
+  root: string,
+  relativePath: string,
+  content: string,
+  expectedVersion: string,
+): ProjectFileWriteResult {
+  const encoded = encodeUtf8Text(content);
+  const size = encoded.length;
+  if (size > MAX_FILE_SIZE) throw new Error("文件超过 1 MB，无法保存");
+  if (typeof expectedVersion !== "string" || !FILE_VERSION_PATTERN.test(expectedVersion)) {
+    throw new Error("文件版本无效，请重新加载后再编辑");
+  }
+
+  const canonical = canonicalRoot(root);
+  const target = resolveInside(canonical, relativePath);
+  const lexicalTarget = path.resolve(canonical, relativePath);
+  const lexicalStat = fs.lstatSync(lexicalTarget);
+  if (lexicalStat.isSymbolicLink()) throw new Error("不允许写入符号链接");
+
+  const stat = fs.statSync(target);
+  if (!stat.isFile()) throw new Error("目标不是文件");
+  if (stat.size > MAX_FILE_SIZE) throw new Error("文件超过 1 MB，无法保存");
+  const current = fs.readFileSync(target);
+  decodeUtf8Text(current, "保存");
+  if (contentVersion(current) !== expectedVersion) {
+    throw new Error("文件已被其他进程修改，请重新加载后再编辑");
+  }
+
+  fs.writeFileSync(target, encoded, { flag: "w" });
+  const updated = fs.statSync(target);
+  return {
+    path: projectPath(canonical, target),
+    size: updated.size,
+    modifiedAt: updated.mtimeMs,
+    version: contentVersion(encoded),
+  };
 }
 
 export async function projectDiff(root: string): Promise<GitDiffResult> {
