@@ -2,11 +2,12 @@ services:
   agent:
     build: .
     ports:
-      - "${APP_PORT:-8787}:8787"
+      - "${APP_PORT:-7001}:8787"
     volumes:
       - agent-data:/data
       # 挂载你的代码目录,供 Agent 操作
       - ${WORKSPACE_DIR:-./workspace}:/workspace
+      - /home/nolaurence/dev:/codeprojects
     environment:
       - PORT=8787
       # 生产环境仅连接外部 MySQL
@@ -14,6 +15,17 @@ services:
       # 管理员账户(首次启动时创建);其他用户通过注册页面创建,均为普通用户
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?请在 .env 中配置管理员密码}
+    init: true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8787/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
 volumes:

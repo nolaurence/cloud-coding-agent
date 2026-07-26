@@ -11,16 +11,16 @@ const nav = [
 
 export function SettingsLayout() {
   return (
-    <div className="flex h-full">
-      <nav className="w-44 shrink-0 border-r border-zinc-200 p-3 dark:border-zinc-800">
-        <div className="mb-3 px-2 text-xs font-semibold text-zinc-400">设置</div>
+    <div className="flex h-full flex-col sm:flex-row">
+      <nav className="flex w-full shrink-0 gap-1 overflow-x-auto border-b border-zinc-200 p-2 sm:block sm:w-44 sm:border-r sm:border-b-0 sm:p-3 dark:border-zinc-800">
+        <div className="mb-3 hidden px-2 text-xs font-semibold text-zinc-400 sm:block">设置</div>
         {nav.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
+                "flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm",
                 isActive
                   ? "bg-zinc-200 font-medium dark:bg-zinc-800"
                   : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800/60",
@@ -32,7 +32,7 @@ export function SettingsLayout() {
           </NavLink>
         ))}
       </nav>
-      <div className="min-w-0 flex-1 overflow-y-auto p-6">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
         <div className="mx-auto max-w-2xl">
           <Outlet />
         </div>

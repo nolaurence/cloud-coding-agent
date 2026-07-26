@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Bot, FolderGit2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { ModelRef } from "@cca/protocol";
 import { useApp } from "../lib/store";
@@ -11,6 +12,7 @@ export function NewChatPage() {
   const projects = useApp((s) => s.projects);
   const settings = useApp((s) => s.settings);
   const createThread = useApp((s) => s.createThread);
+  const openThread = useApp((s) => s.openThread);
   const sendMessage = useApp((s) => s.sendMessage);
   const navigate = useNavigate();
   const [projectId, setProjectId] = useState<string>("");
@@ -25,29 +27,34 @@ export function NewChatPage() {
     setCreating(true);
     try {
       const thread = await createThread(effectiveProjectId, effectiveModel);
-      await sendMessage(thread.id, text, attachments);
+      await openThread(thread.id);
       navigate(`/thread/${thread.id}`);
+      await sendMessage(thread.id, text, attachments);
     } finally {
       setCreating(false);
     }
   };
 
   return (
-    <div className="flex h-full flex-col items-center justify-center px-6">
-      <div className="w-full max-w-2xl">
-        <h1 className="mb-1 text-center text-2xl font-semibold">Cloud Coding Agent</h1>
-        <p className="mb-6 text-center text-sm text-zinc-500">
-          选择一个项目目录,描述任务,Agent 会在云端完成编码
-        </p>
+    <div className="h-full overflow-y-auto px-4">
+      <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center py-10">
+        <div className="mb-6 text-center">
+          <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
+            <Bot className="h-5 w-5" />
+          </div>
+          <h1 className="text-xl font-semibold">今天要处理什么？</h1>
+        </div>
         {projects.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700">
-            请先在左侧边栏添加一个项目目录
+          <div className="flex items-center justify-center gap-2 py-8 text-sm text-zinc-500">
+            <FolderGit2 className="h-4 w-4" />
+            请先添加项目目录
           </div>
         ) : (
           <>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="mb-3 flex flex-wrap items-center justify-center gap-2">
               <Select
-                className="w-full sm:w-auto"
+                aria-label="选择项目"
+                className="w-full sm:w-44"
                 disabled={creating}
                 value={effectiveProjectId}
                 onChange={(e) => setProjectId(e.target.value)}
@@ -70,9 +77,9 @@ export function NewChatPage() {
             <Composer
               projectId={effectiveProjectId}
               running={creating}
-              onSend={(text, attachments) => void onSend(text, attachments)}
+              onSend={(text, attachments) => onSend(text, attachments)}
               autoFocus
-              placeholder="描述你的编码任务… 输入 @ 引用文件,/ 选择技能"
+              placeholder="输入编码任务"
             />
           </>
         )}

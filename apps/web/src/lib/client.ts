@@ -9,6 +9,7 @@ const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Err
 const handlers = new Set<EventHandler>();
 const reconnectListeners = new Set<() => void>();
 const authFailListeners = new Set<() => void>();
+const connectionListeners = new Set<(connected: boolean) => void>();
 let reconnectDelay = 500;
 let closed = false;
 
@@ -23,6 +24,7 @@ export function connect(token: string) {
 
   socket.onopen = () => {
     reconnectDelay = 500;
+    connectionListeners.forEach((fn) => fn(true));
     reconnectListeners.forEach((fn) => fn());
   };
   socket.onmessage = (ev) => {
@@ -49,6 +51,7 @@ export function connect(token: string) {
   };
   socket.onclose = (ev) => {
     socket = null;
+    connectionListeners.forEach((fn) => fn(false));
     for (const [, entry] of pending) {
       entry.reject(new Error("连接已断开"));
     }
@@ -74,6 +77,7 @@ export function disconnect() {
   currentToken = null;
   socket?.close();
   socket = null;
+  connectionListeners.forEach((fn) => fn(false));
 }
 
 export function onAuthFail(fn: () => void) {
@@ -84,6 +88,11 @@ export function onAuthFail(fn: () => void) {
 export function onReconnect(fn: () => void) {
   reconnectListeners.add(fn);
   return () => reconnectListeners.delete(fn);
+}
+
+export function onConnectionChange(fn: (connected: boolean) => void) {
+  connectionListeners.add(fn);
+  return () => connectionListeners.delete(fn);
 }
 
 export function onEvent(handler: EventHandler) {

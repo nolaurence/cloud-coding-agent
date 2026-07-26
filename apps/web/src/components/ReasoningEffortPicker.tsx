@@ -38,7 +38,7 @@ export function ReasoningEffortPicker({
   return (
     <Select
       aria-label="推理强度"
-      className="h-8 w-32 shrink-0 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+      className="h-8 w-28 shrink-0 text-xs sm:w-32 disabled:cursor-not-allowed disabled:opacity-50"
       disabled={disabled || !model || unsupported}
       value={selected ?? ""}
       onChange={(event) =>

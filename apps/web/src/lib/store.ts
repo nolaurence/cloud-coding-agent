@@ -16,7 +16,15 @@ import type {
   ThreadMeta,
   ToolActivity,
 } from "@cca/protocol";
-import { connect, disconnect, onAuthFail, onEvent, onReconnect, request } from "./client";
+import {
+  connect,
+  disconnect,
+  onAuthFail,
+  onConnectionChange,
+  onEvent,
+  onReconnect,
+  request,
+} from "./client";
 
 const TOKEN_KEY = "cca-token";
 
@@ -104,7 +112,14 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
     case "turn.end":
       return { ...state, running: false };
     case "user.message":
-      return { ...state, messages: [...state.messages, event.message] };
+      return {
+        ...state,
+        messages: state.messages.some((message) => message.id === event.message.id)
+          ? state.messages.map((message) =>
+              message.id === event.message.id ? event.message : message,
+            )
+          : [...state.messages, event.message],
+      };
     case "assistant.delta":
       return { ...state, live: { ...state.live, text: state.live.text + event.delta } };
     case "assistant.reasoning_delta":
@@ -139,7 +154,21 @@ export const useApp = create<AppState>((set, get) => {
   function handleServerMessage(msg: ServerMessage) {
     if (msg.type === "shell") {
       const data = msg.data as ShellState;
-      set({ projects: data.projects, threads: data.threads, runningThreadIds: data.runningThreadIds });
+      set((state) => {
+        const runningIds = new Set(data.runningThreadIds);
+        const threadStates = Object.fromEntries(
+          Object.entries(state.threadStates).map(([threadId, threadState]) => [
+            threadId,
+            { ...threadState, running: runningIds.has(threadId) },
+          ]),
+        );
+        return {
+          projects: data.projects,
+          threads: data.threads,
+          runningThreadIds: data.runningThreadIds,
+          threadStates,
+        };
+      });
     } else if (msg.type === "settings") {
       set({ settings: msg.data });
       void get().refreshModels();
@@ -200,8 +229,8 @@ export const useApp = create<AppState>((set, get) => {
       onAuthFail(() => {
         get().logout();
       });
+      onConnectionChange((connected) => set({ connected }));
       onReconnect(() => {
-        set({ connected: true });
         void request({ type: "shell.subscribe" }).catch(() => {});
         const active = get().activeThreadId;
         if (active) {
@@ -298,11 +327,45 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     sendMessage: async (threadId, text, attachments) => {
-      await request({ type: "turn.start", threadId, text, attachments });
+      set((state) => {
+        const previous = state.threadStates[threadId] ?? emptyThread;
+        return {
+          threadStates: {
+            ...state.threadStates,
+            [threadId]: { ...previous, running: true, error: null },
+          },
+          runningThreadIds: [...new Set([...state.runningThreadIds, threadId])],
+        };
+      });
+      try {
+        await request({ type: "turn.start", threadId, text, attachments });
+      } catch (error) {
+        set((state) => {
+          const previous = state.threadStates[threadId] ?? emptyThread;
+          return {
+            threadStates: {
+              ...state.threadStates,
+              [threadId]: { ...previous, running: false },
+            },
+            runningThreadIds: state.runningThreadIds.filter((id) => id !== threadId),
+          };
+        });
+        throw error;
+      }
     },
 
     interrupt: async (threadId) => {
       await request({ type: "turn.interrupt", threadId });
+      set((state) => {
+        const previous = state.threadStates[threadId] ?? emptyThread;
+        return {
+          threadStates: {
+            ...state.threadStates,
+            [threadId]: { ...previous, running: false },
+          },
+          runningThreadIds: state.runningThreadIds.filter((id) => id !== threadId),
+        };
+      });
     },
 
     updateSettings: async (settings) => {

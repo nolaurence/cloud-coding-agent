@@ -17,6 +17,7 @@ body,
 
 body {
   @apply bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100;
+  overflow: hidden;
   font-family:
     ui-sans-serif,
     system-ui,
@@ -26,6 +27,17 @@ body {
     "PingFang SC",
     "Microsoft YaHei",
     sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+[role="button"] {
+  cursor: pointer;
+}
+
+button:disabled,
+[role="button"][aria-disabled="true"] {
+  cursor: default;
 }
 
 .mono {
@@ -46,6 +58,9 @@ body {
 .markdown-body pre {
   @apply overflow-x-auto rounded-md border border-zinc-200 bg-zinc-50 p-3 text-[13px] leading-relaxed dark:border-zinc-800 dark:bg-zinc-900;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+.markdown-body {
+  min-width: 0;
 }
 .markdown-body code {
   @apply rounded bg-zinc-100 px-1 py-0.5 text-[0.85em] dark:bg-zinc-800;
@@ -81,4 +96,16 @@ body {
 }
 .markdown-body p {
   @apply my-2;
+}
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+.markdown-body hr {
+  @apply my-4 border-zinc-200 dark:border-zinc-800;
+}
+.markdown-body li + li {
+  @apply mt-1;
 }

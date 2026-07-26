@@ -27,8 +27,34 @@ interface ThreadRuntime {
 
 export type ThreadEventSink = (threadId: string, event: ThreadEvent) => void;
 export type ShellChangedSink = () => void;
+export type CopilotClientFactory = () => CopilotClient;
 
 const DETACH_IDLE_MS = 10 * 60 * 1000;
+const MAX_TOOL_RESULT_CHARS = 16_000;
+
+type ToolStartData = Extract<SessionEvent, { type: "tool.execution_start" }>["data"];
+type ToolCompleteData = Extract<SessionEvent, { type: "tool.execution_complete" }>["data"];
+
+function stringifyArguments(args: ToolStartData["arguments"]): string | undefined {
+  if (!args) return undefined;
+  try {
+    return JSON.stringify(args);
+  } catch {
+    return String(args);
+  }
+}
+
+function toolResult(data: ToolCompleteData): string | undefined {
+  const value = data.success
+    ? data.result?.detailedContent ?? data.result?.content
+    : data.error?.message ?? data.result?.detailedContent ?? data.result?.content ?? "工具执行失败";
+  return value ? value.slice(0, MAX_TOOL_RESULT_CHARS) : undefined;
+}
+
+function activityName(data: ToolStartData): string {
+  const toolName = data.mcpToolName ?? data.toolName;
+  return data.mcpServerName ? `${data.mcpServerName}/${toolName}` : toolName;
+}
 
 export class CopilotManager {
   private client: CopilotClient | null = null;
@@ -36,6 +62,14 @@ export class CopilotManager {
   private threads = new Map<string, ThreadRuntime>();
   private sink: ThreadEventSink = () => {};
   private shellChanged: ShellChangedSink = () => {};
+
+  constructor(
+    private readonly createClient: CopilotClientFactory = () =>
+      new CopilotClient({
+        logLevel: "warning",
+        env: { ...process.env, COPILOT_HOME },
+      }),
+  ) {}
 
   onThreadEvent(sink: ThreadEventSink) {
     this.sink = sink;
@@ -48,17 +82,24 @@ export class CopilotManager {
   private async ensureClient(): Promise<CopilotClient> {
     if (this.client) return this.client;
     if (!this.starting) {
-      this.starting = (async () => {
-        const client = new CopilotClient({
-          logLevel: "warning",
-          env: { ...process.env, COPILOT_HOME },
-        });
+      const starting = (async () => {
+        const client = this.createClient();
         await client.start();
         this.client = client;
       })();
+      this.starting = starting;
+      void starting.then(
+        () => {
+          if (this.starting === starting) this.starting = null;
+        },
+        () => {
+          if (this.starting === starting) this.starting = null;
+        },
+      );
     }
     await this.starting;
-    return this.client!;
+    if (!this.client) throw new Error("Copilot 客户端启动失败");
+    return this.client;
   }
 
   private runtime(threadId: string): ThreadRuntime {
@@ -107,7 +148,7 @@ export class CopilotManager {
           command: server.command,
           args: server.args ?? [],
           env: server.env,
-          cwd: server.cwd,
+          workingDirectory: server.cwd,
           tools: server.tools.length > 0 ? server.tools : ["*"],
           timeout: server.timeout,
         };
@@ -116,11 +157,13 @@ export class CopilotManager {
 
     const skills = enabledSkillDirectories();
     const project = store.projects.find((p) => p.id === thread.projectId);
+    if (!project) throw new Error("会话关联的项目不存在");
 
     const config: Record<string, unknown> = {
       sessionId: thread.id,
       streaming: true,
-      workingDirectory: project?.path,
+      includeSubAgentStreamingEvents: false,
+      workingDirectory: project.path,
       onPermissionRequest: approveAll,
       mcpServers,
     };
@@ -136,9 +179,14 @@ export class CopilotManager {
       if (providerConfig) {
         config.provider = {
           type: providerConfig.type,
-          baseUrl: providerConfig.baseUrl,
-          apiKey: providerConfig.apiKey,
-          wireApi: providerConfig.wireApi ?? "completions",
+          baseUrl: providerConfig.baseUrl.trim(),
+          apiKey: providerConfig.apiKey?.trim() || undefined,
+          ...(providerConfig.type !== "anthropic"
+            ? { wireApi: providerConfig.wireApi ?? "completions" }
+            : {}),
+          ...(providerConfig.type === "openai"
+            ? { headers: { "User-Agent": "cloud-coding-agent/0.1" } }
+            : {}),
           ...(providerConfig.type === "azure"
             ? { azure: { apiVersion: providerConfig.azureApiVersion ?? "2024-10-21" } }
             : {}),
@@ -158,24 +206,50 @@ export class CopilotManager {
     });
   }
 
+  private finishTurn(rt: ThreadRuntime) {
+    if (!rt.running) return;
+    const turnId = rt.currentTurnId ?? "";
+    rt.running = false;
+    rt.currentTurnId = null;
+    this.emit(rt.threadId, { kind: "turn.end", turnId });
+    this.shellChanged();
+  }
+
+  private failRunningTools(rt: ThreadRuntime, message: string, endedAt: number) {
+    for (const activity of rt.activities) {
+      if (activity.status !== "running") continue;
+      activity.status = "error";
+      activity.result = message;
+      activity.endedAt = endedAt;
+      this.emit(rt.threadId, { kind: "tool.complete", activity });
+    }
+  }
+
   private handleSessionEvent(rt: ThreadRuntime, event: SessionEvent) {
     const threadId = rt.threadId;
-    const ts = Date.now();
+    const ts = Date.parse(event.timestamp) || Date.now();
     switch (event.type) {
       case "assistant.turn_start": {
-        const turnId = (event.data as { turnId: string }).turnId;
+        if (event.agentId) break;
+        const turnId = rt.currentTurnId ?? event.data.turnId;
         rt.currentTurnId = turnId;
-        this.emit(threadId, { kind: "turn.start", turnId });
+        if (!rt.running) {
+          rt.running = true;
+          this.emit(threadId, { kind: "turn.start", turnId });
+          this.shellChanged();
+        }
         break;
       }
       case "assistant.turn_end": {
-        const turnId = (event.data as { turnId: string }).turnId;
-        this.emit(threadId, { kind: "turn.end", turnId });
+        // A single user request can contain several assistant turns separated by tools.
+        // session.idle is the authoritative end of the complete request.
         break;
       }
       case "user.message": {
-        const data = event.data as { content: string };
+        if (event.agentId) break;
+        const data = event.data;
         const turnId = rt.currentTurnId ?? `turn-${randomUUID()}`;
+        rt.currentTurnId = turnId;
         const message: ChatMessage = {
           id: event.id,
           role: "user",
@@ -196,7 +270,8 @@ export class CopilotManager {
         break;
       }
       case "assistant.message_delta": {
-        const data = event.data as { messageId: string; deltaContent: string };
+        if (event.agentId) break;
+        const data = event.data;
         this.emit(threadId, {
           kind: "assistant.delta",
           messageId: data.messageId,
@@ -206,7 +281,8 @@ export class CopilotManager {
         break;
       }
       case "assistant.reasoning_delta": {
-        const data = event.data as { reasoningId: string; deltaContent: string };
+        if (event.agentId) break;
+        const data = event.data;
         this.emit(threadId, {
           kind: "assistant.reasoning_delta",
           messageId: data.reasoningId,
@@ -216,73 +292,79 @@ export class CopilotManager {
         break;
       }
       case "assistant.message": {
-        const data = event.data as { content: string; reasoningText?: string };
+        if (event.agentId) break;
+        const data = event.data;
+        if (!data.content && !data.reasoningText) break;
         const message: ChatMessage = {
-          id: event.id,
+          id: data.messageId,
           role: "assistant",
           text: data.content,
           reasoning: data.reasoningText,
-          turnId: rt.currentTurnId ?? "",
+          turnId: rt.currentTurnId ?? data.turnId ?? "",
           createdAt: ts,
         };
-        rt.messages.push(message);
+        const index = rt.messages.findIndex((candidate) => candidate.id === message.id);
+        if (index >= 0) rt.messages[index] = message;
+        else rt.messages.push(message);
         this.emit(threadId, { kind: "assistant.message", message });
         break;
       }
       case "tool.execution_start": {
-        const data = event.data as {
-          toolCallId: string;
-          toolName: string;
-          arguments?: Record<string, unknown>;
-          mcpServerName?: string;
-        };
+        const data = event.data;
         const activity: ToolActivity = {
           id: data.toolCallId,
           turnId: rt.currentTurnId ?? "",
-          toolName: data.mcpServerName ? `${data.mcpServerName}/${data.toolName}` : data.toolName,
+          toolName: activityName(data),
           status: "running",
-          args: data.arguments ? JSON.stringify(data.arguments) : undefined,
+          args: stringifyArguments(data.arguments),
           startedAt: ts,
         };
-        rt.activities.push(activity);
+        const index = rt.activities.findIndex((candidate) => candidate.id === activity.id);
+        if (index >= 0) rt.activities[index] = activity;
+        else rt.activities.push(activity);
         this.emit(threadId, { kind: "tool.start", activity });
         break;
       }
       case "tool.execution_complete": {
-        const data = event.data as {
-          toolCallId: string;
-          success: boolean;
-          result?: { content: string; detailedContent?: string };
-          error?: { message: string };
-        };
+        const data = event.data;
         const existing = rt.activities.find((a) => a.id === data.toolCallId);
         const activity: ToolActivity = existing ?? {
           id: data.toolCallId,
           turnId: rt.currentTurnId ?? "",
-          toolName: "tool",
+          toolName: data.toolDescription?.name ?? "tool",
           status: "running",
           startedAt: ts,
         };
         activity.status = data.success ? "complete" : "error";
-        activity.result = data.success
-          ? (data.result?.detailedContent ?? data.result?.content ?? "").slice(0, 4000)
-          : (data.error?.message ?? "工具执行失败");
+        activity.result = toolResult(data);
         activity.endedAt = ts;
         if (!existing) rt.activities.push(activity);
         this.emit(threadId, { kind: "tool.complete", activity });
         break;
       }
       case "session.idle": {
-        rt.running = false;
-        this.emit(threadId, { kind: "turn.end", turnId: rt.currentTurnId ?? "" });
-        this.shellChanged();
+        if (event.agentId) break;
+        this.failRunningTools(rt, event.data.aborted ? "工具执行已中止" : "工具执行未正常结束", ts);
+        this.finishTurn(rt);
         break;
       }
       case "session.error": {
-        const data = event.data as { message: string };
-        rt.running = false;
-        this.emit(threadId, { kind: "error", message: data.message });
-        this.shellChanged();
+        if (event.agentId) break;
+        this.failRunningTools(rt, event.data.message, ts);
+        this.emit(threadId, { kind: "error", message: event.data.message });
+        this.finishTurn(rt);
+        break;
+      }
+      case "abort": {
+        if (event.agentId) break;
+        this.failRunningTools(rt, "工具执行已中止", ts);
+        this.finishTurn(rt);
+        break;
+      }
+      case "session.shutdown": {
+        if (event.agentId) break;
+        this.failRunningTools(rt, "会话已断开", ts);
+        this.finishTurn(rt);
         break;
       }
       default:
@@ -295,10 +377,10 @@ export class CopilotManager {
     if (rt.session) return rt.session;
     if (rt.attaching) return rt.attaching;
 
-    rt.attaching = (async () => {
+    const attaching = (async () => {
       const client = await this.ensureClient();
       const thread = store.getThread(threadId);
-      if (!thread) throw new Error(`Thread ${threadId} not found`);
+      if (!thread) throw new Error("会话不存在");
       const settings = store.settings;
       const config = this.buildSessionConfig(thread, settings);
 
@@ -315,29 +397,37 @@ export class CopilotManager {
       }
 
       rt.session = session;
-      rt.attaching = null;
       this.attachEventHandlers(rt, session);
       if (rt.messages.length === 0) {
         await this.rebuildHistory(rt, session);
       }
       return session;
     })();
+    rt.attaching = attaching;
 
-    return rt.attaching;
+    try {
+      return await attaching;
+    } finally {
+      if (rt.attaching === attaching) rt.attaching = null;
+    }
   }
 
   private async rebuildHistory(rt: ThreadRuntime, session: CopilotSession) {
     try {
       const events = await session.getEvents();
       let turnId = "";
+      let lastTimestamp = Date.now();
       for (const event of events) {
         const ts = Date.parse(event.timestamp) || Date.now();
+        lastTimestamp = ts;
         switch (event.type) {
           case "assistant.turn_start":
-            turnId = (event.data as { turnId: string }).turnId;
+            if (!event.agentId && !turnId) turnId = event.data.turnId;
             break;
           case "user.message": {
-            const data = event.data as { content: string };
+            if (event.agentId) break;
+            const data = event.data;
+            turnId = `turn-${randomUUID()}`;
             rt.messages.push({
               id: event.id,
               role: "user",
@@ -348,9 +438,11 @@ export class CopilotManager {
             break;
           }
           case "assistant.message": {
-            const data = event.data as { content: string; reasoningText?: string };
+            if (event.agentId) break;
+            const data = event.data;
+            if (!data.content && !data.reasoningText) break;
             rt.messages.push({
-              id: event.id,
+              id: data.messageId,
               role: "assistant",
               text: data.content,
               reasoning: data.reasoningText,
@@ -360,39 +452,44 @@ export class CopilotManager {
             break;
           }
           case "tool.execution_start": {
-            const data = event.data as {
-              toolCallId: string;
-              toolName: string;
-              arguments?: Record<string, unknown>;
-            };
+            const data = event.data;
             rt.activities.push({
               id: data.toolCallId,
               turnId,
-              toolName: data.toolName,
+              toolName: activityName(data),
               status: "running",
-              args: data.arguments ? JSON.stringify(data.arguments) : undefined,
+              args: stringifyArguments(data.arguments),
               startedAt: ts,
             });
             break;
           }
           case "tool.execution_complete": {
-            const data = event.data as {
-              toolCallId: string;
-              success: boolean;
-              result?: { content: string; detailedContent?: string };
-            };
+            const data = event.data;
             const existing = rt.activities.find((a) => a.id === data.toolCallId);
-            if (existing) {
-              existing.status = data.success ? "complete" : "error";
-              existing.result = (data.result?.detailedContent ?? data.result?.content ?? "").slice(0, 4000);
-              existing.endedAt = ts;
-            }
+            const activity: ToolActivity = existing ?? {
+              id: data.toolCallId,
+              turnId,
+              toolName: data.toolDescription?.name ?? "tool",
+              status: "running",
+              startedAt: ts,
+            };
+            activity.status = data.success ? "complete" : "error";
+            activity.result = toolResult(data);
+            activity.endedAt = ts;
+            if (!existing) rt.activities.push(activity);
             break;
           }
           default:
             break;
         }
       }
+      for (const activity of rt.activities) {
+        if (activity.status !== "running") continue;
+        activity.status = "error";
+        activity.result = "工具执行被中断";
+        activity.endedAt = lastTimestamp;
+      }
+      rt.currentTurnId = null;
     } catch (err) {
       console.error("rebuild history failed", err);
     }
@@ -405,7 +502,13 @@ export class CopilotManager {
       clearTimeout(rt.detachTimer);
       rt.detachTimer = null;
     }
-    await this.attach(threadId);
+    try {
+      await this.attach(threadId);
+    } catch (error) {
+      rt.subscribers = Math.max(0, rt.subscribers - 1);
+      if (rt.subscribers === 0 && !rt.session) this.threads.delete(threadId);
+      throw error;
+    }
     return {
       kind: "snapshot",
       messages: rt.messages,
@@ -442,29 +545,45 @@ export class CopilotManager {
     attachments?: { path: string; displayName?: string }[],
   ): Promise<void> {
     const rt = this.runtime(threadId);
-    const session = await this.attach(threadId);
+    if (rt.running) throw new Error("当前任务仍在运行,请等待完成或先停止任务");
+
+    const turnId = `turn-${randomUUID()}`;
     rt.running = true;
+    rt.currentTurnId = turnId;
+    this.emit(threadId, { kind: "turn.start", turnId });
     this.shellChanged();
-    const thread = store.getThread(threadId);
-    if (thread) {
-      store.upsertThread({ ...thread, updatedAt: Date.now() });
+    try {
+      const session = await this.attach(threadId);
+      await session.send({
+        prompt: text,
+        attachments: attachments?.map((a) => ({
+          type: "file" as const,
+          path: a.path,
+          displayName: a.displayName,
+        })),
+      });
+      const thread = store.getThread(threadId);
+      if (thread) store.upsertThread({ ...thread, updatedAt: Date.now() });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (rt.running) {
+        this.emit(threadId, { kind: "error", message });
+        this.finishTurn(rt);
+      }
+      throw error;
     }
-    await session.send({
-      prompt: text,
-      attachments: attachments?.map((a) => ({
-        type: "file" as const,
-        path: a.path,
-        displayName: a.displayName,
-      })),
-    });
   }
 
   async interrupt(threadId: string): Promise<void> {
     const rt = this.threads.get(threadId);
-    if (!rt?.session) return;
-    await rt.session.abort();
-    rt.running = false;
-    this.shellChanged();
+    if (!rt?.running) return;
+    try {
+      const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
+      await session?.abort();
+    } finally {
+      this.failRunningTools(rt, "工具执行已中止", Date.now());
+      this.finishTurn(rt);
+    }
   }
 
   async setThreadModel(
@@ -537,8 +656,19 @@ export class CopilotManager {
   }
 
   async reconfigureOpenSessions() {
+    if ([...this.threads.values()].some((rt) => rt.running)) {
+      throw new Error("当前仍有任务运行,请停止或等待完成后再修改模型、MCP 或技能配置");
+    }
     for (const rt of this.threads.values()) {
-      await this.detach(rt.threadId);
+      const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
+      rt.session = null;
+      rt.attaching = null;
+      if (!session) continue;
+      try {
+        await session.disconnect();
+      } catch (error) {
+        console.error(`reconfigure session ${rt.threadId} failed`, error);
+      }
     }
   }
 

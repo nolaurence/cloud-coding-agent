@@ -108,7 +108,7 @@ export function Dialog({
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div
         className={cn(
-          "relative max-h-[85vh] w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900",
+          "relative mx-4 max-h-[85vh] w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white p-4 shadow-xl sm:p-5 dark:border-zinc-800 dark:bg-zinc-900",
           wide ? "max-w-3xl" : "max-w-lg",
         )}
       >

@@ -57,7 +57,7 @@ export function ModelPicker({
         onClick={() => setOpen((v) => !v)}
       >
         <Cpu className="h-3.5 w-3.5 text-zinc-500" />
-        <span className="max-w-56 truncate">{currentLabel}</span>
+        <span className="max-w-24 truncate sm:max-w-56">{currentLabel}</span>
         <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />
       </button>
       {open && (

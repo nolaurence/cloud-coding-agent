@@ -166,6 +166,9 @@ export class Hub {
           break;
         }
         case "thread.create": {
+          if (!store.projects.some((project) => project.id === msg.projectId)) {
+            throw new Error("项目不存在");
+          }
           const thread: ThreadMeta = {
             id: randomUUID(),
             projectId: msg.projectId,
@@ -211,6 +214,10 @@ export class Hub {
         }
         case "thread.subscribe": {
           if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权访问该会话");
+          if (conn.threadSubs.has(msg.threadId)) {
+            this.reply(conn, msg.id);
+            break;
+          }
           const snapshot = await this.manager.subscribe(msg.threadId);
           conn.threadSubs.add(msg.threadId);
           this.send(conn, { type: "thread.event", threadId: msg.threadId, event: snapshot });
@@ -218,16 +225,15 @@ export class Hub {
           break;
         }
         case "thread.unsubscribe": {
-          conn.threadSubs.delete(msg.threadId);
-          this.manager.unsubscribe(msg.threadId);
+          if (conn.threadSubs.delete(msg.threadId)) this.manager.unsubscribe(msg.threadId);
           this.reply(conn, msg.id);
           break;
         }
         case "turn.start": {
           if (!this.canAccess(conn, store.getThread(msg.threadId))) throw new Error("无权操作该会话");
-          this.reply(conn, msg.id);
           await this.manager.sendMessage(msg.threadId, msg.text, msg.attachments);
           this.broadcastShell();
+          this.reply(conn, msg.id);
           break;
         }
         case "turn.interrupt": {
@@ -242,7 +248,6 @@ export class Hub {
         }
         case "settings.update": {
           const prev = store.settings;
-          store.saveSettings(msg.settings);
           const providerChanged =
             JSON.stringify(prev.providers) !== JSON.stringify(msg.settings.providers) ||
             JSON.stringify(prev.mcpServers) !== JSON.stringify(msg.settings.mcpServers) ||
@@ -251,6 +256,7 @@ export class Hub {
           if (providerChanged) {
             await this.manager.reconfigureOpenSessions();
           }
+          store.saveSettings(msg.settings);
           this.broadcastSettings();
           this.broadcastSkills();
           this.reply(conn, msg.id);

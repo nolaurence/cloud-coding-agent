@@ -55,10 +55,10 @@ compose 会同时拉起 `mysql:8.4`(`db` 服务,`mysql-data` volume 持久化,�
 cp .env.prod.example .env
 # 配置 .env 中的 DATABASE_URL 和管理员密码
 docker compose -f docker-compose-prod.yml up -d --build
-# 默认打开 http://localhost:8787
+# 默认打开 http://localhost:7001
 ```
 
-生产 Compose 只启动 `agent`,不会拉起 MySQL。可用 `APP_PORT` 修改宿主机端口,用 `WORKSPACE_DIR` 修改代码目录;容器内服务固定监听 `8787`。`.env` 已被 git 忽略。
+生产 Compose 只启动 `agent`,不会拉起 MySQL。默认使用宿主机端口 `7001`;可用 `APP_PORT` 修改宿主机端口,用 `WORKSPACE_DIR` 修改挂载到 `/workspace` 的代码目录;容器内服务固定监听 `8787`。当前 Compose 还将宿主机 `/home/nolaurence/dev` 挂载到容器 `/codeprojects`,因此本项目在界面中应添加为 `/codeprojects/cloud-coding-agent`。`.env` 已被 git 忽略。
 外部 MySQL 用户需要目标数据库的 `CREATE`/`SELECT`/`INSERT`/`UPDATE`/`DELETE` 权限;`DATABASE_URL` 密码中的 URL 保留字符需要百分号编码。
 
 ## 使用

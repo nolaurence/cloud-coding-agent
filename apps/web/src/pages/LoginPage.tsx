@@ -36,16 +36,21 @@ export function LoginPage() {
   };
 
   return (
-    <div className="flex h-full items-center justify-center bg-zinc-50 dark:bg-zinc-950">
-      <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="mb-6 flex flex-col items-center gap-2">
-          <Bot className="h-10 w-10 text-blue-500" />
-          <h1 className="text-lg font-semibold">Cloud Coding Agent</h1>
-          <p className="text-xs text-zinc-500">{mode === "login" ? "登录你的账户" : "注册新账户"}</p>
+    <div className="flex h-full items-center justify-center bg-white px-6 dark:bg-zinc-950">
+      <div className="w-full max-w-sm py-10">
+        <div className="mb-7 flex flex-col items-center gap-2">
+          <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
+            <Bot className="h-5 w-5" />
+          </div>
+          <h1 className="text-lg font-semibold">云端编码助手</h1>
+          <p className="text-xs text-zinc-500">
+            {mode === "login" ? "登录以继续" : "创建新账户"}
+          </p>
         </div>
         <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
           <Input
             autoFocus
+            aria-label="用户名"
             placeholder="用户名"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
@@ -53,6 +58,7 @@ export function LoginPage() {
           />
           <Input
             type="password"
+            aria-label="密码"
             placeholder="密码"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -61,25 +67,44 @@ export function LoginPage() {
           {mode === "register" && (
             <Input
               type="password"
+              aria-label="确认密码"
               placeholder="确认密码"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               autoComplete="new-password"
             />
           )}
-          {error && <div className="text-xs text-red-500">{error}</div>}
+          {error && (
+            <div className="text-xs text-red-500" role="alert">
+              {error}
+            </div>
+          )}
           <Button type="submit" disabled={busy || !username.trim() || !password} className="mt-1 w-full">
             {busy ? "请稍候…" : mode === "login" ? "登录" : "注册并登录"}
           </Button>
         </form>
         <div className="mt-4 text-center text-xs text-zinc-500">
           {mode === "login" ? (
-            <button className="text-blue-500 hover:underline" onClick={() => { setMode("register"); setError(""); }}>
-              没有账户?注册
+            <button
+              type="button"
+              className="text-zinc-700 hover:underline dark:text-zinc-300"
+              onClick={() => {
+                setMode("register");
+                setError("");
+              }}
+            >
+              没有账户？注册
             </button>
           ) : (
-            <button className="text-blue-500 hover:underline" onClick={() => { setMode("login"); setError(""); }}>
-              已有账户?登录
+            <button
+              type="button"
+              className="text-zinc-700 hover:underline dark:text-zinc-300"
+              onClick={() => {
+                setMode("login");
+                setError("");
+              }}
+            >
+              已有账户？登录
             </button>
           )}
         </div>
