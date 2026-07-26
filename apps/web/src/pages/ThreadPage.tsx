@@ -89,7 +89,7 @@ export function ThreadPage() {
         </header>
         <div className="relative min-h-0 flex-1">
           <ChatView threadId={threadId} bottomInset={composerHeight} />
-          <div ref={composerOverlayRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-2">
+          <div ref={composerOverlayRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-white pt-2 dark:bg-zinc-950">
             <div className="mx-auto max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
               <div className="pointer-events-auto">
                 <Composer
