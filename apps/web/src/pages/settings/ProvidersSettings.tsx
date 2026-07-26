@@ -32,7 +32,11 @@ export function ProvidersSettings() {
 
   const openEdit = (p?: ModelProviderConfig) => {
     const target = p ?? emptyProvider();
-    setEditing({ ...target, id: target.id || `p-${Date.now()}` });
+    setEditing({
+      ...target,
+      id: target.id || `p-${Date.now()}`,
+      models: target.models.map((model) => ({ ...model })),
+    });
     setModelsText(target.models.map((m) => (m.name ? `${m.id} | ${m.name}` : m.id)).join("\n"));
     setError("");
     setNotice("");
@@ -56,6 +60,9 @@ export function ProvidersSettings() {
         azureApiVersion: editing.azureApiVersion,
       });
       setModelsText(models.map((m) => (m.name ? `${m.id} | ${m.name}` : m.id)).join("\n"));
+      setEditing((current) =>
+        current?.id === editing.id ? { ...current, models } : current,
+      );
       setNotice(`已获取 ${models.length} 个模型`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "获取模型失败");
@@ -76,7 +83,8 @@ export function ProvidersSettings() {
       .filter(Boolean)
       .map((line) => {
         const [id, name] = line.split("|").map((s) => s.trim());
-        return { id: id!, name: name || undefined };
+        const existing = editing.models.find((model) => model.id === id);
+        return { ...existing, id: id!, name: name || undefined };
       });
     if (models.length === 0) {
       setError("至少填写一个模型");

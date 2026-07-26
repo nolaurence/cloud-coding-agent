@@ -1,16 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  ArrowUp,
   AtSign,
   FileText,
-  FolderGit2,
   Loader2,
-  Send,
   Sparkles,
   Square,
 } from "lucide-react";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
-import { Button } from "./ui/primitives";
 
 interface Trigger {
   kind: "file" | "skill";
@@ -24,6 +22,9 @@ interface CompletionItem {
   hint?: string;
   kind: "file" | "skill";
 }
+
+const actionButtonClass =
+  "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-white transition-[background-color,color,transform] hover:bg-zinc-800 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:bg-zinc-200 disabled:text-zinc-400 max-[359px]:ml-auto dark:bg-white dark:text-black dark:hover:bg-zinc-200 dark:focus-visible:ring-offset-zinc-900 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-400";
 
 function detectTrigger(text: string, caret: number): Trigger | null {
   const before = text.slice(0, caret);
@@ -47,6 +48,8 @@ export function Composer({
   onInterrupt,
   autoFocus,
   placeholder,
+  footerControls,
+  footerError,
 }: {
   threadId?: string;
   projectId?: string;
@@ -58,6 +61,8 @@ export function Composer({
   onInterrupt?: () => void | Promise<void>;
   autoFocus?: boolean;
   placeholder?: string;
+  footerControls?: ReactNode;
+  footerError?: string;
 }) {
   const skills = useApp((state) => state.skills);
   const projects = useApp((state) => state.projects);
@@ -277,7 +282,7 @@ export function Composer({
   };
 
   return (
-    <div className="relative">
+    <div className="relative" data-thread-id={threadId}>
       {popupVisible && (
         <div className="absolute bottom-full left-0 z-50 mb-2 max-h-72 w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
           <div className="flex items-center gap-2 px-2 py-1.5 text-[11px] font-medium text-zinc-500">
@@ -329,7 +334,7 @@ export function Composer({
         </div>
       )}
 
-      <div className="overflow-hidden rounded-xl border border-zinc-300 bg-white shadow-sm transition-colors focus-within:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:focus-within:border-zinc-500">
+      <div className="rounded-2xl border border-zinc-300 bg-white shadow-[0_12px_32px_-20px_rgba(0,0,0,0.28),0_3px_10px_-7px_rgba(0,0,0,0.2)] transition-colors focus-within:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-[0_12px_32px_-20px_rgba(0,0,0,0.65),0_3px_10px_-7px_rgba(0,0,0,0.4)] dark:focus-within:border-zinc-500">
         <textarea
           ref={textareaRef}
           autoFocus={autoFocus}
@@ -356,9 +361,17 @@ export function Composer({
             {submitError}
           </div>
         )}
+        {footerError && (
+          <div className="px-4 pb-2 text-xs text-red-600 dark:text-red-400" role="alert">
+            {footerError}
+          </div>
+        )}
 
-        <div className="flex min-h-11 items-center justify-between gap-2 px-2.5 pb-2.5">
-          <div className="flex min-w-0 items-center gap-1">
+        <div className="flex min-h-11 flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2.5 pb-2.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-visible max-[359px]:basis-full">
+            {footerControls && (
+              <div className="flex min-w-0 items-center gap-1">{footerControls}</div>
+            )}
             <button
               type="button"
               aria-label="引用文件"
@@ -377,49 +390,40 @@ export function Composer({
             >
               <Sparkles className="h-4 w-4" />
             </button>
-            {project && (
-              <span className="ml-1 hidden min-w-0 items-center gap-1.5 text-xs text-zinc-400 sm:flex" title={project.path}>
-                <FolderGit2 className="h-3.5 w-3.5 shrink-0" />
-                <span className="max-w-48 truncate">{project.name}</span>
-              </span>
-            )}
-            {threadId && running && (
-              <span className="ml-1 hidden text-xs text-zinc-400 sm:inline">任务运行中</span>
-            )}
           </div>
 
           {running && onInterrupt ? (
-            <Button
+            <button
               type="button"
-              size="icon"
               aria-label="停止任务"
               title="停止任务"
-              className="h-9 w-9 shrink-0 rounded-full"
+              className={actionButtonClass}
               onClick={() => void stop()}
               disabled={interrupting}
+              aria-busy={interrupting}
             >
               {interrupting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Square className="h-3.5 w-3.5 fill-current" />
               )}
-            </Button>
+            </button>
           ) : (
-            <Button
+            <button
               type="button"
-              size="icon"
               aria-label="发送消息"
               title="发送消息"
-              className="h-9 w-9 shrink-0 rounded-full"
+              className={actionButtonClass}
               onClick={() => void submit()}
               disabled={!text.trim() || busy}
+              aria-busy={submitting}
             >
               {submitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Send className="h-4 w-4" />
+                <ArrowUp className="h-5 w-5 stroke-[2.5]" />
               )}
-            </Button>
+            </button>
           )}
         </div>
       </div>

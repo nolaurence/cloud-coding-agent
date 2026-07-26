@@ -2,9 +2,12 @@ import fs from "node:fs";
 import {
   AppSettings,
   DEFAULT_SETTINGS,
+  flattenModels,
+  normalizeModelRefReasoning,
   Project,
   ThreadMeta,
 } from "@cca/protocol";
+import type { ModelOption } from "@cca/protocol";
 import { PROJECTS_FILE, SETTINGS_FILE, THREADS_FILE } from "./env.js";
 import { enqueueWrite, query, transaction, usingMysql } from "./db.js";
 
@@ -52,6 +55,34 @@ class Store {
       this.projects = readJson<Project[]>(PROJECTS_FILE, []);
       this.threads = readJson<ThreadMeta[]>(THREADS_FILE, []);
     }
+    this.normalizeStoredReasoningEfforts();
+  }
+
+  normalizeStoredReasoningEfforts(
+    modelOptions: readonly ModelOption[] = flattenModels(this.settings),
+  ): boolean {
+    let changed = false;
+    const defaultModel = this.settings.defaultModel
+      ? normalizeModelRefReasoning(this.settings.defaultModel, modelOptions)
+      : undefined;
+    if (defaultModel !== this.settings.defaultModel) {
+      changed = true;
+      this.settings = { ...this.settings, defaultModel };
+      this.saveSettings(this.settings);
+    }
+
+    const changedThreads: ThreadMeta[] = [];
+    this.threads = this.threads.map((thread) => {
+      if (!thread.model) return thread;
+      const model = normalizeModelRefReasoning(thread.model, modelOptions);
+      if (model === thread.model) return thread;
+      changed = true;
+      const normalized = { ...thread, model };
+      changedThreads.push(normalized);
+      return normalized;
+    });
+    for (const thread of changedThreads) this.upsertThread(thread);
+    return changed;
   }
 
   private async initFromMysql() {

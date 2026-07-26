@@ -6,8 +6,15 @@ import { useApp } from "../lib/store";
 
 export function AppLayout() {
   const connected = useApp((s) => s.connected);
+  const threads = useApp((s) => s.threads);
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const threadPathMatch = location.pathname.match(/^\/thread\/([^/]+)$/);
+  const routeThreadId = threadPathMatch?.[1]
+    ? decodeURIComponent(threadPathMatch[1])
+    : undefined;
+  const mobileTitle =
+    threads.find((thread) => thread.id === routeThreadId)?.title ?? "云端编码助手";
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -49,7 +56,7 @@ export function AppLayout() {
           </button>
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Bot className="h-4 w-4 shrink-0" />
-            <span className="truncate text-sm font-medium">云端编码助手</span>
+            <span className="truncate text-sm font-medium">{mobileTitle}</span>
           </div>
           {!connected && (
             <span

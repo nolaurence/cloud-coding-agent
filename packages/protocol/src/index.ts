@@ -1,12 +1,44 @@
 export type WireApi = "completions" | "responses";
 export type ProviderType = "openai" | "azure" | "anthropic";
-export const REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+export const REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === "string" && REASONING_EFFORTS.includes(value as ReasoningEffort);
+}
+
+export function normalizeReasoningEfforts(
+  values: readonly unknown[] | undefined,
+): ReasoningEffort[] | undefined {
+  if (!values) return undefined;
+  return [...new Set(values.filter(isReasoningEffort))];
+}
+
+const LEGACY_REASONING_EFFORTS: readonly ReasoningEffort[] = ["low", "medium", "high", "xhigh"];
+
+// Existing provider configs may only contain IDs; discovered/runtime metadata still takes precedence.
+const KNOWN_MODEL_REASONING_EFFORTS: Readonly<Record<string, readonly ReasoningEffort[]>> = {
+  "gpt-5.4": ["none", "low", "medium", "high", "xhigh"],
+  "gpt-5.5": ["none", "low", "medium", "high", "xhigh"],
+  "gpt-5.6-sol": ["none", "low", "medium", "high", "xhigh", "max"],
+  "gpt-5.6-luna": ["none", "low", "medium", "high", "xhigh", "max"],
+  "gpt-5.6-terra": ["none", "low", "medium", "high", "xhigh", "max"],
+};
 
 export interface ModelEntry {
   id: string;
   name?: string;
   reasoningEffort?: boolean;
+  supportedReasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
 }
 
 export interface ModelProviderConfig {
@@ -130,7 +162,13 @@ export interface ToolActivity {
 }
 
 export type ThreadEvent =
-  | { kind: "snapshot"; messages: ChatMessage[]; activities: ToolActivity[]; running: boolean }
+  | {
+      kind: "snapshot";
+      messages: ChatMessage[];
+      activities: ToolActivity[];
+      running: boolean;
+      live?: { text: string; reasoning: string; turnId: string; startedAt: number };
+    }
   | { kind: "turn.start"; turnId: string }
   | { kind: "turn.end"; turnId: string }
   | { kind: "user.message"; message: ChatMessage }
@@ -179,21 +217,70 @@ export const DEFAULT_SETTINGS: AppSettings = {
   disabledSkills: [],
 };
 
-export function flattenModels(settings: AppSettings): ModelOption[] {
+export function flattenModels(
+  settings: AppSettings,
+  capabilityModels: readonly ModelOption[] = [],
+): ModelOption[] {
+  const capabilitiesByModelId = new Map<string, ModelOption>();
+  for (const model of capabilityModels) {
+    if (model.supportedReasoningEfforts === undefined) continue;
+    capabilitiesByModelId.set(model.ref.modelId, model);
+  }
+
   const out: ModelOption[] = [];
   for (const p of settings.providers) {
     for (const m of p.models) {
+      const catalogCapabilities = capabilitiesByModelId.get(m.id);
+      const configuredEfforts = normalizeReasoningEfforts(m.supportedReasoningEfforts);
+      const knownEfforts = KNOWN_MODEL_REASONING_EFFORTS[m.id.toLowerCase()];
+      const supportedReasoningEfforts =
+        configuredEfforts ??
+        (m.reasoningEffort === false
+          ? []
+          : catalogCapabilities?.supportedReasoningEfforts ??
+            (knownEfforts
+              ? [...knownEfforts]
+              : m.reasoningEffort === true
+                ? [...LEGACY_REASONING_EFFORTS]
+                : undefined));
+      const defaultReasoningEffort =
+        m.defaultReasoningEffort ?? catalogCapabilities?.defaultReasoningEffort;
+
       out.push({
         ref: { providerId: p.id, modelId: m.id },
         label: `${p.name} / ${m.name ?? m.id}`,
-        supportedReasoningEfforts:
-          m.reasoningEffort === false
-            ? []
-            : m.reasoningEffort === true
-              ? [...REASONING_EFFORTS]
-              : undefined,
+        supportedReasoningEfforts,
+        defaultReasoningEffort:
+          defaultReasoningEffort && supportedReasoningEfforts?.includes(defaultReasoningEffort)
+            ? defaultReasoningEffort
+            : undefined,
       });
     }
   }
   return out;
+}
+
+export function normalizeModelRefReasoning(
+  model: ModelRef,
+  modelOptions: readonly ModelOption[],
+): ModelRef {
+  if (!model.reasoningEffort) return model;
+  const option = modelOptions.find(
+    (candidate) =>
+      candidate.ref.providerId === model.providerId && candidate.ref.modelId === model.modelId,
+  );
+  if (
+    !option ||
+    option.supportedReasoningEfforts === undefined ||
+    option.supportedReasoningEfforts.includes(model.reasoningEffort)
+  ) {
+    return model;
+  }
+
+  const { reasoningEffort: _reasoningEffort, ...normalized } = model;
+  return normalized;
+}
+
+export function normalizeConfiguredModelRef(settings: AppSettings, model: ModelRef): ModelRef {
+  return normalizeModelRefReasoning(model, flattenModels(settings));
 }

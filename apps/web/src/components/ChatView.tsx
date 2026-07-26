@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   Bot,
-  Brain,
   Check,
+  ChevronDown,
   ChevronRight,
   Copy,
   Loader2,
@@ -11,41 +11,66 @@ import {
 } from "lucide-react";
 import type { ChatMessage, ToolActivity } from "@cca/protocol";
 import { useApp, useThreadState } from "../lib/store";
+import {
+  deriveChatTimeline,
+  findTerminalAssistantEntry,
+  turnEndedAt,
+  turnStartedAt,
+  type ChatTimelineEntry,
+} from "../lib/chatTimeline";
 import { Markdown } from "./Markdown";
 import { ToolCallRow } from "./ToolCallRow";
 import { cn } from "../lib/utils";
 
-type TimelineEntry =
-  | { type: "message"; at: number; message: ChatMessage }
-  | { type: "tool"; at: number; activity: ToolActivity };
+const shortTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  hour: "2-digit",
+  minute: "2-digit",
+});
 
-function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean }) {
-  const [open, setOpen] = useState(Boolean(streaming));
+function formatDuration(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (totalSeconds < 1) return "不到 1 秒";
+  if (totalSeconds < 60) return `${totalSeconds} 秒`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
+}
+
+function ReasoningBlock({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  const [open, setOpen] = useState(streaming);
+
+  useEffect(() => {
+    setOpen(streaming);
+  }, [streaming]);
+
   return (
-    <div className="overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50/70 text-xs dark:border-zinc-800 dark:bg-zinc-900/60">
+    <div className="mb-2 overflow-hidden rounded-md border border-zinc-200/80 bg-zinc-50/60 text-xs dark:border-zinc-800 dark:bg-zinc-900/50">
       <button
         type="button"
         aria-expanded={open}
-        className="flex min-h-9 w-full items-center gap-2 px-3 py-2 text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+        className="flex min-h-8 w-full items-center gap-1.5 px-2.5 py-1.5 text-left font-medium text-zinc-500 hover:bg-zinc-100/70 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-200"
         onClick={() => setOpen((value) => !value)}
       >
         <ChevronRight
-          className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")}
+          className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")}
         />
-        <Brain className="h-3.5 w-3.5" />
+        <Bot className="h-3.5 w-3.5 shrink-0" />
         <span>{streaming ? "正在思考" : "思考过程"}</span>
-        {streaming && <span className="ml-auto h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />}
+        {streaming && <span className="animate-pulse text-zinc-400">...</span>}
       </button>
       {open && (
-        <div className="max-h-64 overflow-y-auto border-t border-zinc-200 px-3 py-2.5 leading-5 whitespace-pre-wrap text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-          {text}
+        <div className="mx-2.5 mb-2.5 border-l-2 border-zinc-200 pl-2.5 text-sm leading-6 text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+          <Markdown>{text}</Markdown>
         </div>
       )}
     </div>
   );
 }
 
-function CopyAction({ text }: { text: string }) {
+function CopyAction({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -72,9 +97,9 @@ function CopyAction({ text }: { text: string }) {
   return (
     <button
       type="button"
-      className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 opacity-100 hover:bg-zinc-100 hover:text-zinc-700 sm:opacity-0 sm:group-hover:opacity-100 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
-      aria-label={copied ? "已复制" : "复制回复"}
-      title={copied ? "已复制" : "复制回复"}
+      className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+      aria-label={copied ? "已复制" : label}
+      title={copied ? "已复制" : label}
       onClick={() => void copy()}
     >
       {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -82,24 +107,37 @@ function CopyAction({ text }: { text: string }) {
   );
 }
 
-function AssistantMessage({ message }: { message: ChatMessage }) {
+function MessageTime({ at }: { at: number }) {
+  const date = new Date(at);
   return (
-    <article className="group flex gap-3 py-1">
-      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
-        <Bot className="h-4 w-4" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="mb-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">编码助手</div>
-        <div className="space-y-2">
-          {message.reasoning && <ReasoningBlock text={message.reasoning} />}
-          <Markdown>{message.text}</Markdown>
+    <time dateTime={date.toISOString()} title={date.toLocaleString("zh-CN")}>
+      {shortTimeFormatter.format(date)}
+    </time>
+  );
+}
+
+function AssistantMessage({
+  message,
+  streaming = false,
+  showMeta = true,
+}: {
+  message: ChatMessage;
+  streaming?: boolean;
+  showMeta?: boolean;
+}) {
+  return (
+    <article
+      className="group/assistant min-w-0 px-1 py-0.5"
+      aria-live={streaming ? "polite" : undefined}
+    >
+      {message.reasoning && <ReasoningBlock text={message.reasoning} streaming={streaming} />}
+      {message.text && <Markdown>{message.text}</Markdown>}
+      {showMeta && !streaming && message.text && (
+        <div className="mt-1.5 flex h-7 items-center gap-2 text-xs text-zinc-400 opacity-100 transition-opacity sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
+          <CopyAction text={message.text} label="复制回复" />
+          <MessageTime at={message.createdAt} />
         </div>
-        {message.text && (
-          <div className="mt-1 flex h-7 items-center">
-            <CopyAction text={message.text} />
-          </div>
-        )}
-      </div>
+      )}
     </article>
   );
 }
@@ -112,8 +150,8 @@ function UserMessage({ message }: { message: ChatMessage }) {
   const content = skillMatch?.[2] ?? message.text;
 
   return (
-    <article className="flex justify-end py-1">
-      <div className="max-w-[88%] rounded-2xl rounded-br-md bg-zinc-100 px-4 py-2.5 text-sm leading-6 text-zinc-900 sm:max-w-[80%] dark:bg-zinc-800 dark:text-zinc-100">
+    <article className="group flex flex-col items-end gap-1">
+      <div className="max-w-[88%] rounded-2xl border border-zinc-200 bg-zinc-100 px-3 py-2.5 text-sm leading-6 text-zinc-900 sm:max-w-[80%] dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100">
         {skills.length > 0 && (
           <div className="mb-1.5 flex flex-wrap gap-1.5 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400">
             {skills.map((skill) => (
@@ -123,24 +161,247 @@ function UserMessage({ message }: { message: ChatMessage }) {
             ))}
           </div>
         )}
-        <div className="whitespace-pre-wrap">{content}</div>
+        <div className="whitespace-pre-wrap break-words">{content}</div>
+      </div>
+      <div className="flex h-7 w-full max-w-[88%] items-center justify-end gap-1 pr-1 text-xs text-zinc-400 opacity-100 transition-opacity sm:max-w-[80%] sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+        <MessageTime at={message.createdAt} />
+        {content && <CopyAction text={content} label="复制消息" />}
       </div>
     </article>
   );
 }
 
-export function ChatView({ threadId }: { threadId: string }) {
+function WorkGroup({
+  activities,
+  groupId,
+  expanded,
+  onToggle,
+}: {
+  activities: ToolActivity[];
+  groupId: string;
+  expanded: boolean;
+  onToggle: (groupId: string) => void;
+}) {
+  const hiddenCount = Math.max(0, activities.length - 1);
+  const visibleActivities = expanded ? activities : activities.slice(-1);
+
+  return (
+    <div className="space-y-px py-0.5">
+      {visibleActivities.map((activity) => (
+        <ToolCallRow key={activity.id} activity={activity} />
+      ))}
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          className="flex w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-xs font-medium leading-5 text-zinc-600 hover:bg-zinc-100/60 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-900/60 dark:hover:text-zinc-100"
+          onClick={() => onToggle(groupId)}
+        >
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-400">
+            <ChevronDown
+              className={cn(
+                "h-3.5 w-3.5 transition-transform duration-200",
+                expanded && "rotate-180",
+              )}
+            />
+          </span>
+          {expanded ? "收起工具调用" : `先前的 ${hiddenCount} 次工具调用`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ProcessEntries({
+  entries,
+  expandedWorkGroups,
+  onToggleWorkGroup,
+}: {
+  entries: readonly ChatTimelineEntry[];
+  expandedWorkGroups: ReadonlySet<string>;
+  onToggleWorkGroup: (groupId: string) => void;
+}) {
+  const rows: ReactNode[] = [];
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!entry) continue;
+
+    if (entry.kind === "tool") {
+      const activities = [entry.activity];
+      let cursor = index + 1;
+      while (entries[cursor]?.kind === "tool") {
+        activities.push((entries[cursor] as Extract<ChatTimelineEntry, { kind: "tool" }>).activity);
+        cursor += 1;
+      }
+      const groupId = `work-group:${entry.id}`;
+      rows.push(
+        <WorkGroup
+          key={groupId}
+          activities={activities}
+          groupId={groupId}
+          expanded={expandedWorkGroups.has(groupId)}
+          onToggle={onToggleWorkGroup}
+        />,
+      );
+      index = cursor - 1;
+      continue;
+    }
+
+    if (entry.message.role === "user") {
+      rows.push(<UserMessage key={entry.id} message={entry.message} />);
+    } else if (entry.message.role === "assistant") {
+      rows.push(
+        <AssistantMessage key={entry.id} message={entry.message} showMeta={false} />,
+      );
+    }
+  }
+
+  return <>{rows}</>;
+}
+
+function WorkingIndicator({ startedAt }: { startedAt: number | null }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+
+  return (
+    <div className="flex items-center gap-2 px-1.5 py-1 text-[11px] tabular-nums text-zinc-400" aria-live="polite">
+      <span className="inline-flex items-center gap-[3px]" aria-hidden="true">
+        <span className="h-1 w-1 animate-pulse rounded-full bg-zinc-400/60" />
+        <span className="h-1 w-1 animate-pulse rounded-full bg-zinc-400/60 [animation-delay:200ms]" />
+        <span className="h-1 w-1 animate-pulse rounded-full bg-zinc-400/60 [animation-delay:400ms]" />
+      </span>
+      <span>{startedAt ? `已工作 ${formatDuration(now - startedAt)}` : "正在工作"}</span>
+    </div>
+  );
+}
+
+function CompletedTurn({
+  turnId,
+  entries,
+  expanded,
+  expandedWorkGroups,
+  onToggleTurn,
+  onToggleWorkGroup,
+}: {
+  turnId: string;
+  entries: readonly ChatTimelineEntry[];
+  expanded: boolean;
+  expandedWorkGroups: ReadonlySet<string>;
+  onToggleTurn: (turnId: string) => void;
+  onToggleWorkGroup: (groupId: string) => void;
+}) {
+  const terminalAssistant = findTerminalAssistantEntry(entries);
+  const userEntries = entries.filter(
+    (entry): entry is Extract<ChatTimelineEntry, { kind: "message" }> =>
+      entry.kind === "message" && entry.message.role === "user",
+  );
+  const processEntries = entries.filter(
+    (entry) =>
+      !(entry.kind === "message" && entry.message.role === "user") &&
+      entry.id !== terminalAssistant?.id,
+  );
+  const startedAt = turnStartedAt(entries);
+  const endedAt = turnEndedAt(entries);
+  const durationLabel =
+    startedAt !== null && endedAt !== null ? `工作了 ${formatDuration(endedAt - startedAt)}` : "工作过程";
+
+  return (
+    <section className="flex flex-col gap-3" data-turn-id={turnId}>
+      {userEntries.map((entry) => (
+        <UserMessage key={entry.id} message={entry.message} />
+      ))}
+      {processEntries.length > 0 && (
+        <>
+          <div className="border-b border-zinc-200/80 pb-2 pt-0.5 dark:border-zinc-800">
+            <button
+              type="button"
+              aria-expanded={expanded}
+              className="flex items-center gap-1 rounded-md px-1 text-xs tabular-nums text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+              onClick={() => onToggleTurn(turnId)}
+            >
+              <span>{durationLabel}</span>
+              {expanded ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
+          {expanded && (
+            <ProcessEntries
+              entries={processEntries}
+              expandedWorkGroups={expandedWorkGroups}
+              onToggleWorkGroup={onToggleWorkGroup}
+            />
+          )}
+        </>
+      )}
+      {terminalAssistant && <AssistantMessage message={terminalAssistant.message} />}
+    </section>
+  );
+}
+
+function RunningTurn({
+  entries,
+  live,
+  startedAt,
+  expandedWorkGroups,
+  onToggleWorkGroup,
+}: {
+  entries: readonly ChatTimelineEntry[];
+  live: { text: string; reasoning: string };
+  startedAt: number | null;
+  expandedWorkGroups: ReadonlySet<string>;
+  onToggleWorkGroup: (groupId: string) => void;
+}) {
+  const hasLive = Boolean(live.text || live.reasoning);
+  const liveMessage: ChatMessage = {
+    id: "live-assistant-message",
+    role: "assistant",
+    text: live.text,
+    reasoning: live.reasoning,
+    streaming: true,
+    turnId: "live",
+    createdAt: Date.now(),
+  };
+
+  return (
+    <section className="flex flex-col gap-3">
+      <ProcessEntries
+        entries={entries}
+        expandedWorkGroups={expandedWorkGroups}
+        onToggleWorkGroup={onToggleWorkGroup}
+      />
+      {hasLive && <AssistantMessage message={liveMessage} streaming showMeta={false} />}
+      <WorkingIndicator startedAt={startedAt ?? turnStartedAt(entries)} />
+    </section>
+  );
+}
+
+export function ChatView({ threadId, bottomInset = 0 }: { threadId: string; bottomInset?: number }) {
   const state = useThreadState(threadId);
-  const openThread = useApp((s) => s.openThread);
-  const closeThread = useApp((s) => s.closeThread);
+  const openThread = useApp((appState) => appState.openThread);
+  const closeThread = useApp((appState) => appState.closeThread);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<string>>(new Set());
+  const [expandedWorkGroups, setExpandedWorkGroups] = useState<ReadonlySet<string>>(new Set());
 
   useEffect(() => {
     let active = true;
+    pinnedRef.current = true;
+    setAtBottom(true);
     setLoadError("");
+    setExpandedTurnIds(new Set());
+    setExpandedWorkGroups(new Set());
     void openThread(threadId).catch((error: unknown) => {
       if (active) setLoadError(error instanceof Error ? error.message : "无法加载会话");
     });
@@ -150,35 +411,34 @@ export function ChatView({ threadId }: { threadId: string }) {
     };
   }, [threadId, openThread, closeThread]);
 
-  const entries = useMemo<TimelineEntry[]>(() => {
-    const list: TimelineEntry[] = [
-      ...state.messages.map((message) => ({
-        type: "message" as const,
-        at: message.createdAt,
-        message,
-      })),
-      ...state.activities.map((activity) => ({
-        type: "tool" as const,
-        at: activity.startedAt,
-        activity,
-      })),
-    ];
-    list.sort((a, b) => a.at - b.at);
-    return list;
-  }, [state.messages, state.activities]);
+  useEffect(() => {
+    if (state.loaded) setLoadError("");
+  }, [state.loaded]);
+
+  const blocks = useMemo(
+    () => deriveChatTimeline(state.messages, state.activities),
+    [state.messages, state.activities],
+  );
+  const activeTurnId = state.activeTurnId ?? state.live.turnId;
+  const hasLive = Boolean(state.live.text || state.live.reasoning);
+  const hasActiveTurnBlock = blocks.some(
+    (block) => block.kind === "turn" && state.running && block.turnId === activeTurnId,
+  );
 
   useEffect(() => {
     const element = scrollRef.current;
-    if (element && pinnedRef.current) {
+    if (!element || !pinnedRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
       element.scrollTop = element.scrollHeight;
       setAtBottom(true);
-    }
-  }, [entries, state.live.text, state.live.reasoning]);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [blocks, state.live.text, state.live.reasoning, state.running, bottomInset]);
 
   const onScroll = () => {
     const element = scrollRef.current;
     if (!element) return;
-    const nextAtBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+    const nextAtBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
     pinnedRef.current = nextAtBottom;
     setAtBottom(nextAtBottom);
   };
@@ -191,7 +451,25 @@ export function ChatView({ threadId }: { threadId: string }) {
     element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   };
 
-  if (loadError) {
+  const toggleTurn = (turnId: string) => {
+    setExpandedTurnIds((existing) => {
+      const next = new Set(existing);
+      if (next.has(turnId)) next.delete(turnId);
+      else next.add(turnId);
+      return next;
+    });
+  };
+
+  const toggleWorkGroup = (groupId: string) => {
+    setExpandedWorkGroups((existing) => {
+      const next = new Set(existing);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  };
+
+  if (loadError && !state.loaded) {
     return (
       <div className="flex h-full items-center justify-center px-6">
         <div className="max-w-md text-center text-sm text-red-600 dark:text-red-400">{loadError}</div>
@@ -207,79 +485,81 @@ export function ChatView({ threadId }: { threadId: string }) {
     );
   }
 
-  const hasLive = state.live.text.length > 0 || state.live.reasoning.length > 0;
-  const hasRunningTool = state.activities.some((activity) => activity.status === "running");
-
   return (
     <div className="relative h-full">
-      <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto overscroll-contain">
-        <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-3 px-4 py-7 sm:px-6 sm:py-9">
-          {entries.length === 0 && !hasLive && !state.running && (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-zinc-400">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-900">
-                <Bot className="h-5 w-5" />
-              </div>
-              <span className="text-sm">新会话</span>
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        onWheel={(event) => {
+          if (event.deltaY < 0) pinnedRef.current = false;
+        }}
+        className="h-full overflow-y-auto overflow-x-hidden overscroll-y-contain"
+      >
+        <div
+          className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-3 pt-4 sm:px-5 sm:pt-5"
+          style={{ paddingBottom: Math.max(20, bottomInset + 16) }}
+        >
+          {blocks.length === 0 && !hasLive && !state.running && (
+            <div className="flex flex-1 items-center justify-center py-16 text-sm text-zinc-300 dark:text-zinc-700">
+              新会话
             </div>
           )}
 
-          {entries.map((entry) => {
-            if (entry.type === "tool") {
+          {blocks.map((block) => {
+            if (block.kind === "system") {
               return (
-                <div key={`tool-${entry.activity.id}`} className="pl-0 sm:pl-10">
-                  <ToolCallRow activity={entry.activity} />
+                <div key={block.id} className="py-2 text-center text-xs text-zinc-400">
+                  {block.message.text}
                 </div>
               );
             }
 
-            const message = entry.message;
-            if (message.role === "system") {
-              return (
-                <div key={message.id} className="py-2 text-center text-xs text-zinc-400">
-                  {message.text}
-                </div>
-              );
-            }
-            if (message.role === "user") {
-              return <UserMessage key={message.id} message={message} />;
-            }
-            return <AssistantMessage key={message.id} message={message} />;
+            const running = state.running && block.turnId === activeTurnId;
+            return running ? (
+              <RunningTurn
+                key={block.id}
+                entries={block.entries}
+                live={state.live}
+                startedAt={state.activeTurnStartedAt}
+                expandedWorkGroups={expandedWorkGroups}
+                onToggleWorkGroup={toggleWorkGroup}
+              />
+            ) : (
+              <CompletedTurn
+                key={block.id}
+                turnId={block.turnId}
+                entries={block.entries}
+                expanded={expandedTurnIds.has(block.turnId)}
+                expandedWorkGroups={expandedWorkGroups}
+                onToggleTurn={toggleTurn}
+                onToggleWorkGroup={toggleWorkGroup}
+              />
+            );
           })}
 
-          {hasLive && (
-            <article className="flex gap-3 py-1" aria-live="polite">
-              <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
-                <Bot className="h-4 w-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="mb-1 flex items-center gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                  编码助手
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
-                </div>
-                <div className="space-y-2">
-                  {state.live.reasoning && (
-                    <ReasoningBlock text={state.live.reasoning} streaming />
-                  )}
-                  {state.live.text ? (
-                    <Markdown>{state.live.text}</Markdown>
-                  ) : (
-                    <div className="flex items-center gap-2 text-sm text-zinc-400">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> 正在处理
-                    </div>
-                  )}
-                </div>
-              </div>
-            </article>
-          )}
-
-          {state.running && !hasLive && !hasRunningTool && (
-            <div className="flex items-center gap-3 py-1 pl-0 text-sm text-zinc-400 sm:pl-10" aria-live="polite">
-              <Loader2 className="h-4 w-4 animate-spin" /> 正在处理
-            </div>
+          {state.running && !hasActiveTurnBlock && (
+            <section className="flex flex-col gap-3">
+              {hasLive && (
+                <AssistantMessage
+                  streaming
+                  showMeta={false}
+                  message={{
+                    id: "live-assistant-message",
+                    role: "assistant",
+                    text: state.live.text,
+                    reasoning: state.live.reasoning,
+                    streaming: true,
+                    turnId: activeTurnId ?? "live",
+                    createdAt: Date.now(),
+                  }}
+                />
+              )}
+              <WorkingIndicator startedAt={state.activeTurnStartedAt} />
+            </section>
           )}
 
           {state.error && (
-            <div className="ml-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700 sm:ml-10 dark:border-red-950 dark:bg-red-950/30 dark:text-red-300">
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700 dark:border-red-950 dark:bg-red-950/30 dark:text-red-300">
               {state.error}
             </div>
           )}
@@ -291,10 +571,12 @@ export function ChatView({ threadId }: { threadId: string }) {
           type="button"
           aria-label="回到最新消息"
           title="回到最新消息"
-          className="absolute bottom-3 left-1/2 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          className="absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-600 shadow-sm hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          style={{ bottom: bottomInset + 6 }}
           onClick={scrollToBottom}
         >
-          <ArrowDown className="h-4 w-4" />
+          <ArrowDown className="h-3.5 w-3.5" />
+          回到最新消息
         </button>
       )}
     </div>

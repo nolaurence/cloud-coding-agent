@@ -190,6 +190,38 @@ test("clears failed startup state so a message can be retried", async (t) => {
   assert.equal(manager.isRunning(threadId), false);
 });
 
+test("keeps streamed assistant text in snapshots and after an interrupt", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "解释当前实现");
+  session.emit(
+    sessionEvent("assistant.message_delta", {
+      messageId: "assistant-partial",
+      deltaContent: "这是尚未完成的回答",
+    }),
+  );
+
+  const runningSnapshot = await manager.subscribe(threadId);
+  assert.equal(runningSnapshot.kind, "snapshot");
+  if (runningSnapshot.kind !== "snapshot") return;
+  assert.equal(runningSnapshot.live?.text, "这是尚未完成的回答");
+
+  await manager.interrupt(threadId);
+  const interruptedSnapshot = await manager.subscribe(threadId);
+  assert.equal(interruptedSnapshot.kind, "snapshot");
+  if (interruptedSnapshot.kind !== "snapshot") return;
+  assert.equal(interruptedSnapshot.live, undefined);
+  assert.equal(
+    interruptedSnapshot.messages.find((message) => message.id === "assistant-partial")?.text,
+    "这是尚未完成的回答",
+  );
+});
+
 test("overrides the OpenAI provider User-Agent rejected by compatible gateways", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
@@ -251,5 +283,30 @@ test("restores tool failures and interrupted tools from session history", async 
       { id: "tool-running", status: "error", result: "工具执行被中断" },
       { id: "tool-failed", status: "error", result: "permission denied" },
     ],
+  );
+});
+
+test("restores an unfinished streamed answer from session history", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId, Date.now() - 10_000);
+  const history = [
+    sessionEvent("user.message", { content: "解释实现" }),
+    sessionEvent("assistant.message_delta", {
+      messageId: "assistant-from-history",
+      deltaContent: "保留下来的半截回答",
+    }),
+    sessionEvent("abort", {}),
+  ];
+  const session = new FakeSession(history);
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  const snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  assert.equal(
+    snapshot.messages.find((message) => message.id === "assistant-from-history")?.text,
+    "保留下来的半截回答",
   );
 });

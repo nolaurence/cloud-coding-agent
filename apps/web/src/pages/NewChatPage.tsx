@@ -12,7 +12,6 @@ export function NewChatPage() {
   const projects = useApp((s) => s.projects);
   const settings = useApp((s) => s.settings);
   const createThread = useApp((s) => s.createThread);
-  const openThread = useApp((s) => s.openThread);
   const sendMessage = useApp((s) => s.sendMessage);
   const navigate = useNavigate();
   const [projectId, setProjectId] = useState<string>("");
@@ -27,7 +26,6 @@ export function NewChatPage() {
     setCreating(true);
     try {
       const thread = await createThread(effectiveProjectId, effectiveModel);
-      await openThread(thread.id);
       navigate(`/thread/${thread.id}`);
       await sendMessage(thread.id, text, attachments);
     } finally {
@@ -65,14 +63,6 @@ export function NewChatPage() {
                   </option>
                 ))}
               </Select>
-              <ModelPicker value={effectiveModel} onChange={setModel} disabled={creating} />
-              <ReasoningEffortPicker
-                model={effectiveModel}
-                disabled={creating}
-                onChange={(reasoningEffort) => {
-                  if (effectiveModel) setModel({ ...effectiveModel, reasoningEffort });
-                }}
-              />
             </div>
             <Composer
               projectId={effectiveProjectId}
@@ -80,6 +70,19 @@ export function NewChatPage() {
               onSend={(text, attachments) => onSend(text, attachments)}
               autoFocus
               placeholder="输入编码任务"
+              footerControls={
+                <>
+                  <ModelPicker value={effectiveModel} onChange={setModel} disabled={creating} />
+                  <ReasoningEffortPicker
+                    compact
+                    model={effectiveModel}
+                    disabled={creating}
+                    onChange={(reasoningEffort) => {
+                      if (effectiveModel) setModel({ ...effectiveModel, reasoningEffort });
+                    }}
+                  />
+                </>
+              }
             />
           </>
         )}

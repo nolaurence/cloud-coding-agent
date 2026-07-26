@@ -48,6 +48,63 @@ test("discoverProviderModels allows providers without an API key", async () => {
   assert.equal(authorization, null);
 });
 
+test("discoverProviderModels preserves model reasoning capabilities", async () => {
+  const models = await discoverProviderModels(
+    { type: "openai", baseUrl: "https://example.com/v1" },
+    async () =>
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "gpt-5.6-sol",
+              supported_reasoning_efforts: [
+                "none",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "future",
+              ],
+              default_reasoning_effort: "medium",
+            },
+            {
+              id: "minimal-model",
+              capabilities: {
+                supports: { reasoning_effort: ["none", "minimal", "low"] },
+                default_reasoning_effort: "minimal",
+              },
+            },
+            {
+              id: "non-reasoning-model",
+              capabilities: { supports: { reasoningEffort: false } },
+            },
+            {
+              id: "reasoning-levels-unknown",
+              capabilities: { supports: { reasoningEffort: true } },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+  );
+
+  assert.deepEqual(models, [
+    {
+      id: "gpt-5.6-sol",
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      defaultReasoningEffort: "medium",
+    },
+    {
+      id: "minimal-model",
+      supportedReasoningEfforts: ["none", "minimal", "low"],
+      defaultReasoningEffort: "minimal",
+    },
+    { id: "non-reasoning-model", reasoningEffort: false },
+    { id: "reasoning-levels-unknown" },
+  ]);
+});
+
 test("discoverProviderModels reports service errors without leaking the API key", async () => {
   const apiKey = "top-secret-key";
   await assert.rejects(

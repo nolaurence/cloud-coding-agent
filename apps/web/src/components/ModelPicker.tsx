@@ -53,11 +53,12 @@ export function ModelPicker({
         aria-expanded={open}
         aria-haspopup="menu"
         disabled={disabled}
-        className="flex h-8 items-center gap-1.5 rounded-md border border-zinc-300 px-2.5 text-xs hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        title={currentLabel}
+        className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-zinc-300 px-2.5 text-xs hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
         onClick={() => setOpen((v) => !v)}
       >
         <Cpu className="h-3.5 w-3.5 text-zinc-500" />
-        <span className="max-w-24 truncate sm:max-w-56">{currentLabel}</span>
+        <span className="max-w-16 truncate sm:max-w-56">{currentLabel}</span>
         <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />
       </button>
       {open && (

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  CheckCircle2,
-  ChevronRight,
+  Check,
+  ChevronDown,
   FilePenLine,
   FileSearch,
   Globe2,
@@ -9,7 +9,7 @@ import {
   Search,
   SquareTerminal,
   Wrench,
-  XCircle,
+  X,
 } from "lucide-react";
 import type { ToolActivity } from "@cca/protocol";
 import { cn } from "../lib/utils";
@@ -79,17 +79,17 @@ function toolKind(activity: ToolActivity, target: string | null): ToolKind {
   return "other";
 }
 
-const labels: Record<ToolKind, { running: string; complete: string; error: string }> = {
-  modify: { running: "正在修改文件", complete: "文件已修改", error: "文件修改失败" },
-  read: { running: "正在读取文件", complete: "文件已读取", error: "文件读取失败" },
-  search: { running: "正在搜索代码", complete: "代码搜索完成", error: "代码搜索失败" },
-  command: { running: "正在执行命令", complete: "命令执行完成", error: "命令执行失败" },
-  web: { running: "正在访问网页", complete: "网页访问完成", error: "网页访问失败" },
-  other: { running: "正在调用工具", complete: "工具调用完成", error: "工具调用失败" },
+const labels: Record<ToolKind, string> = {
+  modify: "编辑文件",
+  read: "读取文件",
+  search: "搜索代码",
+  command: "运行命令",
+  web: "访问网页",
+  other: "调用工具",
 };
 
 function ToolIcon({ kind }: { kind: ToolKind }) {
-  const className = "h-4 w-4 shrink-0";
+  const className = "h-3.5 w-3.5 shrink-0 stroke-[1.8]";
   if (kind === "modify") return <FilePenLine className={className} />;
   if (kind === "read") return <FileSearch className={className} />;
   if (kind === "search") return <Search className={className} />;
@@ -112,13 +112,19 @@ function duration(activity: ToolActivity): string | null {
   return elapsed < 1000 ? `${elapsed} ms` : `${(elapsed / 1000).toFixed(1)} 秒`;
 }
 
+function statusText(activity: ToolActivity): string {
+  if (activity.status === "running") return "执行中";
+  if (activity.status === "error") return "执行失败";
+  return "已完成";
+}
+
 export function ToolCallRow({ activity }: { activity: ToolActivity }) {
   const [open, setOpen] = useState(activity.status === "error");
   const args = useMemo(() => parseArgs(activity.args), [activity.args]);
   const target = useMemo(() => toolTarget(args), [args]);
   const kind = toolKind(activity, target);
   const elapsed = duration(activity);
-  const statusLabel = labels[kind][activity.status];
+  const canExpand = Boolean(activity.args || activity.result);
 
   useEffect(() => {
     if (activity.status === "error") setOpen(true);
@@ -127,74 +133,84 @@ export function ToolCallRow({ activity }: { activity: ToolActivity }) {
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-lg border text-xs",
-        activity.status === "error"
-          ? "border-red-200 bg-red-50/70 dark:border-red-950 dark:bg-red-950/20"
-          : "border-zinc-200 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/70",
+        "flex flex-col rounded-md px-0.5 py-0.5 transition-colors",
+        canExpand && "hover:bg-zinc-100/60 dark:hover:bg-zinc-900/60",
       )}
     >
       <button
         type="button"
-        aria-expanded={open}
-        className="flex min-h-9 w-full items-center gap-2 px-3 py-2 text-left"
-        onClick={() => setOpen((value) => !value)}
+        aria-expanded={canExpand ? open : undefined}
+        aria-label={`${labels[kind]}，${statusText(activity)}`}
+        className={cn(
+          "flex min-h-5 w-full select-none items-center gap-1.5 text-left text-xs leading-5",
+          canExpand ? "cursor-pointer" : "cursor-default",
+        )}
+        onClick={() => {
+          if (canExpand) setOpen((value) => !value);
+        }}
       >
-        <ChevronRight
-          className={cn(
-            "h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform",
-            open && "rotate-90",
-          )}
-        />
         <span
           className={cn(
-            "shrink-0",
-            activity.status === "error"
-              ? "text-red-500"
-              : kind === "modify" && activity.status === "complete"
-                ? "text-emerald-600 dark:text-emerald-400"
-                : "text-zinc-500 dark:text-zinc-400",
+            "flex h-5 w-5 shrink-0 items-center justify-center",
+            activity.status === "error" ? "text-red-500" : "text-zinc-500 dark:text-zinc-400",
           )}
         >
           <ToolIcon kind={kind} />
         </span>
-        <span className="shrink-0 font-medium text-zinc-700 dark:text-zinc-200">{statusLabel}</span>
-        {target && (
-          <span className="mono min-w-0 flex-1 truncate text-zinc-500 dark:text-zinc-400" title={target}>
-            {target.replace(/\s+/g, " ")}
-          </span>
-        )}
-        {!target && <span className="min-w-0 flex-1 truncate text-zinc-400">{activity.toolName}</span>}
-        {activity.status === "running" ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />
-        ) : activity.status === "complete" ? (
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-        ) : (
-          <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
-        )}
+        <span
+          className={cn(
+            "min-w-0 shrink-0 truncate font-medium",
+            activity.status === "error"
+              ? "text-red-700 dark:text-red-300"
+              : "text-zinc-700 dark:text-zinc-200",
+          )}
+        >
+          {labels[kind]}
+        </span>
+        <span className="mono min-w-0 flex-1 truncate text-zinc-400" title={target ?? activity.toolName}>
+          {(target ?? activity.toolName).replace(/\s+/g, " ")}
+        </span>
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center text-zinc-400">
+          {canExpand && (
+            <ChevronDown
+              className={cn("h-3 w-3 transition-transform", open && "rotate-180")}
+            />
+          )}
+        </span>
+        <span
+          className="flex h-4 w-4 shrink-0 items-center justify-center"
+          title={statusText(activity)}
+        >
+          {activity.status === "running" ? (
+            <Loader2 className="h-3 w-3 animate-spin text-zinc-400" />
+          ) : activity.status === "complete" ? (
+            <Check className="h-3 w-3 text-zinc-500 dark:text-zinc-400" />
+          ) : (
+            <X className="h-3 w-3 text-red-500" />
+          )}
+        </span>
       </button>
 
-      {open && (
-        <div className="space-y-3 border-t border-zinc-200 px-3 py-3 dark:border-zinc-800">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
-            <span>
-              工具：<span className="mono text-zinc-700 dark:text-zinc-300">{activity.toolName}</span>
-            </span>
-            {elapsed && <span>耗时：{elapsed}</span>}
+      {open && canExpand && (
+        <div className="ml-7 mt-1 border-l border-zinc-200 pb-1 pl-3 dark:border-zinc-800">
+          <div className="mb-1.5 flex flex-wrap items-center gap-x-3 text-[11px] text-zinc-400">
+            <span className="mono">{activity.toolName}</span>
+            {elapsed && <span>{elapsed}</span>}
           </div>
           {activity.args && (
-            <div>
-              <div className="mb-1 font-medium text-zinc-500">调用参数</div>
-              <pre className="mono max-h-52 overflow-auto rounded-md bg-white p-2.5 leading-5 break-all whitespace-pre-wrap dark:bg-zinc-950">
+            <div className="mb-2">
+              <div className="mb-1 text-[11px] font-medium text-zinc-500">参数</div>
+              <pre className="mono max-h-52 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-500 select-text dark:text-zinc-400">
                 {formatPayload(activity.args)}
               </pre>
             </div>
           )}
           {activity.result && (
             <div>
-              <div className="mb-1 font-medium text-zinc-500">
-                {activity.status === "error" ? "错误信息" : "执行输出"}
+              <div className="mb-1 text-[11px] font-medium text-zinc-500">
+                {activity.status === "error" ? "错误" : "输出"}
               </div>
-              <pre className="mono max-h-72 overflow-auto rounded-md bg-white p-2.5 leading-5 break-all whitespace-pre-wrap dark:bg-zinc-950">
+              <pre className="mono max-h-72 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-500 select-text dark:text-zinc-400">
                 {formatPayload(activity.result)}
               </pre>
             </div>

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import type { CopilotSession, SessionEvent } from "@github/copilot-sdk";
+import { isReasoningEffort, normalizeReasoningEfforts } from "@cca/protocol";
 import type {
   AppSettings,
   ChatMessage,
@@ -21,6 +22,13 @@ interface ThreadRuntime {
   activities: ToolActivity[];
   running: boolean;
   currentTurnId: string | null;
+  pendingAssistant: {
+    messageId: string | null;
+    turnId: string;
+    text: string;
+    reasoning: string;
+    startedAt: number;
+  } | null;
   detachTimer: NodeJS.Timeout | null;
   subscribers: number;
 }
@@ -34,6 +42,8 @@ const MAX_TOOL_RESULT_CHARS = 16_000;
 
 type ToolStartData = Extract<SessionEvent, { type: "tool.execution_start" }>["data"];
 type ToolCompleteData = Extract<SessionEvent, { type: "tool.execution_complete" }>["data"];
+type CopilotSetModelOptions = NonNullable<Parameters<CopilotSession["setModel"]>[1]>;
+type CopilotReasoningEffort = NonNullable<CopilotSetModelOptions["reasoningEffort"]>;
 
 function stringifyArguments(args: ToolStartData["arguments"]): string | undefined {
   if (!args) return undefined;
@@ -113,6 +123,7 @@ export class CopilotManager {
         activities: [],
         running: false,
         currentTurnId: null,
+        pendingAssistant: null,
         detachTimer: null,
         subscribers: 0,
       };
@@ -123,6 +134,54 @@ export class CopilotManager {
 
   private emit(threadId: string, event: ThreadEvent) {
     this.sink(threadId, event);
+  }
+
+  private ensurePendingAssistant(
+    rt: ThreadRuntime,
+    turnId: string,
+    startedAt: number,
+    messageId?: string,
+    emitPrevious = true,
+  ) {
+    const pending = rt.pendingAssistant;
+    if (
+      pending &&
+      (pending.turnId !== turnId ||
+        (messageId && pending.messageId && pending.messageId !== messageId))
+    ) {
+      this.commitPendingAssistant(rt, emitPrevious);
+    }
+    if (!rt.pendingAssistant) {
+      rt.pendingAssistant = {
+        messageId: messageId ?? null,
+        turnId,
+        text: "",
+        reasoning: "",
+        startedAt,
+      };
+    } else if (messageId && !rt.pendingAssistant.messageId) {
+      rt.pendingAssistant.messageId = messageId;
+    }
+    return rt.pendingAssistant;
+  }
+
+  private commitPendingAssistant(rt: ThreadRuntime, emit = true) {
+    const pending = rt.pendingAssistant;
+    rt.pendingAssistant = null;
+    if (!pending || (!pending.text && !pending.reasoning)) return;
+
+    const message: ChatMessage = {
+      id: pending.messageId ?? `partial-${pending.turnId || "turn"}`,
+      role: "assistant",
+      text: pending.text,
+      reasoning: pending.reasoning || undefined,
+      turnId: pending.turnId,
+      createdAt: pending.startedAt,
+    };
+    const index = rt.messages.findIndex((candidate) => candidate.id === message.id);
+    if (index >= 0) rt.messages[index] = message;
+    else rt.messages.push(message);
+    if (emit) this.emit(rt.threadId, { kind: "assistant.message", message });
   }
 
   private buildSessionConfig(thread: ThreadMeta, settings: AppSettings) {
@@ -209,6 +268,7 @@ export class CopilotManager {
   private finishTurn(rt: ThreadRuntime) {
     if (!rt.running) return;
     const turnId = rt.currentTurnId ?? "";
+    this.commitPendingAssistant(rt);
     rt.running = false;
     rt.currentTurnId = null;
     this.emit(rt.threadId, { kind: "turn.end", turnId });
@@ -272,6 +332,13 @@ export class CopilotManager {
       case "assistant.message_delta": {
         if (event.agentId) break;
         const data = event.data;
+        const pending = this.ensurePendingAssistant(
+          rt,
+          rt.currentTurnId ?? "",
+          ts,
+          data.messageId,
+        );
+        pending.text += data.deltaContent;
         this.emit(threadId, {
           kind: "assistant.delta",
           messageId: data.messageId,
@@ -283,6 +350,8 @@ export class CopilotManager {
       case "assistant.reasoning_delta": {
         if (event.agentId) break;
         const data = event.data;
+        const pending = this.ensurePendingAssistant(rt, rt.currentTurnId ?? "", ts);
+        pending.reasoning += data.deltaContent;
         this.emit(threadId, {
           kind: "assistant.reasoning_delta",
           messageId: data.reasoningId,
@@ -303,6 +372,9 @@ export class CopilotManager {
           turnId: rt.currentTurnId ?? data.turnId ?? "",
           createdAt: ts,
         };
+        rt.pendingAssistant = null;
+        const partialId = `partial-${message.turnId || "turn"}`;
+        rt.messages = rt.messages.filter((candidate) => candidate.id !== partialId);
         const index = rt.messages.findIndex((candidate) => candidate.id === message.id);
         if (index >= 0) rt.messages[index] = message;
         else rt.messages.push(message);
@@ -415,6 +487,7 @@ export class CopilotManager {
   private async rebuildHistory(rt: ThreadRuntime, session: CopilotSession) {
     try {
       const events = await session.getEvents();
+      rt.pendingAssistant = null;
       let turnId = "";
       let lastTimestamp = Date.now();
       for (const event of events) {
@@ -426,6 +499,7 @@ export class CopilotManager {
             break;
           case "user.message": {
             if (event.agentId) break;
+            this.commitPendingAssistant(rt, false);
             const data = event.data;
             turnId = `turn-${randomUUID()}`;
             rt.messages.push({
@@ -437,10 +511,30 @@ export class CopilotManager {
             });
             break;
           }
+          case "assistant.message_delta": {
+            if (event.agentId) break;
+            const data = event.data;
+            const pending = this.ensurePendingAssistant(
+              rt,
+              turnId,
+              ts,
+              data.messageId,
+              false,
+            );
+            pending.text += data.deltaContent;
+            break;
+          }
+          case "assistant.reasoning_delta": {
+            if (event.agentId) break;
+            const pending = this.ensurePendingAssistant(rt, turnId, ts, undefined, false);
+            pending.reasoning += event.data.deltaContent;
+            break;
+          }
           case "assistant.message": {
             if (event.agentId) break;
             const data = event.data;
             if (!data.content && !data.reasoningText) break;
+            rt.pendingAssistant = null;
             rt.messages.push({
               id: data.messageId,
               role: "assistant",
@@ -483,6 +577,7 @@ export class CopilotManager {
             break;
         }
       }
+      this.commitPendingAssistant(rt, false);
       for (const activity of rt.activities) {
         if (activity.status !== "running") continue;
         activity.status = "error";
@@ -514,6 +609,14 @@ export class CopilotManager {
       messages: rt.messages,
       activities: rt.activities,
       running: rt.running,
+      live: rt.pendingAssistant
+        ? {
+            text: rt.pendingAssistant.text,
+            reasoning: rt.pendingAssistant.reasoning,
+            turnId: rt.pendingAssistant.turnId,
+            startedAt: rt.pendingAssistant.startedAt,
+          }
+        : undefined,
     };
   }
 
@@ -550,6 +653,7 @@ export class CopilotManager {
     const turnId = `turn-${randomUUID()}`;
     rt.running = true;
     rt.currentTurnId = turnId;
+    rt.pendingAssistant = null;
     this.emit(threadId, { kind: "turn.start", turnId });
     this.shellChanged();
     try {
@@ -602,7 +706,12 @@ export class CopilotManager {
     if (currentProviderId === nextModel.providerId) {
       await session.setModel(
         nextModel.modelId,
-        nextModel.reasoningEffort ? { reasoningEffort: nextModel.reasoningEffort } : undefined,
+        nextModel.reasoningEffort
+          ? {
+              // SDK 1.0.8 omits "none" and "max", but the bundled CLI RPC accepts both.
+              reasoningEffort: nextModel.reasoningEffort as CopilotReasoningEffort,
+            }
+          : undefined,
       );
       return;
     }
@@ -638,9 +747,11 @@ export class CopilotManager {
         id: m.id,
         name: m.name,
         supportedReasoningEfforts: m.capabilities.supports.reasoningEffort
-          ? m.supportedReasoningEfforts
+          ? normalizeReasoningEfforts(m.supportedReasoningEfforts)
           : [],
-        defaultReasoningEffort: m.defaultReasoningEffort,
+        defaultReasoningEffort: isReasoningEffort(m.defaultReasoningEffort)
+          ? m.defaultReasoningEffort
+          : undefined,
       }));
     } catch {
       return [];

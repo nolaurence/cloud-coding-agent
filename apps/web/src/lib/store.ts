@@ -47,7 +47,9 @@ interface ThreadState {
   activities: ToolActivity[];
   running: boolean;
   loaded: boolean;
-  live: { text: string; reasoning: string };
+  activeTurnId: string | null;
+  activeTurnStartedAt: number | null;
+  live: { text: string; reasoning: string; turnId: string | null };
   error: string | null;
 }
 
@@ -56,9 +58,47 @@ const emptyThread: ThreadState = {
   activities: [],
   running: false,
   loaded: false,
-  live: { text: "", reasoning: "" },
+  activeTurnId: null,
+  activeTurnStartedAt: null,
+  live: { text: "", reasoning: "", turnId: null },
   error: null,
 };
+
+function inferActiveTurn(
+  messages: readonly ChatMessage[],
+  activities: readonly ToolActivity[],
+): { turnId: string | null; startedAt: number | null } {
+  let turnId: string | null = null;
+  let latestAt = -1;
+
+  for (const message of messages) {
+    if (message.turnId && message.createdAt >= latestAt) {
+      turnId = message.turnId;
+      latestAt = message.createdAt;
+    }
+  }
+  for (const activity of activities) {
+    if (activity.turnId && activity.startedAt >= latestAt) {
+      turnId = activity.turnId;
+      latestAt = activity.startedAt;
+    }
+  }
+
+  if (!turnId) return { turnId: null, startedAt: null };
+  const userMessage = messages.find(
+    (message) => message.turnId === turnId && message.role === "user",
+  );
+  const turnActivities = activities.filter((activity) => activity.turnId === turnId);
+  const firstActivityAt = turnActivities.reduce<number | null>(
+    (earliest, activity) =>
+      earliest === null ? activity.startedAt : Math.min(earliest, activity.startedAt),
+    null,
+  );
+  return {
+    turnId,
+    startedAt: userMessage?.createdAt ?? firstActivityAt,
+  };
+}
 
 interface AppState {
   user: AuthUser | null;
@@ -97,23 +137,54 @@ interface AppState {
 
 function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
   switch (event.kind) {
-    case "snapshot":
+    case "snapshot": {
+      const activeTurn = event.running
+        ? event.live
+          ? { turnId: event.live.turnId, startedAt: event.live.startedAt }
+          : inferActiveTurn(event.messages, event.activities)
+        : { turnId: null, startedAt: null };
       return {
         ...state,
         messages: event.messages,
         activities: event.activities,
         running: event.running,
         loaded: true,
-        live: { text: "", reasoning: "" },
+        activeTurnId: activeTurn.turnId,
+        activeTurnStartedAt: activeTurn.startedAt,
+        live: event.live
+          ? { text: event.live.text, reasoning: event.live.reasoning, turnId: event.live.turnId }
+          : { text: "", reasoning: "", turnId: null },
         error: null,
       };
+    }
     case "turn.start":
-      return { ...state, running: true, live: { text: "", reasoning: "" }, error: null };
-    case "turn.end":
-      return { ...state, running: false };
+      return {
+        ...state,
+        running: true,
+        activeTurnId: event.turnId,
+        activeTurnStartedAt: state.running
+          ? (state.activeTurnStartedAt ?? Date.now())
+          : Date.now(),
+        live: { text: "", reasoning: "", turnId: event.turnId },
+        error: null,
+      };
+    case "turn.end": {
+      return {
+        ...state,
+        running: false,
+        activeTurnId: null,
+        activeTurnStartedAt: null,
+        live: { text: "", reasoning: "", turnId: null },
+      };
+    }
     case "user.message":
       return {
         ...state,
+        activeTurnId: state.running ? event.message.turnId : state.activeTurnId,
+        activeTurnStartedAt:
+          state.running && event.message.role === "user"
+            ? event.message.createdAt
+            : state.activeTurnStartedAt,
         messages: state.messages.some((message) => message.id === event.message.id)
           ? state.messages.map((message) =>
               message.id === event.message.id ? event.message : message,
@@ -121,9 +192,25 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
           : [...state.messages, event.message],
       };
     case "assistant.delta":
-      return { ...state, live: { ...state.live, text: state.live.text + event.delta } };
+      return {
+        ...state,
+        activeTurnId: event.turnId || state.activeTurnId,
+        live: {
+          ...state.live,
+          text: state.live.text + event.delta,
+          turnId: event.turnId || state.live.turnId || state.activeTurnId,
+        },
+      };
     case "assistant.reasoning_delta":
-      return { ...state, live: { ...state.live, reasoning: state.live.reasoning + event.delta } };
+      return {
+        ...state,
+        activeTurnId: event.turnId || state.activeTurnId,
+        live: {
+          ...state.live,
+          reasoning: state.live.reasoning + event.delta,
+          turnId: event.turnId || state.live.turnId || state.activeTurnId,
+        },
+      };
     case "assistant.message": {
       const exists = state.messages.some((m) => m.id === event.message.id);
       return {
@@ -131,11 +218,19 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         messages: exists
           ? state.messages.map((m) => (m.id === event.message.id ? event.message : m))
           : [...state.messages, event.message],
-        live: { text: "", reasoning: "" },
+        live: { text: "", reasoning: "", turnId: null },
       };
     }
     case "tool.start":
-      return { ...state, activities: [...state.activities.filter((a) => a.id !== event.activity.id), event.activity] };
+      return {
+        ...state,
+        activeTurnId: event.activity.turnId || state.activeTurnId,
+        activeTurnStartedAt: state.activeTurnStartedAt ?? event.activity.startedAt,
+        activities: [
+          ...state.activities.filter((activity) => activity.id !== event.activity.id),
+          event.activity,
+        ],
+      };
     case "tool.complete":
       return {
         ...state,
@@ -144,7 +239,14 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
           : [...state.activities, event.activity],
       };
     case "error":
-      return { ...state, running: false, error: event.message };
+      return {
+        ...state,
+        running: false,
+        activeTurnId: null,
+        activeTurnStartedAt: null,
+        live: state.live,
+        error: event.message,
+      };
     default:
       return state;
   }
@@ -159,7 +261,15 @@ export const useApp = create<AppState>((set, get) => {
         const threadStates = Object.fromEntries(
           Object.entries(state.threadStates).map(([threadId, threadState]) => [
             threadId,
-            { ...threadState, running: runningIds.has(threadId) },
+            runningIds.has(threadId)
+              ? { ...threadState, running: true }
+              : {
+                  ...threadState,
+                  running: false,
+                  activeTurnId: null,
+                  activeTurnStartedAt: null,
+                  live: { text: "", reasoning: "", turnId: null },
+                },
           ]),
         );
         return {
@@ -332,7 +442,12 @@ export const useApp = create<AppState>((set, get) => {
         return {
           threadStates: {
             ...state.threadStates,
-            [threadId]: { ...previous, running: true, error: null },
+            [threadId]: {
+              ...previous,
+              running: true,
+              activeTurnStartedAt: Date.now(),
+              error: null,
+            },
           },
           runningThreadIds: [...new Set([...state.runningThreadIds, threadId])],
         };
@@ -345,7 +460,13 @@ export const useApp = create<AppState>((set, get) => {
           return {
             threadStates: {
               ...state.threadStates,
-              [threadId]: { ...previous, running: false },
+              [threadId]: {
+                ...previous,
+                running: false,
+                activeTurnId: null,
+                activeTurnStartedAt: null,
+                error: error instanceof Error ? error.message : "消息发送失败",
+              },
             },
             runningThreadIds: state.runningThreadIds.filter((id) => id !== threadId),
           };
@@ -361,7 +482,12 @@ export const useApp = create<AppState>((set, get) => {
         return {
           threadStates: {
             ...state.threadStates,
-            [threadId]: { ...previous, running: false },
+            [threadId]: {
+              ...previous,
+              running: false,
+              activeTurnId: null,
+              activeTurnStartedAt: null,
+            },
           },
           runningThreadIds: state.runningThreadIds.filter((id) => id !== threadId),
         };

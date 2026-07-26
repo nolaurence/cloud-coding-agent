@@ -1,4 +1,5 @@
-import type { ModelEntry, ProviderModelDiscoveryConfig } from "@cca/protocol";
+import { isReasoningEffort, normalizeReasoningEfforts } from "@cca/protocol";
+import type { ModelEntry, ProviderModelDiscoveryConfig, ReasoningEffort } from "@cca/protocol";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -87,6 +88,67 @@ function sanitizeMessage(message: string, apiKey?: string): string {
   return sanitized.slice(0, 500);
 }
 
+function firstArray(...values: unknown[]): readonly unknown[] | undefined {
+  return values.find(Array.isArray) as readonly unknown[] | undefined;
+}
+
+function firstBoolean(...values: unknown[]): boolean | undefined {
+  return values.find((value) => typeof value === "boolean") as boolean | undefined;
+}
+
+function firstReasoningEffort(...values: unknown[]): ReasoningEffort | undefined {
+  return values.find(isReasoningEffort) as ReasoningEffort | undefined;
+}
+
+function parseReasoningMetadata(candidate: Record<string, unknown>): Partial<ModelEntry> {
+  const capabilities = isRecord(candidate.capabilities) ? candidate.capabilities : undefined;
+  const supports = capabilities && isRecord(capabilities.supports) ? capabilities.supports : undefined;
+  const rawEfforts = firstArray(
+    candidate.supportedReasoningEfforts,
+    candidate.supported_reasoning_efforts,
+    candidate.reasoningEfforts,
+    candidate.reasoning_efforts,
+    capabilities?.supportedReasoningEfforts,
+    capabilities?.supported_reasoning_efforts,
+    capabilities?.reasoningEffort,
+    capabilities?.reasoning_effort,
+    supports?.reasoningEffort,
+    supports?.reasoning_effort,
+  );
+  const normalizedEfforts = normalizeReasoningEfforts(rawEfforts);
+  const hasUsableEffortMetadata =
+    normalizedEfforts !== undefined &&
+    (normalizedEfforts.length > 0 || rawEfforts?.length === 0);
+  const defaultReasoningEffort = firstReasoningEffort(
+    candidate.defaultReasoningEffort,
+    candidate.default_reasoning_effort,
+    capabilities?.defaultReasoningEffort,
+    capabilities?.default_reasoning_effort,
+  );
+  const reasoningEffort = firstBoolean(
+    candidate.reasoningEffort,
+    candidate.reasoning_effort,
+    capabilities?.reasoningEffort,
+    capabilities?.reasoning_effort,
+    supports?.reasoningEffort,
+    supports?.reasoning_effort,
+  );
+  const validDefaultReasoningEffort =
+    defaultReasoningEffort &&
+    (!hasUsableEffortMetadata || normalizedEfforts.includes(defaultReasoningEffort))
+      ? defaultReasoningEffort
+      : undefined;
+
+  return {
+    // A discovered `true` only confirms reasoning exists; it does not identify valid levels.
+    ...(reasoningEffort === false ? { reasoningEffort: false } : {}),
+    ...(hasUsableEffortMetadata ? { supportedReasoningEfforts: normalizedEfforts } : {}),
+    ...(validDefaultReasoningEffort
+      ? { defaultReasoningEffort: validDefaultReasoningEffort }
+      : {}),
+  };
+}
+
 function parseModels(payload: unknown): ModelEntry[] {
   const candidates = Array.isArray(payload)
     ? payload
@@ -114,7 +176,11 @@ function parseModels(payload: unknown): ModelEntry[] {
         name = rawName.trim();
       }
     }
-    models.set(id, { id, name });
+    models.set(id, {
+      id,
+      ...(name ? { name } : {}),
+      ...(isRecord(candidate) ? parseReasoningMetadata(candidate) : {}),
+    });
   }
 
   return [...models.values()].sort((a, b) => a.id.localeCompare(b.id));

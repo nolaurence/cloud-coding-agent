@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import type {
+  AppSettings,
   ClientMessage,
   ModelOption,
+  ModelRef,
   ServerMessage,
   ShellState,
   ThreadMeta,
@@ -12,7 +14,7 @@ import { CopilotManager } from "./copilot.js";
 import { searchFiles } from "./files.js";
 import { browseDirectories, resolveProjectDirectory } from "./directories.js";
 import { deleteSkill, listSkills, saveSkill } from "./skills.js";
-import { flattenModels, REASONING_EFFORTS } from "@cca/protocol";
+import { flattenModels, isReasoningEffort, normalizeModelRefReasoning } from "@cca/protocol";
 import { verifyToken, type TokenPayload } from "./auth.js";
 import { discoverProviderModels } from "./providers.js";
 
@@ -125,6 +127,44 @@ export class Hub {
     }
   }
 
+  private async listModelOptions(settings: AppSettings = store.settings): Promise<ModelOption[]> {
+    let models: Awaited<ReturnType<CopilotManager["listModels"]>> = [];
+    try {
+      models = await this.manager.listModels();
+    } catch {
+      // Configured providers remain usable when Copilot authentication is unavailable.
+    }
+    const copilotModels: ModelOption[] = models.map((model) => ({
+      ref: { providerId: "copilot", modelId: model.id },
+      label: `GitHub Copilot / ${model.name ?? model.id}`,
+      supportedReasoningEfforts: model.supportedReasoningEfforts,
+      defaultReasoningEffort: model.defaultReasoningEffort,
+    }));
+    const configuredModels = flattenModels(settings, copilotModels);
+    return [...configuredModels, ...copilotModels];
+  }
+
+  private async validateReasoningEffort(
+    model: ModelRef,
+    settings: AppSettings = store.settings,
+    modelOptions?: readonly ModelOption[],
+  ): Promise<void> {
+    const effort: unknown = model.reasoningEffort;
+    if (effort === undefined) return;
+    if (!isReasoningEffort(effort)) throw new Error("不支持的推理强度");
+
+    const option = (modelOptions ?? (await this.listModelOptions(settings))).find(
+      (candidate) =>
+        candidate.ref.providerId === model.providerId && candidate.ref.modelId === model.modelId,
+    );
+    if (
+      option?.supportedReasoningEfforts !== undefined &&
+      !option.supportedReasoningEfforts.includes(effort)
+    ) {
+      throw new Error("当前模型不支持该推理强度");
+    }
+  }
+
   private async onMessage(conn: ClientConn, raw: string) {
     let msg: ClientMessage;
     try {
@@ -169,11 +209,22 @@ export class Hub {
           if (!store.projects.some((project) => project.id === msg.projectId)) {
             throw new Error("项目不存在");
           }
+          const requestedModel = msg.model ?? store.settings.defaultModel;
+          let model = requestedModel;
+          if (requestedModel) {
+            const modelOptions = await this.listModelOptions();
+            if (store.normalizeStoredReasoningEfforts(modelOptions)) {
+              this.broadcastSettings();
+              this.broadcastShell();
+            }
+            model = normalizeModelRefReasoning(requestedModel, modelOptions);
+            await this.validateReasoningEffort(model, store.settings, modelOptions);
+          }
           const thread: ThreadMeta = {
             id: randomUUID(),
             projectId: msg.projectId,
             title: "新会话",
-            model: msg.model ?? store.settings.defaultModel,
+            model,
             userId: conn.user.username,
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -196,12 +247,7 @@ export class Hub {
           const thread = store.getThread(msg.threadId);
           if (!thread) throw new Error("会话不存在");
           if (!this.canAccess(conn, thread)) throw new Error("无权操作该会话");
-          if (
-            msg.model.reasoningEffort &&
-            !REASONING_EFFORTS.includes(msg.model.reasoningEffort)
-          ) {
-            throw new Error("不支持的推理强度");
-          }
+          await this.validateReasoningEffort(msg.model);
           await this.manager.setThreadModel(
             msg.threadId,
             thread.model ?? store.settings.defaultModel,
@@ -248,15 +294,34 @@ export class Hub {
         }
         case "settings.update": {
           const prev = store.settings;
+          const modelProvidersChanged =
+            JSON.stringify(prev.providers) !== JSON.stringify(msg.settings.providers);
+          let nextSettings = msg.settings;
+          let modelOptions: ModelOption[] | undefined;
+          if (nextSettings.defaultModel) {
+            modelOptions = await this.listModelOptions(nextSettings);
+            const defaultModel = normalizeModelRefReasoning(
+              nextSettings.defaultModel,
+              modelOptions,
+            );
+            if (defaultModel !== nextSettings.defaultModel) {
+              nextSettings = { ...nextSettings, defaultModel };
+            }
+            await this.validateReasoningEffort(defaultModel, nextSettings, modelOptions);
+          }
           const providerChanged =
-            JSON.stringify(prev.providers) !== JSON.stringify(msg.settings.providers) ||
-            JSON.stringify(prev.mcpServers) !== JSON.stringify(msg.settings.mcpServers) ||
-            JSON.stringify(prev.disabledSkills) !== JSON.stringify(msg.settings.disabledSkills) ||
-            JSON.stringify(prev.skillDirectories) !== JSON.stringify(msg.settings.skillDirectories);
+            modelProvidersChanged ||
+            JSON.stringify(prev.mcpServers) !== JSON.stringify(nextSettings.mcpServers) ||
+            JSON.stringify(prev.disabledSkills) !== JSON.stringify(nextSettings.disabledSkills) ||
+            JSON.stringify(prev.skillDirectories) !== JSON.stringify(nextSettings.skillDirectories);
           if (providerChanged) {
             await this.manager.reconfigureOpenSessions();
           }
-          store.saveSettings(msg.settings);
+          store.saveSettings(nextSettings);
+          if (modelProvidersChanged) {
+            modelOptions ??= await this.listModelOptions(nextSettings);
+            if (store.normalizeStoredReasoningEfforts(modelOptions)) this.broadcastShell();
+          }
           this.broadcastSettings();
           this.broadcastSkills();
           this.reply(conn, msg.id);
@@ -279,20 +344,12 @@ export class Hub {
           break;
         }
         case "models.list": {
-          const configured = flattenModels(store.settings);
-          let copilotModels: ModelOption[] = [];
-          try {
-            const models = await this.manager.listModels();
-            copilotModels = models.map((m) => ({
-              ref: { providerId: "copilot", modelId: m.id },
-              label: `GitHub Copilot / ${m.name ?? m.id}`,
-              supportedReasoningEfforts: m.supportedReasoningEfforts,
-              defaultReasoningEffort: m.defaultReasoningEffort,
-            }));
-          } catch {
-            // copilot auth not available; ignore
+          const models = await this.listModelOptions();
+          if (store.normalizeStoredReasoningEfforts(models)) {
+            this.broadcastSettings();
+            this.broadcastShell();
           }
-          this.reply(conn, msg.id, [...configured, ...copilotModels]);
+          this.reply(conn, msg.id, models);
           break;
         }
         case "provider.models.discover": {

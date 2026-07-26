@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { REASONING_EFFORTS, flattenModels } from "@cca/protocol";
+import {
+  flattenModels,
+  normalizeConfiguredModelRef,
+  normalizeModelRefReasoning,
+} from "@cca/protocol";
+import type { AppSettings, ModelOption } from "@cca/protocol";
 import { CopilotManager } from "./copilot.js";
 
 test("flattenModels exposes configured reasoning capabilities", () => {
@@ -12,7 +17,8 @@ test("flattenModels exposes configured reasoning capabilities", () => {
         type: "openai",
         baseUrl: "https://example.com/v1",
         models: [
-          { id: "supported", reasoningEffort: true },
+          { id: "supported", supportedReasoningEfforts: ["low", "medium", "high"] },
+          { id: "legacy", reasoningEffort: true },
           { id: "unsupported", reasoningEffort: false },
           { id: "unknown" },
         ],
@@ -23,9 +29,182 @@ test("flattenModels exposes configured reasoning capabilities", () => {
     disabledSkills: [],
   });
 
-  assert.deepEqual(models[0]?.supportedReasoningEfforts, [...REASONING_EFFORTS]);
-  assert.deepEqual(models[1]?.supportedReasoningEfforts, []);
+  assert.deepEqual(models[0]?.supportedReasoningEfforts, ["low", "medium", "high"]);
+  assert.deepEqual(models[1]?.supportedReasoningEfforts, ["low", "medium", "high", "xhigh"]);
+  assert.deepEqual(models[2]?.supportedReasoningEfforts, []);
+  assert.equal(models[3]?.supportedReasoningEfforts, undefined);
+});
+
+test("flattenModels resolves reasoning efforts from the matching model catalog", () => {
+  const catalog: ModelOption[] = [
+    {
+      ref: { providerId: "copilot", modelId: "gpt-5.6-sol" },
+      label: "GPT-5.6 Sol",
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      defaultReasoningEffort: "medium",
+    },
+    {
+      ref: { providerId: "copilot", modelId: "gpt-5.4" },
+      label: "GPT-5.4",
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+    },
+  ];
+  const models = flattenModels(
+    {
+      providers: [
+        {
+          id: "custom",
+          name: "Custom",
+          type: "openai",
+          baseUrl: "https://example.com/v1",
+          models: [
+            { id: "gpt-5.6-sol" },
+            { id: "gpt-5.4" },
+            { id: "unknown" },
+            { id: "gpt-5.6-sol-disabled", reasoningEffort: false },
+          ],
+        },
+      ],
+      mcpServers: [],
+      skillDirectories: [],
+      disabledSkills: [],
+    },
+    catalog,
+  );
+
+  assert.deepEqual(models[0]?.supportedReasoningEfforts, [
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ]);
+  assert.equal(models[0]?.defaultReasoningEffort, "medium");
+  assert.deepEqual(models[1]?.supportedReasoningEfforts, [
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+  ]);
   assert.equal(models[2]?.supportedReasoningEfforts, undefined);
+  assert.deepEqual(models[3]?.supportedReasoningEfforts, []);
+});
+
+test("flattenModels uses model-specific fallbacks for existing ID-only provider configs", () => {
+  const models = flattenModels({
+    providers: [
+      {
+        id: "custom",
+        name: "Custom",
+        type: "openai",
+        baseUrl: "https://example.com/v1",
+        models: [{ id: "gpt-5.6-terra" }, { id: "gpt-5.4" }, { id: "gpt-4o" }],
+      },
+    ],
+    mcpServers: [],
+    skillDirectories: [],
+    disabledSkills: [],
+  });
+
+  assert.deepEqual(models[0]?.supportedReasoningEfforts, [
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ]);
+  assert.deepEqual(models[1]?.supportedReasoningEfforts, [
+    "none",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+  ]);
+  assert.equal(models[2]?.supportedReasoningEfforts, undefined);
+});
+
+test("persisted efforts are only removed when exact capabilities exclude them", () => {
+  const settings: AppSettings = {
+    providers: [
+      {
+        id: "custom",
+        name: "Custom",
+        type: "openai" as const,
+        baseUrl: "https://example.com/v1",
+        models: [
+          { id: "unknown" },
+          { id: "legacy", reasoningEffort: true },
+          { id: "gpt-5.6-sol" },
+          { id: "explicit", supportedReasoningEfforts: ["low"] },
+        ],
+      },
+    ],
+    mcpServers: [],
+    skillDirectories: [],
+    disabledSkills: [],
+  };
+
+  assert.deepEqual(
+    normalizeConfiguredModelRef(settings, {
+      providerId: "custom",
+      modelId: "unknown",
+      reasoningEffort: "high",
+    }),
+    { providerId: "custom", modelId: "unknown", reasoningEffort: "high" },
+  );
+  assert.equal(
+    normalizeConfiguredModelRef(settings, {
+      providerId: "custom",
+      modelId: "legacy",
+      reasoningEffort: "high",
+    }).reasoningEffort,
+    "high",
+  );
+  assert.equal(
+    normalizeConfiguredModelRef(settings, {
+      providerId: "custom",
+      modelId: "gpt-5.6-sol",
+      reasoningEffort: "max",
+    }).reasoningEffort,
+    "max",
+  );
+  const copilotOptions: ModelOption[] = [
+    {
+      ref: { providerId: "copilot", modelId: "gpt-5.6-sol" },
+      label: "GPT-5.6 Sol",
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    },
+    {
+      ref: { providerId: "copilot", modelId: "gpt-4o" },
+      label: "GPT-4o",
+      supportedReasoningEfforts: [],
+    },
+  ];
+  assert.equal(
+    normalizeModelRefReasoning(
+      { providerId: "copilot", modelId: "gpt-5.6-sol", reasoningEffort: "max" },
+      copilotOptions,
+    ).reasoningEffort,
+    "max",
+  );
+  assert.deepEqual(
+    normalizeModelRefReasoning(
+      { providerId: "copilot", modelId: "gpt-4o", reasoningEffort: "high" },
+      copilotOptions,
+    ),
+    { providerId: "copilot", modelId: "gpt-4o" },
+  );
+  assert.deepEqual(
+    normalizeConfiguredModelRef(settings, {
+      providerId: "custom",
+      modelId: "explicit",
+      reasoningEffort: "high",
+    }),
+    { providerId: "custom", modelId: "explicit" },
+  );
 });
 
 function seedRuntime(
@@ -68,10 +247,10 @@ test("setThreadModel hot-switches within a provider without disconnecting", asyn
   await manager.setThreadModel(
     "thread",
     { providerId: "provider", modelId: "old" },
-    { providerId: "provider", modelId: "new", reasoningEffort: "high" },
+    { providerId: "provider", modelId: "new", reasoningEffort: "max" },
   );
 
-  assert.deepEqual(calls, [["new", { reasoningEffort: "high" }]]);
+  assert.deepEqual(calls, [["new", { reasoningEffort: "max" }]]);
   assert.equal(disconnects, 0);
 });
 
