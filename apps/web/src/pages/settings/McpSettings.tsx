@@ -2,7 +2,21 @@ import { useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import type { McpServerConfig } from "@cca/protocol";
 import { useApp } from "../../lib/store";
-import { Button, Dialog, Field, Input, Select, Switch, Textarea } from "../../components/ui/primitives";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { FormDialog } from "@/components/ui/form-dialog";
+import { Input } from "@/components/ui/input";
+import { LabeledField } from "@/components/ui/labeled-field";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 
 const emptyServer = (): McpServerConfig => ({
   id: "",
@@ -41,6 +55,7 @@ export function McpSettings() {
   const [headersText, setHeadersText] = useState("");
   const [toolsText, setToolsText] = useState("*");
   const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState<McpServerConfig | null>(null);
 
   if (!settings) return null;
 
@@ -106,7 +121,8 @@ export function McpSettings() {
           <div key={s.id} className="flex items-center gap-3 rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
             <Switch
               checked={s.enabled}
-              onChange={(v) => save(settings.mcpServers.map((x) => (x.id === s.id ? { ...x, enabled: v } : x)))}
+              aria-label={`${s.enabled ? "停用" : "启用"} ${s.name}`}
+              onCheckedChange={(enabled) => save(settings.mcpServers.map((x) => (x.id === s.id ? { ...x, enabled } : x)))}
             />
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">{s.name}</div>
@@ -114,18 +130,17 @@ export function McpSettings() {
                 {s.type === "http" ? s.url : `${s.command} ${(s.args ?? []).join(" ")}`}
               </div>
             </div>
-            <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800">
+            <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal">
               {s.type === "http" ? "HTTP" : "本地"}
-            </span>
+            </Badge>
             <Button variant="ghost" size="icon" onClick={() => openEdit(s)}>
               <Pencil className="h-3.5 w-3.5" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => {
-                if (confirm(`删除 ${s.name}?`)) save(settings.mcpServers.filter((x) => x.id !== s.id));
-              }}
+              aria-label={`删除 ${s.name}`}
+              onClick={() => setDeleting(s)}
             >
               <Trash2 className="h-3.5 w-3.5 text-red-500" />
             </Button>
@@ -133,43 +148,51 @@ export function McpSettings() {
         ))}
       </div>
 
-      <Dialog open={editing !== null} onClose={() => setEditing(null)} title={editing?.name ? "编辑 MCP 服务器" : "添加 MCP 服务器"}>
+      <FormDialog open={editing !== null} onClose={() => setEditing(null)} title={editing?.name ? "编辑 MCP 服务器" : "添加 MCP 服务器"}>
         {editing && (
           <>
-            <Field label="名称">
+            <LabeledField label="名称">
               <Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="例如 filesystem" />
-            </Field>
-            <Field label="类型">
-              <Select value={editing.type} onChange={(e) => setEditing({ ...editing, type: e.target.value as "local" | "http" })}>
-                <option value="local">本地(stdio 子进程)</option>
-                <option value="http">远程(HTTP/SSE)</option>
+            </LabeledField>
+            <LabeledField label="类型">
+              <Select
+                value={editing.type}
+                onValueChange={(type) => setEditing({ ...editing, type: type as "local" | "http" })}
+              >
+                <SelectTrigger className="w-full" aria-label="类型">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="local">本地(stdio 子进程)</SelectItem>
+                  <SelectItem value="http">远程(HTTP/SSE)</SelectItem>
+                </SelectContent>
               </Select>
-            </Field>
+            </LabeledField>
             {editing.type === "local" ? (
               <>
-                <Field label="启动命令">
+                <LabeledField label="启动命令">
                   <Input value={editing.command ?? ""} onChange={(e) => setEditing({ ...editing, command: e.target.value })} placeholder="npx" />
-                </Field>
-                <Field label="参数(空格分隔)">
+                </LabeledField>
+                <LabeledField label="参数(空格分隔)">
                   <Input className="mono" value={argsText} onChange={(e) => setArgsText(e.target.value)} placeholder="-y @modelcontextprotocol/server-filesystem /data" />
-                </Field>
-                <Field label={"环境变量(每行 KEY=VALUE)"}>
+                </LabeledField>
+                <LabeledField label="环境变量(每行 KEY=VALUE)">
                   <Textarea rows={3} className="mono" value={envText} onChange={(e) => setEnvText(e.target.value)} />
-                </Field>
+                </LabeledField>
               </>
             ) : (
               <>
-                <Field label="URL">
+                <LabeledField label="URL">
                   <Input className="mono" value={editing.url ?? ""} onChange={(e) => setEditing({ ...editing, url: e.target.value })} placeholder="https://example.com/mcp" />
-                </Field>
-                <Field label={"请求头(每行 KEY=VALUE)"}>
+                </LabeledField>
+                <LabeledField label="请求头(每行 KEY=VALUE)">
                   <Textarea rows={3} className="mono" value={headersText} onChange={(e) => setHeadersText(e.target.value)} placeholder="Authorization=Bearer xxx" />
-                </Field>
+                </LabeledField>
               </>
             )}
-            <Field label={"允许的工具(逗号分隔,* 表示全部)"}>
+            <LabeledField label="允许的工具(逗号分隔,* 表示全部)">
               <Input className="mono" value={toolsText} onChange={(e) => setToolsText(e.target.value)} placeholder="*" />
-            </Field>
+            </LabeledField>
             {error && <div className="mb-2 text-xs text-red-500">{error}</div>}
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setEditing(null)}>
@@ -179,7 +202,20 @@ export function McpSettings() {
             </div>
           </>
         )}
-      </Dialog>
+      </FormDialog>
+
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title="删除 MCP 服务器？"
+        description={deleting ? `将删除“${deleting.name}”的连接和工具配置。` : ""}
+        confirmLabel="删除"
+        destructive
+        onConfirm={() => {
+          if (deleting) save(settings.mcpServers.filter((server) => server.id !== deleting.id));
+          setDeleting(null);
+        }}
+      />
     </div>
   );
 }

@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useApp } from "../../lib/store";
-import { Button, Dialog, Field, Input, Switch, Textarea } from "../../components/ui/primitives";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { FormDialog } from "@/components/ui/form-dialog";
+import { Input } from "@/components/ui/input";
+import { LabeledField } from "@/components/ui/labeled-field";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 
 export function SkillsSettings() {
   const skills = useApp((s) => s.skills);
@@ -13,6 +19,7 @@ export function SkillsSettings() {
   const [editing, setEditing] = useState<{ name: string; description: string; content: string } | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [newDir, setNewDir] = useState("");
+  const [deletingSkill, setDeletingSkill] = useState<string | null>(null);
 
   if (!settings) return null;
 
@@ -66,7 +73,11 @@ export function SkillsSettings() {
                 <div className="mono text-sm font-medium">/{sk.name}</div>
                 {sk.description && <div className="truncate text-xs text-zinc-500">{sk.description}</div>}
               </div>
-              <Switch checked={!sk.disabled} onChange={(enabled) => toggle(sk.name, !enabled)} />
+              <Switch
+                checked={!sk.disabled}
+                aria-label={`${sk.disabled ? "启用" : "停用"}技能 ${sk.name}`}
+                onCheckedChange={(enabled) => toggle(sk.name, !enabled)}
+              />
               <Button
                 variant="ghost"
                 size="icon"
@@ -81,9 +92,8 @@ export function SkillsSettings() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => {
-                    if (confirm(`删除技能 ${sk.name}?`)) void deleteSkill(sk.name);
-                  }}
+                  aria-label={`删除技能 ${sk.name}`}
+                  onClick={() => setDeletingSkill(sk.name)}
                 >
                   <Trash2 className="h-3.5 w-3.5 text-red-500" />
                 </Button>
@@ -123,10 +133,10 @@ export function SkillsSettings() {
         </div>
       </section>
 
-      <Dialog open={editing !== null} onClose={() => setEditing(null)} title={isNew ? "新建技能" : `编辑技能 /${editing?.name}`} wide>
+      <FormDialog open={editing !== null} onClose={() => setEditing(null)} title={isNew ? "新建技能" : `编辑技能 /${editing?.name}`} wide>
         {editing && (
           <>
-            <Field label="名称(小写字母、数字、中划线)">
+            <LabeledField label="名称(小写字母、数字、中划线)">
               <Input
                 className="mono"
                 value={editing.name}
@@ -134,11 +144,11 @@ export function SkillsSettings() {
                 onChange={(e) => setEditing({ ...editing, name: e.target.value })}
                 placeholder="code-review"
               />
-            </Field>
-            <Field label="描述">
+            </LabeledField>
+            <LabeledField label="描述">
               <Input value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} placeholder="这个技能做什么" />
-            </Field>
-            <Field label="内容(Markdown,将注入到 Agent 上下文)">
+            </LabeledField>
+            <LabeledField label="内容(Markdown,将注入到 Agent 上下文)">
               <Textarea
                 rows={14}
                 className="mono"
@@ -146,7 +156,7 @@ export function SkillsSettings() {
                 onChange={(e) => setEditing({ ...editing, content: e.target.value })}
                 placeholder={"# 指南\n\n1. ...\n2. ..."}
               />
-            </Field>
+            </LabeledField>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setEditing(null)}>
                 取消
@@ -163,7 +173,20 @@ export function SkillsSettings() {
             </div>
           </>
         )}
-      </Dialog>
+      </FormDialog>
+
+      <ConfirmDialog
+        open={deletingSkill !== null}
+        onOpenChange={(open) => !open && setDeletingSkill(null)}
+        title="删除技能？"
+        description={deletingSkill ? `将从服务器删除技能 /${deletingSkill}。` : ""}
+        confirmLabel="删除"
+        destructive
+        onConfirm={() => {
+          if (deletingSkill) void deleteSkill(deletingSkill);
+          setDeletingSkill(null);
+        }}
+      />
     </div>
   );
 }

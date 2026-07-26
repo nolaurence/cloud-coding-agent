@@ -2,7 +2,14 @@ import { useApp } from "../../lib/store";
 import { THEME_OPTIONS, useTheme, type ThemePreference } from "../../lib/theme";
 import { ModelPicker } from "../../components/ModelPicker";
 import { ReasoningEffortPicker } from "../../components/ReasoningEffortPicker";
-import { Button, Select } from "../../components/ui/primitives";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { GitBindingsSettings } from "./GitBindingsSettings";
 
 export function GeneralSettings() {
@@ -25,15 +32,19 @@ export function GeneralSettings() {
           </div>
           <div className="w-36">
             <Select
-              aria-label="界面主题"
               value={theme}
-              onChange={(event) => setTheme(event.target.value as ThemePreference)}
+              onValueChange={(value) => setTheme(value as ThemePreference)}
             >
-              {THEME_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
+              <SelectTrigger className="w-full" aria-label="界面主题">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {THEME_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
           </div>
         </div>

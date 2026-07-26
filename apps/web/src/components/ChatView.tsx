@@ -71,7 +71,15 @@ function ReasoningBlock({ text, streaming = false }: { text: string; streaming?:
   );
 }
 
-function CopyAction({ text, label }: { text: string; label: string }) {
+function CopyAction({
+  text,
+  label,
+  className,
+}: {
+  text: string;
+  label: string;
+  className?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -98,7 +106,10 @@ function CopyAction({ text, label }: { text: string; label: string }) {
   return (
     <button
       type="button"
-      className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+      className={cn(
+        "flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-200",
+        className,
+      )}
       aria-label={copied ? "已复制" : label}
       title={copied ? "已复制" : label}
       onClick={() => void copy()}
@@ -195,8 +206,13 @@ function UserMessage({ message }: { message: ChatMessage }) {
   const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
 
   return (
-    <article className="group flex flex-col items-end gap-1">
-      <div className="relative max-w-[80%] rounded-2xl border border-zinc-200 bg-zinc-100 p-3 text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100">
+    <article className="group/user flex justify-end py-1">
+      <div className="relative max-w-[80%] rounded-3xl bg-muted px-4 py-2.5 text-foreground">
+        <CopyAction
+          text={message.text}
+          label="复制消息"
+          className="absolute -left-9 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100"
+        />
         {images.length > 0 && (
           <div className={cn("grid gap-2", images.length > 1 && "grid-cols-2")}>
             {images.map((image) => (
@@ -218,10 +234,6 @@ function UserMessage({ message }: { message: ChatMessage }) {
             <Markdown>{content}</Markdown>
           </div>
         )}
-      </div>
-      <div className="flex h-7 w-full max-w-[80%] items-center justify-end gap-1 pr-1 text-xs text-zinc-400 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-        <MessageTime at={message.createdAt} />
-        {content && <CopyAction text={content} label="复制消息" />}
       </div>
     </article>
   );

@@ -12,7 +12,10 @@ import {
   isBrowseDirectoryPath,
 } from "../lib/directoryPaths";
 import { cn } from "../lib/utils";
-import { Button } from "./ui/primitives";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Kbd } from "@/components/ui/kbd";
 
 interface ProjectDirectoryPickerProps {
   onClose: () => void;
@@ -25,9 +28,9 @@ type PickerItem =
 
 function KeyHint({ children }: { children: ReactNode }) {
   return (
-    <kbd className="inline-flex min-h-6 min-w-6 items-center justify-center rounded bg-zinc-200 px-1.5 text-[11px] leading-none text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+    <Kbd className="min-h-6 min-w-6 px-1.5 text-[11px] leading-none">
       {children}
-    </kbd>
+    </Kbd>
   );
 }
 
@@ -185,36 +188,24 @@ export function ProjectDirectoryPicker({ onClose, onAdd }: ProjectDirectoryPicke
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-[1px]"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-label="添加项目目录"
-        className="flex h-[min(46rem,calc(100vh-2rem))] w-[min(64rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900"
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            onClose();
-          }
-        }}
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        showCloseButton={false}
+        className="flex h-[min(46rem,calc(100vh-2rem))] w-[min(64rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(64rem,calc(100vw-2rem))]"
       >
+        <DialogTitle className="sr-only">添加项目目录</DialogTitle>
         <div className="flex h-16 shrink-0 items-center gap-2 px-4">
           <Button variant="ghost" size="icon" title="返回" aria-label="返回" onClick={onClose}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <input
+          <Input
             ref={inputRef}
             role="combobox"
             aria-autocomplete="list"
             aria-expanded="true"
             aria-controls="project-directory-list"
             aria-activedescendant={activeIndex === null ? undefined : `project-directory-${activeIndex}`}
-            className="mono h-10 min-w-0 flex-1 bg-transparent px-1 text-base font-medium outline-none placeholder:text-zinc-500"
+            className="mono h-10 min-w-0 flex-1 border-0 bg-transparent px-1 text-base font-medium shadow-none focus-visible:ring-0 dark:bg-transparent"
             value={query}
             spellCheck={false}
             placeholder="输入服务器上的绝对路径"
@@ -258,15 +249,16 @@ export function ProjectDirectoryPicker({ onClose, onAdd }: ProjectDirectoryPicke
               </div>
             ) : (
               items.map((item, index) => (
-                <button
+                <Button
                   key={item.kind === "up" ? "up" : item.entry.fullPath}
                   id={`project-directory-${index}`}
                   type="button"
                   role="option"
                   aria-selected={activeIndex === index}
                   data-picker-index={index}
+                  variant="ghost"
                   className={cn(
-                    "flex h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm outline-none",
+                    "h-11 w-full justify-start gap-3 px-3 text-left text-sm font-normal",
                     activeIndex === index
                       ? "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-white"
                       : "text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/60",
@@ -281,7 +273,7 @@ export function ProjectDirectoryPicker({ onClose, onAdd }: ProjectDirectoryPicke
                     <Folder className="h-5 w-5 shrink-0 text-zinc-500" />
                   )}
                   <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                </button>
+                </Button>
               ))
             )}
           </div>
@@ -297,7 +289,7 @@ export function ProjectDirectoryPicker({ onClose, onAdd }: ProjectDirectoryPicke
           <span className="flex items-center gap-1.5"><KeyHint>Backspace</KeyHint> 返回</span>
           <span className="flex items-center gap-1.5"><KeyHint>Esc</KeyHint> 关闭</span>
         </div>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

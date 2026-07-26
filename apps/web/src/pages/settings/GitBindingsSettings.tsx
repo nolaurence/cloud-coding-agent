@@ -10,7 +10,10 @@ import {
 } from "lucide-react";
 import type { GitBinding, GitProvider } from "@cca/protocol";
 import { request } from "../../lib/client";
-import { Button, Input } from "../../components/ui/primitives";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Input } from "@/components/ui/input";
 
 const providers: { id: GitProvider; name: string; description: string }[] = [
   { id: "github", name: "GitHub", description: "Personal Access Token" },
@@ -31,6 +34,7 @@ export function GitBindingsSettings() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<GitProvider | null>(null);
   const [error, setError] = useState("");
+  const [unbinding, setUnbinding] = useState<{ provider: GitProvider; name: string } | null>(null);
 
   const load = async () => {
     try {
@@ -67,7 +71,6 @@ export function GitBindingsSettings() {
   };
 
   const unbind = async (provider: GitProvider, name: string) => {
-    if (!window.confirm(`解除 ${name} 账号绑定？`)) return;
     setBusy(provider);
     setError("");
     try {
@@ -135,9 +138,9 @@ export function GitBindingsSettings() {
                     <div className="text-xs text-zinc-500">{provider.description}</div>
                   </div>
                   {binding && (
-                    <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    <Badge variant="outline" className="shrink-0 border-emerald-200 text-emerald-700 dark:border-emerald-900 dark:text-emerald-400">
                       <CheckCircle2 className="h-3.5 w-3.5" /> 已连接
-                    </span>
+                    </Badge>
                   )}
                 </div>
 
@@ -164,7 +167,7 @@ export function GitBindingsSettings() {
                       variant="outline"
                       className="min-h-9 shrink-0 self-stretch sm:self-auto"
                       disabled={busy !== null}
-                      onClick={() => void unbind(provider.id, provider.name)}
+                      onClick={() => setUnbinding({ provider: provider.id, name: provider.name })}
                     >
                       {busy === provider.id ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -198,11 +201,13 @@ export function GitBindingsSettings() {
                           setTokens((value) => ({ ...value, [provider.id]: event.target.value }))
                         }
                       />
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon"
                         title={revealed[provider.id] ? "隐藏令牌" : "显示令牌"}
                         aria-label={revealed[provider.id] ? "隐藏令牌" : "显示令牌"}
-                        className="absolute top-0 right-0 flex h-9 w-10 items-center justify-center text-zinc-400 hover:text-zinc-700 disabled:opacity-50 dark:hover:text-zinc-200"
+                        className="absolute top-0 right-0 h-8 w-9 text-muted-foreground"
                         disabled={busy !== null}
                         onClick={() =>
                           setRevealed((value) => ({ ...value, [provider.id]: !value[provider.id] }))
@@ -213,7 +218,7 @@ export function GitBindingsSettings() {
                         ) : (
                           <Eye className="h-4 w-4" />
                         )}
-                      </button>
+                      </Button>
                     </div>
                     <Button
                       type="submit"
@@ -230,6 +235,19 @@ export function GitBindingsSettings() {
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={unbinding !== null}
+        onOpenChange={(open) => !open && setUnbinding(null)}
+        title="解除代码托管账户？"
+        description={unbinding ? `Agent 将无法继续使用已保存的 ${unbinding.name} 授权。` : ""}
+        confirmLabel="解除绑定"
+        destructive
+        onConfirm={() => {
+          if (unbinding) void unbind(unbinding.provider, unbinding.name);
+          setUnbinding(null);
+        }}
+      />
     </section>
   );
 }

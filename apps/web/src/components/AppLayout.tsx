@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
-import { Bot, Menu, WifiOff } from "lucide-react";
+import { Menu, WifiOff } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { useApp } from "../lib/store";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { BrandLogo } from "./BrandLogo";
 
 export function AppLayout() {
   const connected = useApp((s) => s.connected);
@@ -20,42 +23,51 @@ export function AppLayout() {
     setSidebarOpen(false);
   }, [location.pathname]);
 
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const closeDesktopSheet = (event: MediaQueryListEvent | MediaQueryList) => {
+      if (event.matches) setSidebarOpen(false);
+    };
+    closeDesktopSheet(desktop);
+    desktop.addEventListener("change", closeDesktopSheet);
+    return () => desktop.removeEventListener("change", closeDesktopSheet);
+  }, []);
+
   return (
     <div className="flex h-dvh overflow-hidden bg-white dark:bg-zinc-950">
       <div className="m-[10px] hidden min-h-0 shrink-0 md:block">
         <Sidebar />
       </div>
 
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <button
-            type="button"
-            aria-label="关闭侧栏"
-            className="absolute inset-0 bg-black/45"
-            onClick={() => setSidebarOpen(false)}
+      <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          className="w-[min(85vw,18rem)] max-w-none gap-0 p-0 md:hidden sm:max-w-none"
+        >
+          <SheetTitle className="sr-only">导航</SheetTitle>
+          <Sidebar
+            onNavigate={() => setSidebarOpen(false)}
+            onClose={() => setSidebarOpen(false)}
           />
-          <div className="relative h-full w-[min(85vw,18rem)] shadow-2xl">
-            <Sidebar
-              onNavigate={() => setSidebarOpen(false)}
-              onClose={() => setSidebarOpen(false)}
-            />
-          </div>
-        </div>
-      )}
+        </SheetContent>
+      </Sheet>
 
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-200 px-3 md:hidden dark:border-zinc-800">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             aria-label="打开侧栏"
             title="打开侧栏"
-            className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            className="text-muted-foreground"
             onClick={() => setSidebarOpen(true)}
           >
             <Menu className="h-5 w-5" />
-          </button>
+          </Button>
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <Bot className="h-4 w-4 shrink-0" />
+            <BrandLogo className="h-5 w-5" />
             <span className="truncate text-sm font-medium">{mobileTitle}</span>
           </div>
           {!connected && (

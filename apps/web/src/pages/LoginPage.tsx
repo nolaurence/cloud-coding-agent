@@ -1,8 +1,9 @@
 import { FormEvent, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { Bot } from "lucide-react";
 import { useApp } from "../lib/store";
-import { Button, Input } from "../components/ui/primitives";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { BrandLogo } from "../components/BrandLogo";
 
 export function LoginPage() {
   const user = useApp((s) => s.user);
@@ -39,9 +40,7 @@ export function LoginPage() {
     <div className="flex h-full items-center justify-center bg-white px-6 dark:bg-zinc-950">
       <div className="w-full max-w-sm py-10">
         <div className="mb-7 flex flex-col items-center gap-2">
-          <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
-            <Bot className="h-5 w-5" />
-          </div>
+          <BrandLogo className="mb-1 h-14 w-14 drop-shadow-lg" />
           <h1 className="text-lg font-semibold">云端编码助手</h1>
           <p className="text-xs text-zinc-500">
             {mode === "login" ? "登录以继续" : "创建新账户"}
@@ -85,27 +84,29 @@ export function LoginPage() {
         </form>
         <div className="mt-4 text-center text-xs text-zinc-500">
           {mode === "login" ? (
-            <button
+            <Button
               type="button"
-              className="text-zinc-700 hover:underline dark:text-zinc-300"
+              variant="link"
+              className="h-auto px-0 text-xs font-normal"
               onClick={() => {
                 setMode("register");
                 setError("");
               }}
             >
               没有账户？注册
-            </button>
+            </Button>
           ) : (
-            <button
+            <Button
               type="button"
-              className="text-zinc-700 hover:underline dark:text-zinc-300"
+              variant="link"
+              className="h-auto px-0 text-xs font-normal"
               onClick={() => {
                 setMode("login");
                 setError("");
               }}
             >
               已有账户？登录
-            </button>
+            </Button>
           )}
         </div>
       </div>

@@ -8,6 +8,7 @@ import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
 import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
 import { RightPanel } from "../components/RightPanel";
+import { Button } from "@/components/ui/button";
 
 export function ThreadPage() {
   const { threadId } = useParams<{ threadId: string }>();
@@ -77,14 +78,17 @@ export function ThreadPage() {
                 </div>
               )}
             </div>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="打开工作区面板"
               title="打开工作区面板"
-              className="rounded-md p-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900"
+              className="text-muted-foreground"
               onClick={() => setPanelOpen(true)}
             >
               <PanelRightOpen className="h-4 w-4" />
-            </button>
+            </Button>
           </div>
         </header>
         <div className="relative min-h-0 flex-1">

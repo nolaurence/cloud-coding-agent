@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { Blocks, Cpu, Settings2, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { buttonVariants } from "@/components/ui/button";
 
 const nav = [
   { to: "general", label: "通用", icon: Settings2 },
@@ -20,10 +21,9 @@ export function SettingsLayout() {
             to={item.to}
             className={({ isActive }) =>
               cn(
-                "flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm",
-                isActive
-                  ? "bg-zinc-200 font-medium dark:bg-zinc-800"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800/60",
+                buttonVariants({ variant: isActive ? "secondary" : "ghost", size: "sm" }),
+                "shrink-0 justify-start",
+                !isActive && "text-muted-foreground",
               )
             }
           >

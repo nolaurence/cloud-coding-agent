@@ -20,6 +20,9 @@ import type {
 import { onEvent, request } from "../lib/client";
 import { useThreadState } from "../lib/store";
 import { cn } from "../lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type PanelTab = "browser" | "terminal" | "files" | "diff" | "context";
 
@@ -43,40 +46,42 @@ export function RightPanel({
   const [tab, setTab] = useState<PanelTab>("files");
 
   return (
-    <aside className="flex h-full min-h-0 w-full flex-col border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+    <Tabs
+      value={tab}
+      onValueChange={(value) => setTab(value as PanelTab)}
+      className="flex h-full min-h-0 w-full flex-col gap-0 border-l border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
+    >
       <div className="flex h-11 shrink-0 items-center border-b border-zinc-200 px-1 dark:border-zinc-800">
-        <div className="flex min-w-0 flex-1 overflow-x-auto">
+        <TabsList variant="line" className="h-10 min-w-0 flex-1 justify-start overflow-x-auto rounded-none p-0">
           {tabs.map((item) => (
-            <button
+            <TabsTrigger
               key={item.id}
-              type="button"
+              value={item.id}
+              aria-label={item.label}
               title={item.label}
-              onClick={() => setTab(item.id)}
-              className={cn(
-                "flex h-10 shrink-0 items-center gap-1.5 border-b-2 px-2 text-xs",
-                tab === item.id
-                  ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100"
-                  : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200",
-              )}
+              className="h-10 flex-none px-2 text-xs"
             >
               <item.icon className="h-3.5 w-3.5" />
               <span className="hidden 2xl:inline">{item.label}</span>
-            </button>
+            </TabsTrigger>
           ))}
-        </div>
-        <button type="button" title="关闭面板" className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800" onClick={onClose}>
+        </TabsList>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="关闭面板" title="关闭面板" onClick={onClose}>
           <PanelRightClose className="h-4 w-4" />
-        </button>
+        </Button>
       </div>
       <div className="min-h-0 flex-1">
-        {tab === "browser" && <BrowserPanel />}
-        {tab === "terminal" && <TerminalPanel threadId={threadId} />}
-        {tab === "files" && projectId && <FilesPanel projectId={projectId} />}
-        {tab === "diff" && projectId && <DiffPanel projectId={projectId} />}
-        {tab === "context" && <ContextPanel threadId={threadId} />}
-        {!projectId && (tab === "files" || tab === "diff") && <Empty text="项目不存在" />}
+        <TabsContent value="browser" className="h-full"><BrowserPanel /></TabsContent>
+        <TabsContent value="terminal" className="h-full"><TerminalPanel threadId={threadId} /></TabsContent>
+        <TabsContent value="files" className="h-full">
+          {projectId ? <FilesPanel projectId={projectId} /> : <Empty text="项目不存在" />}
+        </TabsContent>
+        <TabsContent value="diff" className="h-full">
+          {projectId ? <DiffPanel projectId={projectId} /> : <Empty text="项目不存在" />}
+        </TabsContent>
+        <TabsContent value="context" className="h-full"><ContextPanel threadId={threadId} /></TabsContent>
       </div>
-    </aside>
+    </Tabs>
   );
 }
 
@@ -91,9 +96,11 @@ function BrowserPanel() {
   return (
     <div className="flex h-full flex-col">
       <form className="flex gap-1 border-b border-zinc-200 p-2 dark:border-zinc-800" onSubmit={(event) => { event.preventDefault(); setUrl(draft.trim()); }}>
-        <input className="h-8 min-w-0 flex-1 rounded border border-zinc-300 bg-transparent px-2 text-xs outline-none dark:border-zinc-700" value={draft} onChange={(event) => setDraft(event.target.value)} aria-label="预览地址" />
-        <button className="rounded p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800" title="刷新预览"><RefreshCw className="h-3.5 w-3.5" /></button>
-        <a className="rounded p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800" href={normalized} target="_blank" rel="noreferrer" title="在新窗口打开"><ExternalLink className="h-3.5 w-3.5" /></a>
+        <Input className="min-w-0 flex-1 text-xs" value={draft} onChange={(event) => setDraft(event.target.value)} aria-label="预览地址" />
+        <Button type="submit" variant="ghost" size="icon" aria-label="刷新预览" title="刷新预览"><RefreshCw className="h-3.5 w-3.5" /></Button>
+        <Button asChild variant="ghost" size="icon">
+          <a href={normalized} target="_blank" rel="noreferrer" aria-label="在新窗口打开" title="在新窗口打开"><ExternalLink className="h-3.5 w-3.5" /></a>
+        </Button>
       </form>
       <iframe key={normalized} src={normalized} title="网页预览" className="min-h-0 flex-1 bg-white" sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts" />
       <div className="border-t border-zinc-200 px-2 py-1 text-[10px] text-zinc-400 dark:border-zinc-800">目标站点禁止 iframe 时，请使用右上角新窗口打开。</div>
@@ -134,8 +141,8 @@ function TerminalPanel({ threadId }: { threadId: string }) {
       {error && <div className="px-3 py-1 text-xs text-red-400">{error}</div>}
       <form className="flex border-t border-zinc-800 p-2" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         <span className="px-2 py-1 text-emerald-400">$</span>
-        <input className="min-w-0 flex-1 bg-transparent px-1 font-mono text-xs outline-none" value={command} onChange={(event) => setCommand(event.target.value)} placeholder="输入命令" />
-        <button className="rounded p-1.5 hover:bg-zinc-800" title="执行"><Send className="h-3.5 w-3.5" /></button>
+        <Input className="min-w-0 flex-1 border-0 bg-transparent px-1 font-mono text-xs shadow-none focus-visible:ring-0 dark:bg-transparent" value={command} onChange={(event) => setCommand(event.target.value)} placeholder="输入命令" />
+        <Button type="submit" variant="ghost" size="icon-sm" className="text-zinc-300 hover:bg-zinc-800 hover:text-white" aria-label="执行" title="执行"><Send className="h-3.5 w-3.5" /></Button>
       </form>
     </div>
   );
@@ -149,13 +156,13 @@ function FilesPanel({ projectId }: { projectId: string }) {
   const open = (path: string) => void request<ProjectFileContent>({ type: "project.file.read", projectId, path }).then(setSelected).catch((reason) => setError(reason.message));
   return selected ? (
     <div className="flex h-full flex-col">
-      <button type="button" className="truncate border-b border-zinc-200 px-3 py-2 text-left text-xs font-medium hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900" onClick={() => setSelected(null)}>← {selected.path}</button>
+      <Button type="button" variant="ghost" className="h-auto justify-start truncate rounded-none border-b border-zinc-200 px-3 py-2 text-left text-xs font-medium dark:border-zinc-800" onClick={() => setSelected(null)}>← {selected.path}</Button>
       <pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-3 font-mono text-xs leading-5">{selected.content}</pre>
     </div>
   ) : (
     <div className="h-full overflow-auto p-2">
       {error && <div className="p-2 text-xs text-red-500">{error}</div>}
-      {files.map((entry) => <button key={entry.path} disabled={entry.kind === "directory"} onClick={() => open(entry.path)} className={cn("flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs", entry.kind === "file" ? "hover:bg-zinc-100 dark:hover:bg-zinc-800" : "font-medium text-zinc-500")}><span>{entry.kind === "directory" ? "▾" : "·"}</span><span className="truncate">{entry.path}</span></button>)}
+      {files.map((entry) => <Button key={entry.path} type="button" variant="ghost" disabled={entry.kind === "directory"} onClick={() => open(entry.path)} className={cn("h-7 w-full justify-start gap-2 px-2 text-left text-xs font-normal", entry.kind === "directory" && "font-medium text-zinc-500 opacity-100")}><span>{entry.kind === "directory" ? "▾" : "·"}</span><span className="truncate">{entry.path}</span></Button>)}
     </div>
   );
 }
@@ -165,7 +172,7 @@ function DiffPanel({ projectId }: { projectId: string }) {
   const [error, setError] = useState("");
   const load = () => void request<GitDiffResult>({ type: "project.diff", projectId }).then(setDiff).catch((reason) => setError(reason.message));
   useEffect(load, [projectId]);
-  return <div className="flex h-full flex-col"><div className="flex items-center justify-between border-b border-zinc-200 px-3 py-2 text-xs dark:border-zinc-800"><span>{diff ? `${diff.files} 个文件 · +${diff.additions} -${diff.deletions}` : "Git 差异"}</span><button onClick={load} title="刷新"><RefreshCw className="h-3.5 w-3.5" /></button></div>{error ? <Empty text={error} /> : <pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-3 font-mono text-xs leading-5">{diff?.patch || "暂无未提交差异"}</pre>}</div>;
+  return <div className="flex h-full flex-col"><div className="flex items-center justify-between border-b border-zinc-200 px-3 py-1.5 text-xs dark:border-zinc-800"><span>{diff ? `${diff.files} 个文件 · +${diff.additions} -${diff.deletions}` : "Git 差异"}</span><Button type="button" variant="ghost" size="icon-xs" aria-label="刷新差异" title="刷新" onClick={load}><RefreshCw className="h-3.5 w-3.5" /></Button></div>{error ? <Empty text={error} /> : <pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-3 font-mono text-xs leading-5">{diff?.patch || "暂无未提交差异"}</pre>}</div>;
 }
 
 function ContextPanel({ threadId }: { threadId: string }) {

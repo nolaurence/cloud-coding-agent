@@ -6,7 +6,13 @@ import { useApp } from "../lib/store";
 import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
 import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
-import { Select } from "../components/ui/primitives";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export function NewChatPage() {
   const projects = useApp((s) => s.projects);
@@ -51,17 +57,20 @@ export function NewChatPage() {
           <>
             <div className="mb-3 flex flex-wrap items-center justify-center gap-2">
               <Select
-                aria-label="选择项目"
-                className="w-full sm:w-44"
                 disabled={creating}
                 value={effectiveProjectId}
-                onChange={(e) => setProjectId(e.target.value)}
+                onValueChange={setProjectId}
               >
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
+                <SelectTrigger className="w-full sm:w-44" aria-label="选择项目">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <Composer

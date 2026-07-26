@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
-  Bot,
   FolderGit2,
   FolderPlus,
   Loader2,
@@ -17,8 +16,10 @@ import {
 } from "lucide-react";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
-import { Button } from "./ui/primitives";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ProjectDirectoryPicker } from "./ProjectDirectoryPicker";
+import { BrandLogo } from "./BrandLogo";
 
 export function Sidebar({
   onNavigate,
@@ -39,6 +40,11 @@ export function Sidebar({
   const location = useLocation();
   const navigate = useNavigate();
   const [addOpen, setAddOpen] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<
+    | { kind: "project"; id: string; name: string }
+    | { kind: "thread"; id: string; name: string; active: boolean }
+    | null
+  >(null);
 
   const threadsByProject = (projectId: string) =>
     threads
@@ -48,20 +54,21 @@ export function Sidebar({
   return (
     <aside className="flex h-full w-[17rem] shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:rounded-xl md:border dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex h-12 items-center gap-2 px-4">
-        <Bot className="h-5 w-5 text-zinc-800 dark:text-zinc-100" />
+        <BrandLogo className="h-6 w-6" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">云端编码助手</span>
         {!connected && (
           <WifiOff className="h-3.5 w-3.5 text-amber-500" aria-label="正在连接服务器" />
         )}
         {onClose && (
-          <button
+          <Button
             type="button"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"
+            variant="ghost"
+            size="icon-sm"
             aria-label="关闭侧栏"
             onClick={onClose}
           >
             <X className="h-4 w-4" />
-          </button>
+          </Button>
         )}
       </div>
 
@@ -92,18 +99,16 @@ export function Sidebar({
                 {project.name}
               </span>
               {user?.role === "admin" && (
-                <button
-                  className="flex h-6 w-6 items-center justify-center rounded opacity-100 hover:bg-zinc-200 md:opacity-0 md:group-hover:opacity-100 dark:hover:bg-zinc-700"
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="opacity-100 md:opacity-0 md:group-hover:opacity-100"
                   aria-label={`移除项目 ${project.name}`}
                   title="移除项目"
-                  onClick={() => {
-                    if (confirm(`移除项目 ${project.name}？（不会删除磁盘文件）`)) {
-                      void removeProject(project.id);
-                    }
-                  }}
+                  onClick={() => setConfirmTarget({ kind: "project", id: project.id, name: project.name })}
                 >
                   <Trash2 className="h-3.5 w-3.5 text-zinc-400 hover:text-red-500" />
-                </button>
+                </Button>
               )}
             </div>
             {threadsByProject(project.id).map((thread) => {
@@ -115,10 +120,9 @@ export function Sidebar({
                     to={`/thread/${thread.id}`}
                     onClick={onNavigate}
                     className={cn(
-                      "flex items-center gap-2 rounded-md px-2 py-1.5 pr-9 text-sm",
-                      active
-                        ? "bg-zinc-200 font-medium dark:bg-zinc-800"
-                        : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800/60",
+                      buttonVariants({ variant: active ? "secondary" : "ghost", size: "sm" }),
+                      "w-full justify-start pr-9 font-normal",
+                      active ? "font-medium" : "text-muted-foreground",
                     )}
                   >
                     {running ? (
@@ -128,22 +132,16 @@ export function Sidebar({
                     )}
                     <span className="min-w-0 flex-1 truncate">{thread.title}</span>
                   </Link>
-                  <button
-                    className="absolute top-1/2 right-1.5 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded opacity-100 hover:bg-zinc-200 md:opacity-0 md:group-hover:opacity-100 dark:hover:bg-zinc-700"
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="absolute top-1/2 right-1.5 -translate-y-1/2 opacity-100 md:opacity-0 md:group-hover:opacity-100"
                     aria-label={`删除会话 ${thread.title}`}
                     title="删除会话"
-                    onClick={() => {
-                      if (confirm("确认删除该会话？")) {
-                        void deleteThread(thread.id);
-                        if (active) {
-                          navigate("/");
-                          onNavigate?.();
-                        }
-                      }
-                    }}
+                    onClick={() => setConfirmTarget({ kind: "thread", id: thread.id, name: thread.title, active })}
                   >
                     <Trash2 className="h-3.5 w-3.5 text-zinc-400 hover:text-red-500" />
-                  </button>
+                  </Button>
                 </div>
               );
             })}
@@ -160,7 +158,10 @@ export function Sidebar({
               <ShieldCheck className="h-3.5 w-3.5 text-blue-500" />
             </span>
           )}
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="退出登录"
             title="退出登录"
             className="text-zinc-400 hover:text-red-500"
             onClick={() => {
@@ -170,24 +171,27 @@ export function Sidebar({
             }}
           >
             <LogOut className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
         {user?.role === "admin" && (
-          <button
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
+          <Button
+            variant="ghost"
+            className="w-full justify-start text-muted-foreground"
             onClick={() => setAddOpen(true)}
           >
             <FolderPlus className="h-4 w-4" /> 添加项目目录
-          </button>
+          </Button>
         )}
         <Link
           to="/settings/general"
           onClick={onNavigate}
           className={cn(
-            "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
-            location.pathname.startsWith("/settings")
-              ? "bg-zinc-200 font-medium dark:bg-zinc-800"
-              : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800/60",
+            buttonVariants({
+              variant: location.pathname.startsWith("/settings") ? "secondary" : "ghost",
+              size: "default",
+            }),
+            "w-full justify-start",
+            !location.pathname.startsWith("/settings") && "text-muted-foreground",
           )}
         >
           <Settings className="h-4 w-4" /> 设置
@@ -197,6 +201,31 @@ export function Sidebar({
       {addOpen && (
         <ProjectDirectoryPicker onClose={() => setAddOpen(false)} onAdd={(projectPath) => addProject(projectPath)} />
       )}
+
+      <ConfirmDialog
+        open={confirmTarget !== null}
+        onOpenChange={(open) => !open && setConfirmTarget(null)}
+        title={confirmTarget?.kind === "project" ? "移除项目目录？" : "删除会话？"}
+        description={
+          confirmTarget?.kind === "project"
+            ? `将移除“${confirmTarget.name}”，不会删除磁盘文件。`
+            : `会话“${confirmTarget?.name ?? ""}”及其历史记录将被删除。`
+        }
+        confirmLabel={confirmTarget?.kind === "project" ? "移除" : "删除"}
+        destructive
+        onConfirm={() => {
+          if (confirmTarget?.kind === "project") {
+            void removeProject(confirmTarget.id);
+          } else if (confirmTarget?.kind === "thread") {
+            void deleteThread(confirmTarget.id);
+            if (confirmTarget.active) {
+              navigate("/");
+              onNavigate?.();
+            }
+          }
+          setConfirmTarget(null);
+        }}
+      />
     </aside>
   );
 }

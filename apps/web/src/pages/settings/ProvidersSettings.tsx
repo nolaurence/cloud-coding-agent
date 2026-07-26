@@ -2,7 +2,20 @@ import { useState } from "react";
 import { Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { ModelProviderConfig, ProviderType, WireApi } from "@cca/protocol";
 import { useApp } from "../../lib/store";
-import { Button, Dialog, Field, Input, Select, Textarea } from "../../components/ui/primitives";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { FormDialog } from "@/components/ui/form-dialog";
+import { Input } from "@/components/ui/input";
+import { LabeledField } from "@/components/ui/labeled-field";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 
 const emptyProvider = (): ModelProviderConfig => ({
   id: "",
@@ -23,6 +36,7 @@ export function ProvidersSettings() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [discovering, setDiscovering] = useState(false);
+  const [deleting, setDeleting] = useState<ModelProviderConfig | null>(null);
 
   if (!settings) return null;
 
@@ -35,6 +49,7 @@ export function ProvidersSettings() {
     setEditing({
       ...target,
       id: target.id || `p-${Date.now()}`,
+      wireApi: target.wireApi ?? "completions",
       models: target.models.map((model) => ({ ...model })),
     });
     setModelsText(target.models.map((m) => (m.name ? `${m.id} | ${m.name}` : m.id)).join("\n"));
@@ -123,76 +138,91 @@ export function ProvidersSettings() {
                 <div className="text-sm font-medium">{p.name}</div>
                 <div className="mono truncate text-xs text-zinc-500">{p.baseUrl}</div>
               </div>
-              <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800">
+              <Badge variant="secondary" className="h-5 px-1.5 font-mono text-[10px] font-normal">
                 {p.type === "openai" ? (p.wireApi === "responses" ? "openai-responses" : "openai") : p.type}
-              </span>
+              </Badge>
               <Button variant="ghost" size="icon" onClick={() => openEdit(p)}>
                 <Pencil className="h-3.5 w-3.5" />
               </Button>
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => {
-                  if (confirm(`删除 ${p.name}?`)) save(settings.providers.filter((x) => x.id !== p.id));
-                }}
+                aria-label={`删除 ${p.name}`}
+                onClick={() => setDeleting(p)}
               >
                 <Trash2 className="h-3.5 w-3.5 text-red-500" />
               </Button>
             </div>
             <div className="mt-2 flex flex-wrap gap-1">
               {p.models.map((m) => (
-                <span key={m.id} className="mono rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] dark:bg-zinc-800">
+                <Badge key={m.id} variant="secondary" className="h-5 px-1.5 font-mono text-[10px] font-normal">
                   {m.name ?? m.id}
-                </span>
+                </Badge>
               ))}
             </div>
           </div>
         ))}
       </div>
 
-      <Dialog open={editing !== null} onClose={() => setEditing(null)} title={editing?.name ? "编辑模型服务" : "添加模型服务"}>
+      <FormDialog open={editing !== null} onClose={() => setEditing(null)} title={editing?.name ? "编辑模型服务" : "添加模型服务"}>
         {editing && (
           <>
-            <Field label="名称">
+            <LabeledField label="名称">
               <Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="例如 DeepSeek" />
-            </Field>
-            <Field label="类型">
-              <Select value={editing.type} onChange={(e) => setEditing({ ...editing, type: e.target.value as ProviderType })}>
-                <option value="openai">OpenAI 兼容</option>
-                <option value="azure">Azure OpenAI</option>
-                <option value="anthropic">Anthropic</option>
+            </LabeledField>
+            <LabeledField label="类型">
+              <Select
+                value={editing.type}
+                onValueChange={(type) => setEditing({ ...editing, type: type as ProviderType })}
+              >
+                <SelectTrigger className="w-full" aria-label="类型">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openai">OpenAI 兼容</SelectItem>
+                  <SelectItem value="azure">Azure OpenAI</SelectItem>
+                  <SelectItem value="anthropic">Anthropic</SelectItem>
+                </SelectContent>
               </Select>
-            </Field>
-            <Field label="Base URL">
+            </LabeledField>
+            <LabeledField label="Base URL">
               <Input
                 value={editing.baseUrl}
                 onChange={(e) => setEditing({ ...editing, baseUrl: e.target.value })}
                 placeholder="https://api.openai.com/v1"
               />
-            </Field>
+            </LabeledField>
             {editing.type !== "anthropic" && (
-              <Field label="协议 (Wire API)">
-                <Select value={editing.wireApi} onChange={(e) => setEditing({ ...editing, wireApi: e.target.value as WireApi })}>
-                  <option value="completions">openai(Chat Completions)</option>
-                  <option value="responses">openai-responses(Responses API)</option>
+              <LabeledField label="协议 (Wire API)">
+                <Select
+                  value={editing.wireApi ?? "completions"}
+                  onValueChange={(wireApi) => setEditing({ ...editing, wireApi: wireApi as WireApi })}
+                >
+                  <SelectTrigger className="w-full" aria-label="协议 (Wire API)">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="completions">openai(Chat Completions)</SelectItem>
+                    <SelectItem value="responses">openai-responses(Responses API)</SelectItem>
+                  </SelectContent>
                 </Select>
-              </Field>
+              </LabeledField>
             )}
-            <Field label="API Key">
+            <LabeledField label="API Key">
               <Input
                 type="password"
                 value={editing.apiKey ?? ""}
                 onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })}
                 placeholder="sk-..."
               />
-            </Field>
+            </LabeledField>
             {editing.type === "azure" && (
-              <Field label="Azure API Version">
+              <LabeledField label="Azure API Version">
                 <Input
                   value={editing.azureApiVersion ?? "2024-10-21"}
                   onChange={(e) => setEditing({ ...editing, azureApiVersion: e.target.value })}
                 />
-              </Field>
+              </LabeledField>
             )}
             <div className="mb-3">
               <div className="mb-1 flex min-h-7 flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
@@ -233,7 +263,20 @@ export function ProvidersSettings() {
             </div>
           </>
         )}
-      </Dialog>
+      </FormDialog>
+
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title="删除模型服务？"
+        description={deleting ? `将删除“${deleting.name}”及其模型配置。` : ""}
+        confirmLabel="删除"
+        destructive
+        onConfirm={() => {
+          if (deleting) save(settings.providers.filter((provider) => provider.id !== deleting.id));
+          setDeleting(null);
+        }}
+      />
     </div>
   );
 }
