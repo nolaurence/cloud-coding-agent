@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Blocks, Cpu, Settings2, Sparkles, Users } from "lucide-react";
+import { Blocks, Cpu, Settings2, Users } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useApp } from "../../lib/store";
 import { buttonVariants } from "@/components/ui/button";
@@ -7,7 +7,6 @@ import { buttonVariants } from "@/components/ui/button";
 const adminNav = [
   { to: "providers", label: "模型", icon: Cpu },
   { to: "mcp", label: "MCP 服务器", icon: Blocks },
-  { to: "skills", label: "技能", icon: Sparkles },
 ];
 
 export function SettingsLayout() {

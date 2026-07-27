@@ -54,7 +54,7 @@ export function RightPanel({
       className="flex h-full min-h-0 w-full flex-col gap-0 bg-white dark:bg-zinc-950"
     >
       <div className="flex h-11 shrink-0 items-center border-b border-zinc-200 px-1 dark:border-zinc-800">
-        <TabsList variant="line" className="h-10 min-w-0 flex-1 justify-start overflow-x-auto rounded-none p-0">
+        <TabsList variant="line" className="h-10 min-w-0 flex-1 justify-start overflow-x-auto overflow-y-hidden rounded-none p-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {tabs.map((item) => (
             <TabsTrigger
               key={item.id}

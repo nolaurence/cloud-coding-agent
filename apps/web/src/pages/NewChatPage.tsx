@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Bot, FolderGit2 } from "lucide-react";
+import { FolderGit2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { ModelRef, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
+import { BrandLogo } from "../components/BrandLogo";
 import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
 import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
@@ -43,9 +44,7 @@ export function NewChatPage() {
     <div className="h-full overflow-y-auto px-4">
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center py-10">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
-            <Bot className="h-5 w-5" />
-          </div>
+          <BrandLogo className="mx-auto mb-3 h-10 w-10" />
           <h1 className="text-xl font-semibold">今天要处理什么？</h1>
         </div>
         {projects.length === 0 ? (

@@ -11,6 +11,7 @@ import {
   Plus,
   Settings,
   ShieldCheck,
+  Sparkles,
   Trash2,
   User,
   WifiOff,
@@ -85,6 +86,28 @@ export function Sidebar({
         >
           <Plus className="h-4 w-4" /> 新会话
         </Button>
+        {user?.role === "admin" && (
+          <Button
+            variant="ghost"
+            className="mt-1 w-full justify-start text-muted-foreground"
+            onClick={() => setAddOpen(true)}
+          >
+            <FolderPlus className="h-4 w-4" /> 添加项目目录
+          </Button>
+        )}
+        {user?.role === "admin" && (
+          <Link
+            to="/skills"
+            onClick={onNavigate}
+            className={cn(
+              buttonVariants({ variant: location.pathname === "/skills" ? "secondary" : "ghost" }),
+              "mt-1 w-full justify-start",
+              location.pathname !== "/skills" && "text-muted-foreground",
+            )}
+          >
+            <Sparkles className="h-4 w-4" /> 技能
+          </Link>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
@@ -193,15 +216,6 @@ export function Sidebar({
             <LogOut className="h-4 w-4" />
           </Button>
         </div>
-        {user?.role === "admin" && (
-          <Button
-            variant="ghost"
-            className="w-full justify-start text-muted-foreground"
-            onClick={() => setAddOpen(true)}
-          >
-            <FolderPlus className="h-4 w-4" /> 添加项目目录
-          </Button>
-        )}
         <Link
           to="/settings/general"
           onClick={onNavigate}

@@ -31,6 +31,8 @@ const KNOWN_MODEL_REASONING_EFFORTS: Readonly<Record<string, readonly ReasoningE
   "gpt-5.6-sol": ["none", "low", "medium", "high", "xhigh", "max"],
   "gpt-5.6-luna": ["none", "low", "medium", "high", "xhigh", "max"],
   "gpt-5.6-terra": ["none", "low", "medium", "high", "xhigh", "max"],
+  "k3": ["low", "high", "max"],
+  "k3-256k": ["low", "high", "max"],
 };
 
 export interface ModelEntry {

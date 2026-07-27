@@ -41,6 +41,20 @@ export default function App() {
       <Route element={<AppLayout />}>
         <Route index element={<NewChatPage />} />
         <Route path="thread/:threadId" element={<ThreadPage />} />
+        <Route
+          path="skills"
+          element={
+            user.role === "admin" ? (
+              <div className="h-full overflow-y-auto p-4 sm:p-6">
+                <div className="mx-auto max-w-2xl">
+                  <SkillsSettings />
+                </div>
+              </div>
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
         <Route path="settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="general" replace />} />
           <Route path="general" element={<GeneralSettings />} />
@@ -65,16 +79,6 @@ export default function App() {
             }
           />
           <Route
-            path="skills"
-            element={
-              user.role === "admin" ? (
-                <SkillsSettings />
-              ) : (
-                <Navigate to="/settings/general" replace />
-              )
-            }
-          />
-          <Route
             path="users"
             element={
               user.role === "admin" ? (
@@ -84,6 +88,7 @@ export default function App() {
               )
             }
           />
+          <Route path="skills" element={<Navigate to="/skills" replace />} />
           <Route path="git" element={<Navigate to="/settings/general" replace />} />
         </Route>
       </Route>

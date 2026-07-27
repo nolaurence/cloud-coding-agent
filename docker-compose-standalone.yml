@@ -4,6 +4,7 @@ services:
     ports:
       - "${APP_PORT:-8787}:8787"
     volumes:
+      - /root/agent:/projects
       - agent-data:/data
       - ${WORKSPACE_DIR:-./workspace}:/workspace
     environment:
