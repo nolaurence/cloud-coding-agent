@@ -226,6 +226,17 @@ export class CopilotManager {
     const skills = enabledSkillDirectories();
     const project = store.projects.find((p) => p.id === thread.projectId);
     if (!project) throw new Error("会话关联的项目不存在");
+    const disableApplyPatch =
+      providerConfig?.type === "openai" &&
+      (providerConfig.wireApi ?? "completions") === "responses";
+    const systemInstructions = [
+      "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
+    ];
+    if (disableApplyPatch) {
+      systemInstructions.push(
+        "The apply_patch tool is unavailable. Use another available file editing tool.",
+      );
+    }
 
     const config: Record<string, unknown> = {
       sessionId: thread.id,
@@ -237,10 +248,13 @@ export class CopilotManager {
       tools: [createAuthenticatedGitTool(actorId || thread.userId, project.path)],
       systemMessage: {
         mode: "append",
-        content:
-          "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
+        content: systemInstructions.join("\n"),
       },
     };
+    if (disableApplyPatch) {
+      // Some Responses-compatible gateways drop free-form custom-tool input.
+      config.excludedTools = ["builtin:apply_patch"];
+    }
     if (skills.dirs.length > 0) {
       config.skillDirectories = skills.dirs;
       config.disabledSkills = skills.disabled;

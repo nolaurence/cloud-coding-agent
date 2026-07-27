@@ -268,7 +268,7 @@ test("keeps streamed assistant text in snapshots and after an interrupt", async 
   );
 });
 
-test("overrides the OpenAI provider User-Agent rejected by compatible gateways", async (t) => {
+test("configures Responses gateways without the free-form apply_patch tool", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
   store.threads[0]!.model = { providerId: "provider-1", modelId: "gpt-5.4" };
@@ -290,9 +290,41 @@ test("overrides the OpenAI provider User-Agent rejected by compatible gateways",
   await manager.sendMessage(threadId, "test");
   const config = client.createdConfigs[0] as {
     provider?: { apiKey?: string; headers?: Record<string, string> };
+    excludedTools?: string[];
+    systemMessage?: { content?: string };
   };
   assert.equal(config.provider?.apiKey, "secret");
   assert.equal(config.provider?.headers?.["User-Agent"], "cloud-coding-agent/0.1");
+  assert.deepEqual(config.excludedTools, ["builtin:apply_patch"]);
+  assert.match(config.systemMessage?.content ?? "", /apply_patch tool is unavailable/);
+  await manager.interrupt(threadId);
+});
+
+test("keeps apply_patch available for Chat Completions providers", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.model = { providerId: "provider-1", modelId: "k3" };
+  store.settings.providers = [
+    {
+      id: "provider-1",
+      name: "OpenAI compatible",
+      type: "openai",
+      baseUrl: "https://example.com/v1",
+      wireApi: "completions",
+      models: [{ id: "k3" }],
+    },
+  ];
+  const client = new FakeClient();
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "test");
+  const config = client.createdConfigs[0] as {
+    excludedTools?: string[];
+    systemMessage?: { content?: string };
+  };
+  assert.equal(config.excludedTools, undefined);
+  assert.doesNotMatch(config.systemMessage?.content ?? "", /apply_patch tool is unavailable/);
   await manager.interrupt(threadId);
 });
 
