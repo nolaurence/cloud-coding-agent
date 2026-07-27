@@ -15,6 +15,7 @@ import type {
 const execFileAsync = promisify(execFile);
 const MAX_FILE_SIZE = 1024 * 1024;
 const MAX_DIFF_SIZE = 2 * 1024 * 1024;
+const MAX_UNTRACKED_FILES = 200;
 const FILE_VERSION_PATTERN = /^[a-f0-9]{64}$/;
 const IGNORED_DIRECTORIES = new Set([
   ".git",
@@ -200,20 +201,95 @@ export function writeProjectFile(
   };
 }
 
+interface GitStatusEntry {
+  path: string;
+  status: string;
+}
+
+function parseGitStatus(output: string): GitStatusEntry[] {
+  const records = output.split("\0");
+  const entries: GitStatusEntry[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record || record.length < 4) continue;
+    const status = record.slice(0, 2);
+    entries.push({ status, path: record.slice(3) });
+    if (status.includes("R") || status.includes("C")) index += 1;
+  }
+  return entries;
+}
+
+function gitCommandError(error: unknown, operation: string): Error {
+  const stderr = (error as { stderr?: unknown })?.stderr;
+  const detail =
+    typeof stderr === "string" && stderr.trim()
+      ? stderr.trim()
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  return new Error(`${operation}失败：${detail}`);
+}
+
 export async function projectDiff(root: string): Promise<GitDiffResult> {
   let patch = "";
+  let statusEntries: GitStatusEntry[] = [];
+  let branch: string | undefined;
   try {
-    const [unstaged, staged] = await Promise.all([
+    const [unstaged, staged, status, currentBranch] = await Promise.all([
       execFileAsync("git", ["diff", "--no-ext-diff", "--no-color"], { cwd: root, maxBuffer: MAX_DIFF_SIZE * 2 }),
       execFileAsync("git", ["diff", "--cached", "--no-ext-diff", "--no-color"], { cwd: root, maxBuffer: MAX_DIFF_SIZE * 2 }),
+      execFileAsync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+        cwd: root,
+        maxBuffer: MAX_DIFF_SIZE * 2,
+      }),
+      execFileAsync("git", ["branch", "--show-current"], { cwd: root }),
     ]);
     patch = [staged.stdout, unstaged.stdout].filter(Boolean).join("\n");
+    statusEntries = parseGitStatus(status.stdout);
+    branch = currentBranch.stdout.trim() || undefined;
   } catch (error) {
-    throw new Error(error instanceof Error ? `读取 Git 差异失败：${error.message}` : "读取 Git 差异失败");
+    throw gitCommandError(error, "读取 Git 差异");
   }
   const additions = (patch.match(/^\+(?!\+\+)/gm) ?? []).length;
   const deletions = (patch.match(/^-(?!--)/gm) ?? []).length;
-  const files = new Set([...patch.matchAll(/^diff --git a\/(.+?) b\//gm)].map((match) => match[1])).size;
+  const untrackedFiles = statusEntries
+    .filter((entry) => entry.status === "??")
+    .map((entry) => entry.path);
   const truncated = patch.length > MAX_DIFF_SIZE;
-  return { patch: truncated ? patch.slice(0, MAX_DIFF_SIZE) : patch, files, additions, deletions, truncated };
+  return {
+    patch: truncated ? patch.slice(0, MAX_DIFF_SIZE) : patch,
+    files: statusEntries.length,
+    additions,
+    deletions,
+    truncated,
+    branch,
+    untracked: untrackedFiles.length,
+    untrackedFiles: untrackedFiles.slice(0, MAX_UNTRACKED_FILES),
+  };
+}
+
+export async function projectGitPullTarget(root: string): Promise<{ remote: string; branch: string }> {
+  try {
+    const currentBranch = await execFileAsync("git", ["branch", "--show-current"], { cwd: root });
+    const branch = currentBranch.stdout.trim();
+    if (!branch) throw new Error("当前处于 detached HEAD，无法拉取分支");
+
+    try {
+      const upstream = await execFileAsync(
+        "git",
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        { cwd: root },
+      );
+      const value = upstream.stdout.trim();
+      const separator = value.indexOf("/");
+      if (separator > 0 && separator < value.length - 1) {
+        return { remote: value.slice(0, separator), branch: value.slice(separator + 1) };
+      }
+    } catch {
+      // 未配置上游时沿用 Git 的常见默认值 origin/<当前分支>。
+    }
+    return { remote: "origin", branch };
+  } catch (error) {
+    throw gitCommandError(error, "读取 Git 分支");
+  }
 }

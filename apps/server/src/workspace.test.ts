@@ -4,13 +4,20 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
+import { execFile } from "node:child_process";
 import { searchFiles } from "./files.js";
 import {
   listProjectDirectory,
   listProjectFiles,
+  projectDiff,
+  projectGitPullTarget,
   readProjectFile,
   writeProjectFile,
 } from "./workspace.js";
+import { commitProjectChanges } from "./gitOperations.js";
+
+const execFileAsync = promisify(execFile);
 
 const VALID_VERSION = "0".repeat(64);
 
@@ -167,4 +174,65 @@ test("writeProjectFile refuses to replace an invalid UTF-8 source file", async (
     /非 UTF-8 文本无法保存/,
   );
   assert.deepEqual(await fs.readFile(path.join(root, "invalid.txt")), invalid);
+});
+
+
+async function git(root: string, args: string[]): Promise<string> {
+  const result = await execFileAsync("git", args, { cwd: root });
+  return result.stdout.trim();
+}
+
+async function gitFixture(t: test.TestContext): Promise<string> {
+  const root = await fixture(t);
+  await git(root, ["init", "--initial-branch=main"]);
+  await git(root, ["config", "user.name", "Test User"]);
+  await git(root, ["config", "user.email", "test@example.com"]);
+  await git(root, ["add", "--all"]);
+  await git(root, ["commit", "-m", "Initial commit"]);
+  return root;
+}
+
+test("projectDiff includes tracked and untracked changes", async (t) => {
+  const root = await gitFixture(t);
+  await Promise.all([
+    fs.writeFile(path.join(root, "README.md"), "# changed\n"),
+    fs.writeFile(path.join(root, "new file.txt"), "new\n"),
+  ]);
+
+  const result = await projectDiff(root);
+
+  assert.equal(result.branch, "main");
+  assert.equal(result.files, 2);
+  assert.equal(result.untracked, 1);
+  assert.deepEqual(result.untrackedFiles, ["new file.txt"]);
+  assert.match(result.patch, /README\.md/);
+});
+
+test("commitProjectChanges stages all changes and creates a hook-free commit", async (t) => {
+  const root = await gitFixture(t);
+  await fs.writeFile(path.join(root, "README.md"), "# committed\n");
+  const hook = path.join(root, ".git", "hooks", "pre-commit");
+  await fs.writeFile(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+
+  const result = await commitProjectChanges(root, "Update readme");
+
+  assert.match(result.hash, /^[a-f0-9]+$/);
+  assert.equal(await git(root, ["log", "-1", "--pretty=%s"]), "Update readme");
+  assert.equal(await git(root, ["status", "--porcelain"]), "");
+  await assert.rejects(commitProjectChanges(root, "No changes"), /没有可提交的更改/);
+});
+
+test("projectGitPullTarget resolves the configured upstream", async (t) => {
+  const root = await gitFixture(t);
+  await git(root, ["remote", "add", "upstream", "https://github.com/acme/widgets.git"]);
+  await git(root, ["update-ref", "refs/remotes/upstream/release/test", "HEAD"]);
+  await git(root, ["branch", "--set-upstream-to=upstream/release/test", "main"]);
+
+  assert.deepEqual(await projectGitPullTarget(root), {
+    remote: "upstream",
+    branch: "release/test",
+  });
+
+  await git(root, ["checkout", "--detach"]);
+  await assert.rejects(projectGitPullTarget(root), /detached HEAD/);
 });

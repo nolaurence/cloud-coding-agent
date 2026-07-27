@@ -275,6 +275,14 @@ export interface GitDiffResult {
   additions: number;
   deletions: number;
   truncated: boolean;
+  branch?: string;
+  untracked: number;
+  untrackedFiles: string[];
+}
+
+export interface GitCommitResult {
+  hash: string;
+  summary: string;
 }
 
 export type GitProvider = "github" | "gitee";
@@ -376,6 +384,8 @@ export type ClientMessage =
       expectedVersion: string;
     }
   | { id: string; type: "project.diff"; projectId: string }
+  | { id: string; type: "project.git.pull"; threadId: string; projectId: string }
+  | { id: string; type: "project.git.commit"; threadId: string; projectId: string; message: string }
   | {
       id: string;
       type: "terminal.open";

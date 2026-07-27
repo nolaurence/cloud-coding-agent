@@ -24,11 +24,13 @@ import {
   listProjectDirectory,
   listProjectFiles,
   projectDiff,
+  projectGitPullTarget,
   readProjectFile,
   writeProjectFile,
 } from "./workspace.js";
 import { TerminalManager } from "./terminals.js";
 import { bindGitProvider, listGitBindings, unbindGitProvider } from "./gitBindings.js";
+import { commitProjectChanges, runAuthenticatedGit } from "./gitOperations.js";
 import { removeThreadUploads, removeUploadedImages, validateOwnedUploads } from "./uploads.js";
 import {
   createThreadShare,
@@ -593,6 +595,34 @@ export class Hub {
           const project = store.projects.find((candidate) => candidate.id === msg.projectId);
           if (!project) throw new Error("项目不存在");
           this.reply(conn, msg.id, await projectDiff(project.path));
+          break;
+        }
+        case "project.git.pull": {
+          const thread = store.getThread(msg.threadId);
+          if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以拉取代码");
+          if (thread?.projectId !== msg.projectId) throw new Error("Git 操作与当前会话项目不匹配");
+          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
+          if (!project) throw new Error("项目不存在");
+          const target = await projectGitPullTarget(project.path);
+          this.reply(
+            conn,
+            msg.id,
+            await runAuthenticatedGit(conn.user.username, project.path, {
+              action: "pull",
+              remote: target.remote,
+              branch: target.branch,
+              strategy: "ff-only",
+            }),
+          );
+          break;
+        }
+        case "project.git.commit": {
+          const thread = store.getThread(msg.threadId);
+          if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以提交代码");
+          if (thread?.projectId !== msg.projectId) throw new Error("Git 操作与当前会话项目不匹配");
+          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
+          if (!project) throw new Error("项目不存在");
+          this.reply(conn, msg.id, await commitProjectChanges(project.path, msg.message));
           break;
         }
         case "terminal.open": {

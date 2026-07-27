@@ -1,12 +1,14 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { devNull } from "node:os";
 import { defineTool, type Tool } from "@github/copilot-sdk";
-import type { GitProvider } from "@cca/protocol";
+import type { GitCommitResult, GitProvider } from "@cca/protocol";
 import { getGitCredential, type GitCredential } from "./gitBindings.js";
 
 const GIT_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_GIT_OUTPUT = 2 * 1024 * 1024;
+const MAX_COMMIT_MESSAGE_LENGTH = 2000;
 const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const REPOSITORY_PATH = /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/;
 const GIT_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/;
@@ -259,6 +261,37 @@ function gitOptions(cwd: string, env: NodeJS.ProcessEnv): GitRunOptions {
 function outputFor(action: AuthenticatedGitAction, result: GitRunResult): string {
   const output = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
   return output || `git ${action} 已完成`;
+}
+
+export async function commitProjectChanges(
+  cwd: string,
+  message: string,
+  dependencies: Pick<GitOperationDependencies, "runGit" | "baseEnv"> = {},
+): Promise<GitCommitResult> {
+  const normalizedMessage = typeof message === "string" ? message.trim() : "";
+  if (!normalizedMessage) throw new Error("请输入提交说明");
+  if (normalizedMessage.includes("\0")) throw new Error("提交说明包含无效字符");
+  if (normalizedMessage.length > MAX_COMMIT_MESSAGE_LENGTH) {
+    throw new Error(`提交说明不能超过 ${MAX_COMMIT_MESSAGE_LENGTH} 个字符`);
+  }
+
+  const runGit = dependencies.runGit ?? defaultGitRunner;
+  const env = sanitizedGitEnv(dependencies.baseEnv ?? process.env);
+  try {
+    await runGit(["add", "--all", "--"], gitOptions(cwd, env));
+    const staged = await runGit(["diff", "--cached", "--name-only", "-z"], gitOptions(cwd, env));
+    if (!staged.stdout) throw new Error("没有可提交的更改");
+    const commit = await runGit(
+      ["-c", `core.hooksPath=${devNull}`, "commit", "-m", normalizedMessage],
+      gitOptions(cwd, env),
+    );
+    const revision = await runGit(["rev-parse", "--short", "HEAD"], gitOptions(cwd, env));
+    const hash = revision.stdout.trim();
+    return { hash, summary: commit.stdout.trim() || `已创建提交 ${hash}` };
+  } catch (error) {
+    if (error instanceof Error && error.message === "没有可提交的更改") throw error;
+    throw commandError(error, "Git 提交失败");
+  }
 }
 
 export async function runAuthenticatedGit(
