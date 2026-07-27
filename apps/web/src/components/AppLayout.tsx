@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
-import { Menu, PanelRightOpen, Share2, WifiOff } from "lucide-react";
+import { Menu, PanelLeftOpen, PanelRightOpen, Share2, WifiOff } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { useApp } from "../lib/store";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { BrandLogo } from "./BrandLogo";
+
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "cloud-coding-agent:sidebar-collapsed";
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 export function AppLayout() {
   const connected = useApp((s) => s.connected);
@@ -16,6 +26,17 @@ export function AppLayout() {
   const setShareDialogOpen = useApp((s) => s.setShareDialogOpen);
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  const toggleSidebarCollapsed = () =>
+    setSidebarCollapsed((collapsed) => {
+      const next = !collapsed;
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
+      } catch {
+        // localStorage 不可用时仅保留会话内状态
+      }
+      return next;
+    });
   const threadPathMatch = location.pathname.match(/^\/thread\/([^/]+)$/);
   const routeThreadId = threadPathMatch?.[1]
     ? decodeURIComponent(threadPathMatch[1])
@@ -45,11 +66,38 @@ export function AppLayout() {
     return () => desktop.removeEventListener("change", closeDesktopSheet);
   }, []);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        toggleSidebarCollapsed();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
     <div className="flex h-dvh overflow-hidden bg-white dark:bg-zinc-950">
-      <div className="m-[10px] hidden min-h-0 shrink-0 md:block">
-        <Sidebar />
-      </div>
+      {sidebarCollapsed ? (
+        <div className="hidden shrink-0 md:block">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label="显示会话侧边栏"
+            title="显示会话侧边栏 (⌘B)"
+            className="ml-[10px] mt-[10px] bg-white dark:bg-zinc-950"
+            onClick={toggleSidebarCollapsed}
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : (
+        <div className="m-[10px] hidden min-h-0 shrink-0 md:block">
+          <Sidebar onCollapse={toggleSidebarCollapsed} />
+        </div>
+      )}
 
       <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
         <SheetContent

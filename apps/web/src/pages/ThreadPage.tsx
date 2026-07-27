@@ -131,7 +131,7 @@ export function ThreadPage() {
   return (
     <div ref={layoutRef} className="flex h-full min-h-0 min-w-0 overflow-hidden">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="hidden shrink-0 border-b border-zinc-200 bg-white md:block dark:border-zinc-800 dark:bg-zinc-950">
+        <header className="hidden shrink-0 bg-white md:block dark:bg-zinc-950">
           <div className="flex min-h-13 items-center gap-2 px-3 py-2 sm:px-4">
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{thread?.title ?? "会话"}</div>
@@ -173,6 +173,10 @@ export function ThreadPage() {
           </div>
         </header>
         <div className="relative min-h-0 flex-1 overflow-hidden">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b from-white to-transparent dark:from-zinc-950"
+          />
           <ChatView threadId={threadId} bottomInset={canInteract ? composerHeight : 0} />
           {canInteract && (
             <div ref={composerOverlayRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-2">
@@ -221,7 +225,7 @@ export function ThreadPage() {
           />
           <div
             id="thread-workspace-panel"
-            className={`fixed inset-0 z-40 w-full min-w-0 bg-white lg:static lg:z-auto lg:w-[var(--right-panel-width)] lg:shrink-0 dark:bg-zinc-950 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`}
+            className={`fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto lg:my-[10px] lg:mr-[10px] lg:w-[var(--right-panel-width)] lg:shrink-0 lg:rounded-lg lg:border lg:border-zinc-200 dark:bg-zinc-950 lg:dark:border-zinc-800 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`}
             style={{ "--right-panel-width": `${panelWidth}px` } as CSSProperties}
           >
             <RightPanel threadId={threadId} projectId={thread?.projectId} onClose={() => setPanelOpen(false)} />

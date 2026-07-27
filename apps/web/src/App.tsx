@@ -9,6 +9,7 @@ import { GeneralSettings } from "./pages/settings/GeneralSettings";
 import { ProvidersSettings } from "./pages/settings/ProvidersSettings";
 import { McpSettings } from "./pages/settings/McpSettings";
 import { SkillsSettings } from "./pages/settings/SkillsSettings";
+import { PluginsPage } from "./pages/PluginsPage";
 import { UsersSettings } from "./pages/settings/UsersSettings";
 import { ShareThreadPage } from "./pages/ShareThreadPage";
 import { useApp } from "./lib/store";
@@ -48,6 +49,20 @@ export default function App() {
               <div className="h-full overflow-y-auto p-4 sm:p-6">
                 <div className="mx-auto max-w-2xl">
                   <SkillsSettings />
+                </div>
+              </div>
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
+        <Route
+          path="plugins"
+          element={
+            user.role === "admin" ? (
+              <div className="h-full overflow-y-auto p-4 sm:p-6">
+                <div className="mx-auto max-w-2xl">
+                  <PluginsPage />
                 </div>
               </div>
             ) : (

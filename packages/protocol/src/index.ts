@@ -172,6 +172,32 @@ export interface AuthUser {
   role: UserRole;
 }
 
+export interface PluginMarketplace {
+  name: string;
+  source: string;
+  isDefault: boolean;
+}
+
+export interface MarketplacePlugin {
+  name: string;
+  description: string;
+}
+
+export interface InstalledPlugin {
+  name: string;
+  marketplace: string;
+  version?: string;
+  enabled: boolean;
+  directSourceId?: string;
+}
+
+export interface PluginInstallResult {
+  plugin: InstalledPlugin;
+  skillsInstalled: number;
+  postInstallMessage?: string;
+  deprecationWarning?: string;
+}
+
 export interface SkillInfo {
   name: string;
   description: string;
@@ -326,6 +352,14 @@ export type ClientMessage =
   | { id: string; type: "skills.list" }
   | { id: string; type: "skill.save"; name: string; description: string; content: string }
   | { id: string; type: "skill.delete"; name: string }
+  | { id: string; type: "plugins.marketplaces.list" }
+  | { id: string; type: "plugins.marketplace.add"; source: string }
+  | { id: string; type: "plugins.marketplace.remove"; name: string; force?: boolean }
+  | { id: string; type: "plugins.marketplace.browse"; name: string }
+  | { id: string; type: "plugins.list" }
+  | { id: string; type: "plugins.install"; source: string }
+  | { id: string; type: "plugins.uninstall"; name: string; directSourceId?: string }
+  | { id: string; type: "plugins.setEnabled"; name: string; enabled: boolean }
   | { id: string; type: "models.list" }
   | { id: string; type: "provider.models.discover"; provider: ProviderModelDiscoveryConfig }
   | { id: string; type: "files.search"; projectId: string; query: string }

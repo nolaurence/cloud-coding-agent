@@ -489,6 +489,52 @@ export class Hub {
           this.reply(conn, msg.id);
           break;
         }
+        case "plugins.marketplaces.list": {
+          this.requireAdmin(conn);
+          this.reply(conn, msg.id, await this.manager.listPluginMarketplaces());
+          break;
+        }
+        case "plugins.marketplace.add": {
+          this.requireAdmin(conn);
+          this.reply(conn, msg.id, await this.manager.addPluginMarketplace(msg.source));
+          break;
+        }
+        case "plugins.marketplace.remove": {
+          this.requireAdmin(conn);
+          this.reply(
+            conn,
+            msg.id,
+            await this.manager.removePluginMarketplace(msg.name, msg.force ?? false),
+          );
+          break;
+        }
+        case "plugins.marketplace.browse": {
+          this.requireAdmin(conn);
+          this.reply(conn, msg.id, await this.manager.browsePluginMarketplace(msg.name));
+          break;
+        }
+        case "plugins.list": {
+          this.requireAdmin(conn);
+          this.reply(conn, msg.id, await this.manager.listInstalledPlugins());
+          break;
+        }
+        case "plugins.install": {
+          this.requireAdmin(conn);
+          this.reply(conn, msg.id, await this.manager.installPlugin(msg.source));
+          break;
+        }
+        case "plugins.uninstall": {
+          this.requireAdmin(conn);
+          await this.manager.uninstallPlugin(msg.name, msg.directSourceId);
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "plugins.setEnabled": {
+          this.requireAdmin(conn);
+          await this.manager.setPluginEnabled(msg.name, msg.enabled);
+          this.reply(conn, msg.id);
+          break;
+        }
         case "models.list": {
           const models = await this.listModelOptions();
           if (store.normalizeStoredReasoningEfforts(models)) {

@@ -826,6 +826,77 @@ export class CopilotManager {
     return this.threads.get(threadId)?.running ?? false;
   }
 
+  async listPluginMarketplaces() {
+    const client = await this.ensureClient();
+    const result = await client.rpc.plugins.marketplaces.list();
+    return result.marketplaces.map((m) => ({
+      name: m.name,
+      source: m.source,
+      isDefault: m.isDefault ?? false,
+    }));
+  }
+
+  async addPluginMarketplace(source: string) {
+    const client = await this.ensureClient();
+    const result = await client.rpc.plugins.marketplaces.add({ source });
+    return { name: result.name };
+  }
+
+  async removePluginMarketplace(name: string, force: boolean) {
+    const client = await this.ensureClient();
+    const result = await client.rpc.plugins.marketplaces.remove({ name, force });
+    return { removed: result.removed, dependentPlugins: result.dependentPlugins ?? [] };
+  }
+
+  async browsePluginMarketplace(name: string) {
+    const client = await this.ensureClient();
+    const result = await client.rpc.plugins.marketplaces.browse({ name });
+    return result.plugins.map((p) => ({ name: p.name, description: p.description ?? "" }));
+  }
+
+  async listInstalledPlugins() {
+    const client = await this.ensureClient();
+    const result = await client.rpc.plugins.list();
+    return result.plugins.map((p) => ({
+      name: p.name,
+      marketplace: p.marketplace,
+      version: p.version,
+      enabled: p.enabled,
+      directSourceId: p.directSourceId,
+    }));
+  }
+
+  async installPlugin(source: string) {
+    const client = await this.ensureClient();
+    const result = await client.rpc.plugins.install({ source });
+    return {
+      plugin: {
+        name: result.plugin.name,
+        marketplace: result.plugin.marketplace,
+        version: result.plugin.version,
+        enabled: result.plugin.enabled,
+        directSourceId: result.plugin.directSourceId,
+      },
+      skillsInstalled: result.skillsInstalled,
+      postInstallMessage: result.postInstallMessage,
+      deprecationWarning: result.deprecationWarning,
+    };
+  }
+
+  async uninstallPlugin(name: string, directSourceId?: string) {
+    const client = await this.ensureClient();
+    await client.rpc.plugins.uninstall({ name, directSourceId: directSourceId ?? null });
+  }
+
+  async setPluginEnabled(name: string, enabled: boolean) {
+    const client = await this.ensureClient();
+    if (enabled) {
+      await client.rpc.plugins.enable({ names: [name] });
+    } else {
+      await client.rpc.plugins.disable({ names: [name] });
+    }
+  }
+
   runningThreadIds(): string[] {
     return [...this.threads.values()].filter((t) => t.running).map((t) => t.threadId);
   }

@@ -8,9 +8,13 @@ import type {
   CreatedInvite,
   CreatedThreadShare,
   DirectoryBrowseResult,
+  InstalledPlugin,
+  MarketplacePlugin,
   ModelRef,
   ModelEntry,
   ModelOption,
+  PluginInstallResult,
+  PluginMarketplace,
   Project,
   ProviderModelDiscoveryConfig,
   RegistrationPolicy,
@@ -195,6 +199,17 @@ interface AppState {
   updateSettings: (settings: AppSettings) => Promise<void>;
   saveSkill: (name: string, description: string, content: string) => Promise<void>;
   deleteSkill: (name: string) => Promise<void>;
+  listPluginMarketplaces: () => Promise<PluginMarketplace[]>;
+  addPluginMarketplace: (source: string) => Promise<{ name: string }>;
+  removePluginMarketplace: (
+    name: string,
+    force?: boolean,
+  ) => Promise<{ removed: boolean; dependentPlugins: string[] }>;
+  browsePluginMarketplace: (name: string) => Promise<MarketplacePlugin[]>;
+  listInstalledPlugins: () => Promise<InstalledPlugin[]>;
+  installPlugin: (source: string) => Promise<PluginInstallResult>;
+  uninstallPlugin: (name: string, directSourceId?: string) => Promise<void>;
+  setPluginEnabled: (name: string, enabled: boolean) => Promise<void>;
   searchFiles: (projectId: string, query: string) => Promise<string[]>;
   setWorkspacePanelOpen: (open: boolean) => void;
   setShareDialogOpen: (open: boolean) => void;
@@ -647,6 +662,42 @@ export const useApp = create<AppState>((set, get) => {
 
     deleteSkill: async (name) => {
       await request({ type: "skill.delete", name });
+    },
+
+    listPluginMarketplaces: async () => {
+      return request<PluginMarketplace[]>({ type: "plugins.marketplaces.list" });
+    },
+
+    addPluginMarketplace: async (source) => {
+      return request<{ name: string }>({ type: "plugins.marketplace.add", source });
+    },
+
+    removePluginMarketplace: async (name, force) => {
+      return request<{ removed: boolean; dependentPlugins: string[] }>({
+        type: "plugins.marketplace.remove",
+        name,
+        force,
+      });
+    },
+
+    browsePluginMarketplace: async (name) => {
+      return request<MarketplacePlugin[]>({ type: "plugins.marketplace.browse", name });
+    },
+
+    listInstalledPlugins: async () => {
+      return request<InstalledPlugin[]>({ type: "plugins.list" });
+    },
+
+    installPlugin: async (source) => {
+      return request<PluginInstallResult>({ type: "plugins.install", source });
+    },
+
+    uninstallPlugin: async (name, directSourceId) => {
+      await request({ type: "plugins.uninstall", name, directSourceId });
+    },
+
+    setPluginEnabled: async (name, enabled) => {
+      await request({ type: "plugins.setEnabled", name, enabled });
     },
 
     searchFiles: async (projectId, query) => {

@@ -215,6 +215,8 @@ export function TerminalPanel({ threadId }: { threadId: string }) {
     resizeObserver.observe(host);
     const themeObserver = new MutationObserver(() => {
       terminal.options.theme = getTerminalTheme();
+      // 主题切换后强制重绘,避免浅色模式残留黑色背景
+      terminal.refresh(0, Math.max(0, terminal.rows - 1));
     });
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
 

@@ -8,6 +8,8 @@ import {
   LogOut,
   MessageSquare,
   MessagesSquare,
+  Package,
+  PanelLeftClose,
   Plus,
   Settings,
   ShieldCheck,
@@ -27,9 +29,11 @@ import { BrandLogo } from "./BrandLogo";
 export function Sidebar({
   onNavigate,
   onClose,
+  onCollapse,
 }: {
   onNavigate?: () => void;
   onClose?: () => void;
+  onCollapse?: () => void;
 }) {
   const projects = useApp((s) => s.projects);
   const threads = useApp((s) => s.threads);
@@ -55,12 +59,25 @@ export function Sidebar({
       .sort((a, b) => b.updatedAt - a.updatedAt);
 
   return (
-    <aside className="flex h-full w-[17rem] shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:rounded-xl md:border dark:border-zinc-800 dark:bg-zinc-900">
+    <aside className="flex h-full w-[17rem] shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:rounded-lg md:border dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex h-12 items-center gap-2 px-4">
         <BrandLogo className="h-6 w-6" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">云端编码助手</span>
         {!connected && (
           <WifiOff className="h-3.5 w-3.5 text-amber-500" aria-label="正在连接服务器" />
+        )}
+        {onCollapse && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="隐藏会话侧边栏"
+            title="隐藏会话侧边栏 (⌘B)"
+            className="text-zinc-400"
+            onClick={onCollapse}
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </Button>
         )}
         {onClose && (
           <Button
@@ -106,6 +123,19 @@ export function Sidebar({
             )}
           >
             <Sparkles className="h-4 w-4" /> 技能
+          </Link>
+        )}
+        {user?.role === "admin" && (
+          <Link
+            to="/plugins"
+            onClick={onNavigate}
+            className={cn(
+              buttonVariants({ variant: location.pathname === "/plugins" ? "secondary" : "ghost" }),
+              "mt-1 w-full justify-start",
+              location.pathname !== "/plugins" && "text-muted-foreground",
+            )}
+          >
+            <Package className="h-4 w-4" /> 插件市场
           </Link>
         )}
       </div>
