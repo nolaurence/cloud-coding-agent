@@ -24,7 +24,6 @@ const RESIZE_HANDLE_WIDTH = 8;
 export function ThreadPage() {
   const { threadId } = useParams<{ threadId: string }>();
   const threads = useApp((s) => s.threads);
-  const user = useApp((s) => s.user);
   const projects = useApp((s) => s.projects);
   const settings = useApp((s) => s.settings);
   const sendMessage = useApp((s) => s.sendMessage);
@@ -37,12 +36,7 @@ export function ThreadPage() {
   const state = useThreadState(threadId);
   const thread = threads.find((t) => t.id === threadId);
   const project = projects.find((candidate) => candidate.id === thread?.projectId);
-  const canManageThread = Boolean(
-    thread &&
-      (thread.access === "owner" ||
-        user?.role === "admin" ||
-        (thread.userId && thread.userId === user?.username)),
-  );
+  const canManageThread = thread?.access === "owner";
   const canInteract = canManageThread || thread?.access === "collaborate";
   const [switchingModel, setSwitchingModel] = useState(false);
   const [modelError, setModelError] = useState("");

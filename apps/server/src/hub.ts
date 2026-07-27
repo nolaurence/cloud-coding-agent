@@ -18,6 +18,7 @@ import { browseDirectories, resolveProjectDirectory } from "./directories.js";
 import { deleteSkill, listSkills, saveSkill } from "./skills.js";
 import { flattenModels, isReasoningEffort, normalizeModelRefReasoning } from "@cca/protocol";
 import { verifyToken, type TokenPayload } from "./auth.js";
+import { getThreadAccess } from "./threadAccess.js";
 import { discoverProviderModels } from "./providers.js";
 import {
   listProjectDirectory,
@@ -32,7 +33,6 @@ import { removeThreadUploads, removeUploadedImages, validateOwnedUploads } from 
 import {
   createThreadShare,
   deleteThreadShare,
-  getSharedThreadAccess,
   getThreadShare,
   redeemThreadShare,
   revokeThreadShare,
@@ -91,10 +91,7 @@ export class Hub {
   }
 
   private threadAccess(conn: ClientConn, thread: ThreadMeta | undefined): ThreadAccess | null {
-    if (!thread) return null;
-    if (conn.user.role === "admin" || thread.userId === conn.user.username) return "owner";
-    if (!thread.userId) return "collaborate";
-    return getSharedThreadAccess(thread.id, conn.user.username);
+    return getThreadAccess(conn.user, thread);
   }
 
   private canRead(conn: ClientConn, thread: ThreadMeta | undefined): boolean {

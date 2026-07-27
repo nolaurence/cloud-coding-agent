@@ -25,7 +25,8 @@ import {
 import { closeDb, initDb } from "./db.js";
 import { store } from "./store.js";
 import { uploadDirectory, uploadUsage } from "./uploads.js";
-import { getSharedThreadAccess, initThreadShares } from "./threadShares.js";
+import { initThreadShares } from "./threadShares.js";
+import { getThreadAccess } from "./threadAccess.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -229,13 +230,9 @@ async function main() {
     }
     if (!threadId) return reply.code(400).send({ error: "缺少会话标识" });
     const thread = store.getThread(threadId);
-    const canAccess = thread && (
-      payload.role === "admin" ||
-      !thread.userId ||
-      thread.userId === payload.username ||
-      getSharedThreadAccess(threadId, payload.username) !== null
-    );
-    if (!canAccess) return reply.code(403).send({ error: "无权访问该图片" });
+    if (!thread || getThreadAccess(payload, thread) === null) {
+      return reply.code(403).send({ error: "无权访问该图片" });
+    }
     const attachment = Object.values(thread.messageAttachments ?? {}).flat().find((item) => item.id === id);
     if (!attachment) return reply.code(404).send({ error: "图片不存在" });
     const imagePath = path.join(uploadDirectory(attachment.ownerId || thread.userId || ""), id);

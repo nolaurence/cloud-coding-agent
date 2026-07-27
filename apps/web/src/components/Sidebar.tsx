@@ -169,10 +169,7 @@ export function Sidebar({
             {threadsByProject(project.id).map((thread) => {
               const active = location.pathname === `/thread/${thread.id}`;
               const running = runningIds.includes(thread.id);
-              const canManageThread =
-                thread.access === "owner" ||
-                user?.role === "admin" ||
-                thread.userId === user?.username;
+              const canManageThread = thread.access === "owner";
               return (
                 <div key={thread.id} className="group relative">
                   <Link

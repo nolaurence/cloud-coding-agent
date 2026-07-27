@@ -11,6 +11,7 @@ test("thread share links persist as hashes and rotate or revoke access", async (
 
   const db = await import("./db.js");
   const shares = await import("./threadShares.js");
+  const access = await import("./threadAccess.js");
   t.after(async () => {
     if (db.usingDatabase()) await db.closeDb();
     if (originalDataDirectory === undefined) delete process.env.CCA_DATA_DIR;
@@ -19,11 +20,25 @@ test("thread share links persist as hashes and rotate or revoke access", async (
   });
 
   await shares.initThreadShares();
+  const thread = {
+    id: "thread-1",
+    projectId: "project-1",
+    title: "Owner thread",
+    userId: "owner",
+    createdAt: 1,
+    updatedAt: 1,
+    archived: false,
+  };
+  assert.equal(access.getThreadAccess({ username: "owner", role: "user" }, thread), "owner");
+  assert.equal(access.getThreadAccess({ username: "admin", role: "admin" }, thread), null);
+
   const first = await shares.createThreadShare("thread-1", "readonly", "owner");
   assert.equal(shares.validateThreadShareToken("thread-1", first.token), "readonly");
   assert.equal(shares.getSharedThreadAccess("thread-1", "__proto__"), null);
   await shares.redeemThreadShare(first.token, "__proto__");
   assert.equal(shares.getSharedThreadAccess("thread-1", "__proto__"), "readonly");
+  await shares.redeemThreadShare(first.token, "admin");
+  assert.equal(access.getThreadAccess({ username: "admin", role: "admin" }, thread), "readonly");
   assert.deepEqual(await shares.redeemThreadShare(first.token, "reader"), {
     threadId: "thread-1",
     mode: "readonly",

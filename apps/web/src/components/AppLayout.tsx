@@ -19,7 +19,6 @@ function readSidebarCollapsed(): boolean {
 
 export function AppLayout() {
   const connected = useApp((s) => s.connected);
-  const user = useApp((s) => s.user);
   const threads = useApp((s) => s.threads);
   const workspacePanelOpen = useApp((s) => s.workspacePanelOpen);
   const setWorkspacePanelOpen = useApp((s) => s.setWorkspacePanelOpen);
@@ -43,12 +42,7 @@ export function AppLayout() {
     : undefined;
   const routeThread = threads.find((thread) => thread.id === routeThreadId);
   const mobileTitle = routeThread?.title ?? "云端编码助手";
-  const canManageThread = Boolean(
-    routeThread &&
-      (routeThread.access === "owner" ||
-        user?.role === "admin" ||
-        (routeThread.userId && routeThread.userId === user?.username)),
-  );
+  const canManageThread = routeThread?.access === "owner";
 
   useEffect(() => {
     setSidebarOpen(false);
