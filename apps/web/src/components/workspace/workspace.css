@@ -11,14 +11,24 @@
   padding: 10px 12px;
 }
 
-.workspace-terminal .xterm-viewport {
-  /* xterm.css 默认黑色背景,浅色模式下会露出黑框 */
+/* xterm.css 默认黑色背景且按需加载、优先级相同,需提高选择器优先级压过它 */
+.workspace-terminal .xterm .xterm-viewport {
   background-color: transparent;
   scrollbar-color: #d4d4d8 transparent;
   scrollbar-width: thin;
 }
 
-.dark .workspace-terminal .xterm-viewport {
+.workspace-terminal .xterm .composition-view {
+  background: #fff;
+  color: #27272a;
+}
+
+.dark .workspace-terminal .xterm .composition-view {
+  background: #09090b;
+  color: #e4e4e7;
+}
+
+.dark .workspace-terminal .xterm .xterm-viewport {
   scrollbar-color: #52525b transparent;
 }
 

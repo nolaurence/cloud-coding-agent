@@ -826,6 +826,18 @@ export class CopilotManager {
     return this.threads.get(threadId)?.running ?? false;
   }
 
+  // 后台预热插件市场缓存,避免用户首次打开插件页时等待市场仓库克隆
+  async warmupPlugins(): Promise<void> {
+    try {
+      const marketplaces = await this.listPluginMarketplaces();
+      await Promise.allSettled(
+        marketplaces.map((m) => this.browsePluginMarketplace(m.name)),
+      );
+    } catch (error) {
+      console.warn("[cca] 插件市场预热失败", error);
+    }
+  }
+
   async listPluginMarketplaces() {
     const client = await this.ensureClient();
     const result = await client.rpc.plugins.marketplaces.list();

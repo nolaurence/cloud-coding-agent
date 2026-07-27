@@ -669,7 +669,8 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     addPluginMarketplace: async (source) => {
-      return request<{ name: string }>({ type: "plugins.marketplace.add", source });
+      // 首次克隆市场仓库可能较慢
+      return request<{ name: string }>({ type: "plugins.marketplace.add", source }, 180_000);
     },
 
     removePluginMarketplace: async (name, force) => {
@@ -681,7 +682,8 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     browsePluginMarketplace: async (name) => {
-      return request<MarketplacePlugin[]>({ type: "plugins.marketplace.browse", name });
+      // 首次克隆市场仓库可能较慢
+      return request<MarketplacePlugin[]>({ type: "plugins.marketplace.browse", name }, 180_000);
     },
 
     listInstalledPlugins: async () => {
@@ -689,7 +691,8 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     installPlugin: async (source) => {
-      return request<PluginInstallResult>({ type: "plugins.install", source });
+      // 安装需要下载插件文件
+      return request<PluginInstallResult>({ type: "plugins.install", source }, 180_000);
     },
 
     uninstallPlugin: async (name, directSourceId) => {

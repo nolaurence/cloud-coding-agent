@@ -5,7 +5,10 @@ type EventHandler = (msg: ServerMessage) => void;
 let socket: WebSocket | null = null;
 let seq = 0;
 let currentToken: string | null = null;
-const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+const pending = new Map<
+  string,
+  { resolve: (v: unknown) => void; reject: (e: Error) => void; timer?: ReturnType<typeof setTimeout> }
+>();
 const handlers = new Set<EventHandler>();
 const reconnectListeners = new Set<() => void>();
 const authFailListeners = new Set<() => void>();
@@ -42,6 +45,7 @@ export function connect(token: string) {
       const entry = pending.get(msg.id);
       if (entry) {
         pending.delete(msg.id);
+        if (entry.timer) clearTimeout(entry.timer);
         if (msg.ok) entry.resolve(msg.data);
         else entry.reject(new Error(msg.error));
       }
@@ -53,6 +57,7 @@ export function connect(token: string) {
     socket = null;
     connectionListeners.forEach((fn) => fn(false));
     for (const [, entry] of pending) {
+      if (entry.timer) clearTimeout(entry.timer);
       entry.reject(new Error("连接已断开"));
     }
     pending.clear();
@@ -106,14 +111,23 @@ type ClientMessageNoId = ClientMessage extends infer T
     : never
   : never;
 
-export function request<T = unknown>(msg: ClientMessageNoId): Promise<T> {
+export function request<T = unknown>(msg: ClientMessageNoId, timeoutMs?: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       reject(new Error("未连接到服务器"));
       return;
     }
     const id = `req-${++seq}`;
-    pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+    const entry: { resolve: (v: unknown) => void; reject: (e: Error) => void; timer?: ReturnType<typeof setTimeout> } = {
+      resolve: resolve as (v: unknown) => void,
+      reject,
+    };
+    if (timeoutMs && timeoutMs > 0) {
+      entry.timer = setTimeout(() => {
+        if (pending.delete(id)) reject(new Error("请求超时,请稍后重试"));
+      }, timeoutMs);
+    }
+    pending.set(id, entry);
     socket.send(JSON.stringify({ ...msg, id }));
   });
 }

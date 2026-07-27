@@ -19,7 +19,7 @@ ENV CCA_DATA_DIR=/data
 COPY --from=build /app /app
 # Mounted repositories can have a host UID that differs from the container.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git ripgrep \
+    && apt-get install -y --no-install-recommends ca-certificates git openssh-client ripgrep \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data \
     && git config --system --add safe.directory '*'

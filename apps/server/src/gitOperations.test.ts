@@ -85,7 +85,7 @@ test("pull fetches with credentials and integrates without credentials", async (
 
   assert.deepEqual(calls[1]?.args, [
     "-c",
-    "remote.origin.url=https://github.com/acme/widgets.git",
+    "url.https://github.com/acme/widgets.git.insteadOf=git@github.com:acme/widgets.git",
     "fetch",
     "origin",
     "main",

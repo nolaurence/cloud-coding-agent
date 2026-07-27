@@ -306,9 +306,11 @@ export async function runAuthenticatedGit(
     if (!remoteUrl) throw new Error(`远程仓库 ${remoteName} 没有可用地址`);
     remote = normalizeGitRemote(remoteUrl);
 
-    const overrides = ["-c", `remote.${remoteName}.url=${remote.url}`];
+    // 注意:命令行的 -c remote.<name>.url 覆盖对已有远程不生效(git 会优先使用
+    // 配置文件中的第一个值),因此这里通过 url.insteadOf 把 SSH 地址重写为 HTTPS,
+    // 让注入的 HTTP 凭据对 fetch/pull/push 都生效。
+    const overrides = ["-c", `url.${remote.url}.insteadOf=${remoteUrl}`];
     if (args.action === "push") {
-      overrides.push("-c", `remote.${remoteName}.pushurl=${remote.url}`);
       if (args.setUpstream && !branch) throw new Error("设置上游分支时必须提供分支名称");
       command = [
         ...overrides,

@@ -83,11 +83,11 @@ export function AppLayout() {
         <div className="hidden shrink-0 md:block">
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon"
             aria-label="显示会话侧边栏"
             title="显示会话侧边栏 (⌘B)"
-            className="ml-[10px] mt-[10px] bg-white dark:bg-zinc-950"
+            className="ml-[10px] mt-[10px] text-muted-foreground"
             onClick={toggleSidebarCollapsed}
           >
             <PanelLeftOpen className="h-4 w-4" />

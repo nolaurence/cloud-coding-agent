@@ -264,6 +264,7 @@ async function main() {
 
   await app.listen({ port: PORT, host: HOST });
   console.log(`[cca] server listening on http://${HOST}:${PORT}`);
+  hub.warmupPlugins();
 
   let shuttingDown = false;
   const shutdown = async () => {

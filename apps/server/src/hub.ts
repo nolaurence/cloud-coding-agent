@@ -63,6 +63,11 @@ export class Hub {
     });
   }
 
+  // 启动后后台预热插件市场缓存
+  warmupPlugins() {
+    void this.manager.warmupPlugins();
+  }
+
   handleConnection(socket: WebSocket, token: string | undefined) {
     const user = token ? verifyToken(token) : null;
     if (!user) {
