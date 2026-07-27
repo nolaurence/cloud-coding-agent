@@ -104,6 +104,15 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* iOS 会在聚焦小于 16px 的文本控件时自动缩放页面。 */
+@supports (-webkit-touch-callout: none) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 button,
 [role="button"] {
   cursor: pointer;
