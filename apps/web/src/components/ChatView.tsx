@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   Bot,
@@ -128,14 +128,30 @@ function MessageTime({ at }: { at: number }) {
   );
 }
 
-function MessageImage({ id, name, threadId }: { id: string; name: string; threadId: string }) {
+const MessageContext = createContext<{
+  threadId: string;
+  shareToken?: string;
+  showAuthors: boolean;
+}>({ threadId: "", showAuthors: false });
+
+function MessageImage({
+  id,
+  name,
+  threadId,
+  shareToken,
+}: {
+  id: string;
+  name: string;
+  threadId: string;
+  shareToken?: string;
+}) {
   const [src, setSrc] = useState("");
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
     let objectUrl = "";
-    void loadImage(id, threadId, controller.signal)
+    void loadImage(id, threadId, controller.signal, shareToken)
       .then((blob) => {
         objectUrl = URL.createObjectURL(blob);
         setSrc(objectUrl);
@@ -147,7 +163,7 @@ function MessageImage({ id, name, threadId }: { id: string; name: string; thread
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [id, threadId]);
+  }, [id, shareToken, threadId]);
 
   if (failed) {
     return (
@@ -197,11 +213,8 @@ function AssistantMessage({
 }
 
 function UserMessage({ message }: { message: ChatMessage }) {
-  const threadId = useApp((state) => state.activeThreadId);
+  const { threadId, shareToken, showAuthors } = useContext(MessageContext);
   const currentUsername = useApp((state) => state.user?.username);
-  const thread = useApp((state) =>
-    state.threads.find((candidate) => candidate.id === state.activeThreadId),
-  );
   const skillMatch = message.text.match(
     /^Use these skills for this request: ([^\n]+)\.\n\n([\s\S]*)$/,
   );
@@ -211,12 +224,11 @@ function UserMessage({ message }: { message: ChatMessage }) {
 
   return (
     <article className="group/user flex flex-col items-end py-1">
-      {message.authorId &&
-        (thread?.shared || thread?.access === "readonly" || thread?.access === "collaborate") && (
-          <div className="mb-1 px-2 text-[11px] text-muted-foreground">
-            {message.authorId === currentUsername ? "你" : message.authorId}
-          </div>
-        )}
+      {message.authorId && showAuthors && (
+        <div className="mb-1 px-2 text-[11px] text-muted-foreground">
+          {message.authorId === currentUsername ? "你" : message.authorId}
+        </div>
+      )}
       <div className="relative max-w-[80%] rounded-2xl bg-muted px-4 py-2.5 text-foreground">
         <CopyAction
           text={message.text}
@@ -226,7 +238,15 @@ function UserMessage({ message }: { message: ChatMessage }) {
         {images.length > 0 && (
           <div className={cn("grid gap-2", images.length > 1 && "grid-cols-2")}>
             {images.map((image) => (
-              threadId ? <MessageImage key={image.id} id={image.id} name={image.displayName} threadId={threadId} /> : null
+              threadId ? (
+                <MessageImage
+                  key={image.id}
+                  id={image.id}
+                  name={image.displayName}
+                  threadId={threadId}
+                  shareToken={shareToken}
+                />
+              ) : null
             ))}
           </div>
         )}
@@ -462,10 +482,25 @@ function RunningTurn({
   );
 }
 
-export function ChatView({ threadId, bottomInset = 0 }: { threadId: string; bottomInset?: number }) {
+export function ChatView({
+  threadId,
+  bottomInset = 0,
+  shareToken,
+  manageSubscription = true,
+  showAuthors,
+}: {
+  threadId: string;
+  bottomInset?: number;
+  shareToken?: string;
+  manageSubscription?: boolean;
+  showAuthors?: boolean;
+}) {
   const state = useThreadState(threadId);
   const openThread = useApp((appState) => appState.openThread);
   const closeThread = useApp((appState) => appState.closeThread);
+  const thread = useApp((appState) =>
+    appState.threads.find((candidate) => candidate.id === threadId),
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
@@ -474,6 +509,7 @@ export function ChatView({ threadId, bottomInset = 0 }: { threadId: string; bott
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<ReadonlySet<string>>(new Set());
 
   useEffect(() => {
+    if (!manageSubscription) return;
     let active = true;
     pinnedRef.current = true;
     setAtBottom(true);
@@ -487,7 +523,7 @@ export function ChatView({ threadId, bottomInset = 0 }: { threadId: string; bott
       active = false;
       void closeThread(threadId);
     };
-  }, [threadId, openThread, closeThread]);
+  }, [threadId, openThread, closeThread, manageSubscription]);
 
   useEffect(() => {
     if (state.loaded) setLoadError("");
@@ -563,20 +599,25 @@ export function ChatView({ threadId, bottomInset = 0 }: { threadId: string; bott
     );
   }
 
+  const shouldShowAuthors =
+    showAuthors ??
+    Boolean(thread?.shared || thread?.access === "readonly" || thread?.access === "collaborate");
+
   return (
-    <div className="relative h-full">
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        onWheel={(event) => {
-          if (event.deltaY < 0) pinnedRef.current = false;
-        }}
-        className="h-full min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain [scrollbar-gutter:stable_both-edges]"
-      >
+    <MessageContext.Provider value={{ threadId, shareToken, showAuthors: shouldShowAuthors }}>
+      <div className="relative h-full">
         <div
-          className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-3 pt-4 sm:px-5 sm:pt-5"
-          style={{ paddingBottom: Math.max(20, bottomInset + 16) }}
+          ref={scrollRef}
+          onScroll={onScroll}
+          onWheel={(event) => {
+            if (event.deltaY < 0) pinnedRef.current = false;
+          }}
+          className="h-full min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain [scrollbar-gutter:stable_both-edges]"
         >
+          <div
+            className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-3 pt-4 sm:px-5 sm:pt-5"
+            style={{ paddingBottom: Math.max(20, bottomInset + 16) }}
+          >
           {blocks.length === 0 && !hasLive && !state.running && (
             <div className="flex flex-1 items-center justify-center py-16 text-sm text-zinc-300 dark:text-zinc-700">
               新会话
@@ -641,22 +682,23 @@ export function ChatView({ threadId, bottomInset = 0 }: { threadId: string; bott
               {state.error}
             </div>
           )}
+          </div>
         </div>
-      </div>
 
-      {!atBottom && (
-        <button
-          type="button"
-          aria-label="回到最新消息"
-          title="回到最新消息"
-          className="absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-600 shadow-sm hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-          style={{ bottom: bottomInset + 6 }}
-          onClick={scrollToBottom}
-        >
-          <ArrowDown className="h-3.5 w-3.5" />
-          回到最新消息
-        </button>
-      )}
-    </div>
+        {!atBottom && (
+          <button
+            type="button"
+            aria-label="回到最新消息"
+            title="回到最新消息"
+            className="absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-600 shadow-sm hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            style={{ bottom: bottomInset + 6 }}
+            onClick={scrollToBottom}
+          >
+            <ArrowDown className="h-3.5 w-3.5" />
+            回到最新消息
+          </button>
+        )}
+      </div>
+    </MessageContext.Provider>
   );
 }

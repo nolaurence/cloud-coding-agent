@@ -24,6 +24,7 @@ import type {
   ThreadEvent,
   ThreadMeta,
   ThreadShareMode,
+  ThreadSharePreview,
   ThreadShareSummary,
   ToolActivity,
   TurnAttachment,
@@ -195,6 +196,7 @@ interface AppState {
   getThreadShare: (threadId: string) => Promise<ThreadShareSummary>;
   createThreadShare: (threadId: string, mode: ThreadShareMode) => Promise<CreatedThreadShare>;
   revokeThreadShare: (threadId: string) => Promise<void>;
+  previewThreadShare: (token: string) => Promise<ThreadSharePreview>;
   redeemThreadShare: (token: string) => Promise<ThreadMeta>;
   updateSettings: (settings: AppSettings) => Promise<void>;
   saveSkill: (name: string, description: string, content: string) => Promise<void>;
@@ -639,6 +641,9 @@ export const useApp = create<AppState>((set, get) => {
     revokeThreadShare: async (threadId) => {
       await request({ type: "thread.share.revoke", threadId });
     },
+
+    previewThreadShare: (token) =>
+      request<ThreadSharePreview>({ type: "thread.share.preview", token }),
 
     redeemThreadShare: async (token) => {
       const thread = await request<ThreadMeta>({ type: "thread.share.redeem", token });

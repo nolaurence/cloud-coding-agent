@@ -33,6 +33,12 @@ test("thread share links persist as hashes and rotate or revoke access", async (
   assert.equal(access.getThreadAccess({ username: "admin", role: "admin" }, thread), null);
 
   const first = await shares.createThreadShare("thread-1", "readonly", "owner");
+  assert.deepEqual(shares.inspectThreadShare(first.token), {
+    threadId: "thread-1",
+    mode: "readonly",
+  });
+  assert.equal(shares.getThreadShare("thread-1").memberCount, 0);
+  assert.equal(shares.getSharedThreadAccess("thread-1", "previewer"), null);
   assert.equal(shares.validateThreadShareToken("thread-1", first.token), "readonly");
   assert.equal(shares.getSharedThreadAccess("thread-1", "__proto__"), null);
   await shares.redeemThreadShare(first.token, "__proto__");
@@ -52,6 +58,7 @@ test("thread share links persist as hashes and rotate or revoke access", async (
 
   const second = await shares.createThreadShare("thread-1", "collaborate", "owner");
   assert.notEqual(second.token, first.token);
+  assert.equal(shares.inspectThreadShare(first.token), null);
   assert.equal(shares.validateThreadShareToken("thread-1", first.token), null);
   assert.equal(shares.getSharedThreadAccess("thread-1", "reader"), null);
   await assert.rejects(() => shares.redeemThreadShare(first.token, "reader"), /无效或已失效/);
@@ -65,6 +72,7 @@ test("thread share links persist as hashes and rotate or revoke access", async (
   assert.equal(shares.getSharedThreadAccess("thread-1", "teammate"), "collaborate");
   await shares.revokeThreadShare("thread-1");
   assert.equal(shares.getThreadShare("thread-1").active, false);
+  assert.equal(shares.inspectThreadShare(second.token), null);
   assert.equal(shares.getSharedThreadAccess("thread-1", "collaborator"), null);
   await assert.rejects(() => shares.redeemThreadShare(second.token, "collaborator"), /无效或已失效/);
 

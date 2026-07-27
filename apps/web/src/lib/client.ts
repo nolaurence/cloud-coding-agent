@@ -155,14 +155,18 @@ export async function uploadImage(file: File): Promise<{ path: string; displayNa
   return { path: data.path, displayName: data.displayName ?? file.name, imageId: data.id };
 }
 
-export async function loadImage(id: string, threadId: string, signal?: AbortSignal): Promise<Blob> {
+export async function loadImage(
+  id: string,
+  threadId: string,
+  signal?: AbortSignal,
+  shareToken?: string,
+): Promise<Blob> {
   if (!currentToken) throw new Error("未登录");
+  const headers: Record<string, string> = { Authorization: `Bearer ${currentToken}` };
+  if (shareToken) headers["X-Thread-Share-Token"] = shareToken;
   const response = await fetch(
     `/api/uploads/images/${encodeURIComponent(id)}?threadId=${encodeURIComponent(threadId)}`,
-    {
-    headers: { Authorization: `Bearer ${currentToken}` },
-    signal,
-    },
+    { headers, signal },
   );
   if (!response.ok) throw new Error(`图片加载失败 (${response.status})`);
   return response.blob();

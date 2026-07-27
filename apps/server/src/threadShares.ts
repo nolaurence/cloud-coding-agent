@@ -178,6 +178,18 @@ export function getSharedThreadAccess(
   return share.mode;
 }
 
+export function inspectThreadShare(
+  token: string,
+): { threadId: string; mode: ThreadShareMode } | null {
+  const normalized = token.trim();
+  if (!normalized) return null;
+  const digest = hashToken(normalized);
+  const share = [...shares.values()].find((candidate) =>
+    hashesEqual(candidate.tokenHash, digest),
+  );
+  return share ? { threadId: share.threadId, mode: share.mode } : null;
+}
+
 export function validateThreadShareToken(
   threadId: string,
   token: string | undefined,
@@ -221,12 +233,9 @@ export function redeemThreadShare(
   username: string,
 ): Promise<{ threadId: string; mode: ThreadShareMode }> {
   return enqueueMutation(async () => {
-    const normalized = token.trim();
-    if (!normalized) throw new Error("分享链接无效或已失效");
-    const digest = hashToken(normalized);
-    const share = [...shares.values()].find((candidate) =>
-      hashesEqual(candidate.tokenHash, digest),
-    );
+    const inspected = inspectThreadShare(token);
+    if (!inspected) throw new Error("分享链接无效或已失效");
+    const share = shares.get(inspected.threadId);
     if (!share) throw new Error("分享链接无效或已失效");
     if (!hasMember(share, username)) {
       share.members[username] = Date.now();

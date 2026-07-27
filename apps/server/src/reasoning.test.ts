@@ -254,10 +254,10 @@ test("setThreadModel hot-switches within a provider without disconnecting", asyn
   assert.equal(disconnects, 0);
 });
 
-test("setThreadModel disconnects across providers without deleting the runtime", async () => {
+test("setThreadModel rejects cross-provider switch on an attached session", async () => {
   let disconnects = 0;
   const manager = new CopilotManager();
-  const runtime = seedRuntime(manager, {
+  seedRuntime(manager, {
     setModel: async () => {
       throw new Error("setModel should not run");
     },
@@ -266,17 +266,36 @@ test("setThreadModel disconnects across providers without deleting the runtime",
     },
   });
 
+  await assert.rejects(
+    manager.setThreadModel(
+      "thread",
+      { providerId: "first", modelId: "model" },
+      { providerId: "second", modelId: "model" },
+    ),
+    /不支持切换模型提供方/,
+  );
+  assert.equal(disconnects, 0);
+});
+
+test("setThreadModel allows cross-provider switch on a fresh thread without session", async () => {
+  const manager = new CopilotManager();
+  const threads = (manager as unknown as { threads: Map<string, unknown> }).threads;
+  threads.set("thread", {
+    threadId: "thread",
+    session: null,
+    attaching: null,
+    messages: [],
+    activities: [],
+    running: false,
+    currentTurnId: null,
+    detachTimer: null,
+    subscribers: 1,
+  });
+
   await manager.setThreadModel(
     "thread",
     { providerId: "first", modelId: "model" },
     { providerId: "second", modelId: "model" },
-  );
-
-  assert.equal(disconnects, 1);
-  assert.equal(runtime.session, null);
-  assert.equal(
-    (manager as unknown as { threads: Map<string, unknown> }).threads.has("thread"),
-    true,
   );
 });
 

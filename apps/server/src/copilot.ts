@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { CopilotClient, approveAll } from "@github/copilot-sdk";
+import { CopilotClient } from "@github/copilot-sdk";
 import type { CopilotSession, SessionEvent } from "@github/copilot-sdk";
 import { isReasoningEffort, normalizeReasoningEfforts } from "@cca/protocol";
 import type {
@@ -16,6 +16,7 @@ import { COPILOT_HOME } from "./env.js";
 import { store } from "./store.js";
 import { enabledSkillDirectories } from "./skills.js";
 import { createAuthenticatedGitTool } from "./gitOperations.js";
+import { createWorkspacePermissionHandler } from "./permissions.js";
 
 interface ThreadRuntime {
   threadId: string;
@@ -243,7 +244,7 @@ export class CopilotManager {
       streaming: true,
       includeSubAgentStreamingEvents: false,
       workingDirectory: project.path,
-      onPermissionRequest: approveAll,
+      onPermissionRequest: createWorkspacePermissionHandler(project.path),
       mcpServers,
       tools: [createAuthenticatedGitTool(actorId || thread.userId, project.path)],
       systemMessage: {
@@ -778,10 +779,10 @@ export class CopilotManager {
     if (rt.running) throw new Error("当前任务运行中,请等待完成后再切换模型或推理强度");
 
     const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
-    if (!session) return;
 
     const currentProviderId = currentModel?.providerId ?? "copilot";
     if (currentProviderId === nextModel.providerId) {
+      if (!session) return;
       await session.setModel(
         nextModel.modelId,
         nextModel.reasoningEffort
@@ -794,9 +795,15 @@ export class CopilotManager {
       return;
     }
 
-    await session.disconnect();
-    rt.session = null;
-    rt.attaching = null;
+    // 跨 provider 热切换不可靠:CLI resume 已有 session 时不保证应用新的 provider,
+    // 因此只要会话已有历史或已附加 session 就直接拒绝,提示用户新建会话。
+    // 全新空会话除外:下次发送时会按新 provider 直接创建会话。
+    const thread = store.getThread(threadId);
+    const hasHistory =
+      rt.messages.length > 0 || (!!thread && thread.createdAt < Date.now() - 1000);
+    if (session || hasHistory) {
+      throw new Error("会话内不支持切换模型提供方,请新建会话使用该模型");
+    }
   }
 
   async deleteThread(threadId: string): Promise<void> {

@@ -25,7 +25,7 @@ import {
 import { closeDb, initDb } from "./db.js";
 import { store } from "./store.js";
 import { uploadDirectory, uploadUsage } from "./uploads.js";
-import { initThreadShares } from "./threadShares.js";
+import { initThreadShares, validateThreadShareToken } from "./threadShares.js";
 import { getThreadAccess } from "./threadAccess.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -230,7 +230,13 @@ async function main() {
     }
     if (!threadId) return reply.code(400).send({ error: "缺少会话标识" });
     const thread = store.getThread(threadId);
-    if (!thread || getThreadAccess(payload, thread) === null) {
+    const rawShareToken = req.headers["x-thread-share-token"];
+    const shareToken = typeof rawShareToken === "string" ? rawShareToken : undefined;
+    if (
+      !thread ||
+      (getThreadAccess(payload, thread) === null &&
+        validateThreadShareToken(threadId, shareToken) === null)
+    ) {
       return reply.code(403).send({ error: "无权访问该图片" });
     }
     const attachment = Object.values(thread.messageAttachments ?? {}).flat().find((item) => item.id === id);

@@ -36,15 +36,17 @@ import {
   createThreadShare,
   deleteThreadShare,
   getThreadShare,
+  inspectThreadShare,
   redeemThreadShare,
   revokeThreadShare,
+  validateThreadShareToken,
 } from "./threadShares.js";
 
 interface ClientConn {
   socket: WebSocket;
   user: TokenPayload;
   shellSubscribed: boolean;
-  threadSubs: Set<string>;
+  threadSubs: Map<string, string | null>;
 }
 
 export class Hub {
@@ -77,7 +79,7 @@ export class Hub {
       socket.close(4401, "unauthorized");
       return;
     }
-    const conn: ClientConn = { socket, user, shellSubscribed: false, threadSubs: new Set() };
+    const conn: ClientConn = { socket, user, shellSubscribed: false, threadSubs: new Map() };
     this.clients.add(conn);
     socket.on("message", (raw) => {
       void this.onMessage(conn, raw.toString()).catch((err) => {
@@ -85,7 +87,7 @@ export class Hub {
       });
     });
     socket.on("close", () => {
-      for (const threadId of conn.threadSubs) {
+      for (const threadId of conn.threadSubs.keys()) {
         this.manager.unsubscribe(threadId);
       }
       this.clients.delete(conn);
@@ -107,6 +109,16 @@ export class Hub {
 
   private canManage(conn: ClientConn, thread: ThreadMeta | undefined): boolean {
     return this.threadAccess(conn, thread) === "owner";
+  }
+
+  private canReceiveThread(
+    conn: ClientConn,
+    threadId: string,
+    thread: ThreadMeta | undefined,
+  ): boolean {
+    if (this.canRead(conn, thread)) return true;
+    const shareToken = conn.threadSubs.get(threadId);
+    return typeof shareToken === "string" && validateThreadShareToken(threadId, shareToken) !== null;
   }
 
   private threadMeta(conn: ClientConn, thread: ThreadMeta): ThreadMeta {
@@ -161,7 +173,7 @@ export class Hub {
   private broadcastThread(threadId: string, event: import("@cca/protocol").ThreadEvent) {
     const thread = store.getThread(threadId);
     for (const conn of this.clients) {
-      if (conn.threadSubs.has(threadId) && this.canRead(conn, thread)) {
+      if (conn.threadSubs.has(threadId) && this.canReceiveThread(conn, threadId, thread)) {
         this.send(conn, { type: "thread.event", threadId, event });
       }
     }
@@ -187,7 +199,7 @@ export class Hub {
   private reconcileThreadClients(threadId: string) {
     const thread = store.getThread(threadId);
     for (const conn of this.clients) {
-      if (conn.threadSubs.has(threadId) && !this.canRead(conn, thread)) {
+      if (conn.threadSubs.has(threadId) && !this.canReceiveThread(conn, threadId, thread)) {
         conn.threadSubs.delete(threadId);
         this.manager.unsubscribe(threadId);
       }
@@ -199,8 +211,8 @@ export class Hub {
     for (const conn of this.clients) {
       if (conn.user.username !== username) continue;
       conn.user = { ...conn.user, role };
-      for (const threadId of [...conn.threadSubs]) {
-        if (this.canRead(conn, store.getThread(threadId))) continue;
+      for (const threadId of [...conn.threadSubs.keys()]) {
+        if (this.canReceiveThread(conn, threadId, store.getThread(threadId))) continue;
         conn.threadSubs.delete(threadId);
         this.manager.unsubscribe(threadId);
       }
@@ -340,7 +352,7 @@ export class Hub {
           if (thread) removeThreadUploads(thread);
           await deleteThreadShare(msg.threadId);
           store.deleteThread(msg.threadId);
-          this.broadcastShell();
+          this.reconcileThreadClients(msg.threadId);
           this.reply(conn, msg.id);
           break;
         }
@@ -362,6 +374,7 @@ export class Hub {
         case "thread.subscribe": {
           if (!this.canRead(conn, store.getThread(msg.threadId))) throw new Error("无权访问该会话");
           if (conn.threadSubs.has(msg.threadId)) {
+            conn.threadSubs.set(msg.threadId, null);
             this.reply(conn, msg.id);
             break;
           }
@@ -370,7 +383,7 @@ export class Hub {
             this.manager.unsubscribe(msg.threadId);
             throw new Error("无权访问该会话");
           }
-          conn.threadSubs.add(msg.threadId);
+          conn.threadSubs.set(msg.threadId, null);
           this.send(conn, { type: "thread.event", threadId: msg.threadId, event: snapshot });
           this.reply(conn, msg.id);
           break;
@@ -405,6 +418,31 @@ export class Hub {
           this.reply(conn, msg.id);
           break;
         }
+        case "thread.share.preview": {
+          const inspected = inspectThreadShare(msg.token);
+          if (!inspected) throw new Error("分享链接无效或已失效");
+          const thread = store.getThread(inspected.threadId);
+          if (!thread) throw new Error("分享的会话不存在");
+          const hadSubscription = conn.threadSubs.has(thread.id);
+          const previousSubscription = conn.threadSubs.get(thread.id);
+          const snapshot = await this.manager.subscribe(thread.id, thread.userId);
+          if (validateThreadShareToken(thread.id, msg.token) === null) {
+            this.manager.unsubscribe(thread.id);
+            throw new Error("分享链接无效或已失效");
+          }
+          if (hadSubscription) {
+            this.manager.unsubscribe(thread.id);
+            if (previousSubscription !== null) conn.threadSubs.set(thread.id, msg.token.trim());
+          } else {
+            conn.threadSubs.set(thread.id, msg.token.trim());
+          }
+          this.send(conn, { type: "thread.event", threadId: thread.id, event: snapshot });
+          this.reply(conn, msg.id, {
+            thread: { ...thread, access: "readonly", shared: true },
+            mode: inspected.mode,
+          });
+          break;
+        }
         case "thread.share.redeem": {
           const redeemed = await redeemThreadShare(msg.token, conn.user.username);
           const thread = store.getThread(redeemed.threadId);
@@ -412,6 +450,7 @@ export class Hub {
             await revokeThreadShare(redeemed.threadId);
             throw new Error("分享的会话不存在");
           }
+          if (conn.threadSubs.has(thread.id)) conn.threadSubs.set(thread.id, null);
           if (conn.shellSubscribed) this.send(conn, { type: "shell", data: this.shellState(conn) });
           this.reply(conn, msg.id, this.threadMeta(conn, thread));
           break;

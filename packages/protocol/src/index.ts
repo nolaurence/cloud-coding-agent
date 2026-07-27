@@ -152,6 +152,11 @@ export interface CreatedThreadShare extends ThreadShareSummary {
   token: string;
 }
 
+export interface ThreadSharePreview {
+  thread: ThreadMeta;
+  mode: ThreadShareMode;
+}
+
 export interface ThreadMeta {
   id: string;
   projectId: string;
@@ -352,6 +357,7 @@ export type ClientMessage =
   | { id: string; type: "thread.share.get"; threadId: string }
   | { id: string; type: "thread.share.create"; threadId: string; mode: ThreadShareMode }
   | { id: string; type: "thread.share.revoke"; threadId: string }
+  | { id: string; type: "thread.share.preview"; token: string }
   | { id: string; type: "thread.share.redeem"; token: string }
   | { id: string; type: "turn.start"; threadId: string; text: string; attachments?: TurnAttachment[] }
   | { id: string; type: "turn.interrupt"; threadId: string }
