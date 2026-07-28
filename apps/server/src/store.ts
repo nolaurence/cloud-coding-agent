@@ -184,8 +184,17 @@ class Store {
     const changedThreads = this.threads.filter(
       (thread) => !thread.userId && legacyProjectIds.has(thread.projectId),
     );
+    const previousSettings = this.settings;
     const previousProjects = this.projects;
     const previousThreads = this.threads;
+    this.settings = {
+      ...this.settings,
+      connectors: this.settings.connectors.map((connector) =>
+        !connector.ownerId && legacyProjectIds.has(connector.projectId)
+          ? { ...connector, ownerId }
+          : connector,
+      ),
+    };
     this.projects = this.projects.map((project) =>
       legacyProjectIds.has(project.id) ? { ...project, ownerId } : project,
     );
@@ -198,6 +207,15 @@ class Store {
     try {
       if (usingDatabase()) {
         await transaction(async (txQuery) => {
+          await upsert(
+            {
+              table: "settings",
+              values: { id: 1, data: JSON.stringify(this.settings) },
+              conflictColumns: ["id"],
+              updateColumns: ["data"],
+            },
+            txQuery,
+          );
           for (const project of this.projects.filter((item) => legacyProjectIds.has(item.id))) {
             await upsert(
               {
@@ -229,10 +247,12 @@ class Store {
           }
         });
       } else {
+        writeJson(SETTINGS_FILE, this.settings);
         writeJson(PROJECTS_FILE, this.projects);
         writeJson(THREADS_FILE, this.threads);
       }
     } catch (error) {
+      this.settings = previousSettings;
       this.projects = previousProjects;
       this.threads = previousThreads;
       throw error;

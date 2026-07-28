@@ -59,14 +59,24 @@ test("SQLite migrates the complete JSON store and persists subsequent updates", 
     fs.rmSync(dataDirectory, { recursive: true, force: true });
   });
 
-  const legacySettings: AppSettings = {
-    ...DEFAULT_SETTINGS,
-    skillDirectories: ["/legacy/skills"],
-  };
   const legacyProject = {
     id: "project-1",
     name: "Legacy project",
     path: "/workspace/legacy",
+  };
+  const legacySettings: AppSettings = {
+    ...DEFAULT_SETTINGS,
+    skillDirectories: ["/legacy/skills"],
+    connectors: [{
+      id: "legacy-connector",
+      name: "Legacy connector",
+      platform: "qq",
+      enabled: false,
+      appId: "app",
+      appSecret: "secret",
+      projectId: legacyProject.id,
+      model: { providerId: "copilot", modelId: "gpt-5" },
+    }],
   };
   const legacyThread: ThreadMeta = {
     id: "thread-1",
@@ -107,6 +117,7 @@ test("SQLite migrates the complete JSON store and persists subsequent updates", 
   assert.equal(await store.migrateLegacyWorkspaceOwnership("legacy-admin"), true);
   assert.deepEqual(store.projects, [{ ...legacyProject, ownerId: "legacy-admin" }]);
   assert.equal(store.getThread(legacyThread.id)?.userId, "legacy-admin");
+  assert.equal(store.settings.connectors[0]?.ownerId, "legacy-admin");
   assert.equal(auth.verifyUser("legacy-admin", "legacy-password")?.role, "admin");
   assert.ok(fs.existsSync(databaseFile));
 
@@ -135,6 +146,7 @@ test("SQLite migrates the complete JSON store and persists subsequent updates", 
   assert.equal(store.getThread(legacyThread.id)?.title, "Updated thread");
   assert.equal(store.getThread(legacyThread.id)?.userId, "legacy-admin");
   assert.deepEqual(store.projects, [{ ...legacyProject, ownerId: "legacy-admin" }]);
+  assert.equal(store.settings.connectors[0]?.ownerId, "legacy-admin");
   assert.equal(auth.verifyUser("sqlite-user", "secret12")?.username, "sqlite-user");
 
   const userCount = await query<{ count: number }>("SELECT COUNT(*) AS count FROM users");
