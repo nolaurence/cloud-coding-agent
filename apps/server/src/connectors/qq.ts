@@ -98,6 +98,18 @@ export function normalizeQQMessage(type: string, data: QQMessageData): InboundCo
   return null;
 }
 
+export function createQQMarkdownMessage(
+  target: Extract<ConnectorTarget, { platform: "qq" }>,
+  content: string,
+  msgSeq: number,
+  replyToMessageId?: string,
+) {
+  const reply = replyToMessageId ? { msg_id: replyToMessageId } : {};
+  return target.kind === "channel"
+    ? { markdown: { content }, msg_type: 2, ...reply }
+    : { markdown: { content }, msg_type: 2, msg_seq: msgSeq, ...reply };
+}
+
 export class QQConnectorClient implements ConnectorClient {
   private socket: WebSocket | null = null;
   private accessToken = "";
@@ -149,15 +161,7 @@ export class QQConnectorClient implements ConnectorClient {
           : `/channels/${encodeURIComponent(target.id)}/messages`;
     let msgSeq = Math.floor(Math.random() * 1_000_000) + 1;
     for (const content of chunks(text)) {
-      const body =
-        target.kind === "channel"
-          ? { content, ...(replyToMessageId ? { msg_id: replyToMessageId } : {}) }
-          : {
-              content,
-              msg_type: 0,
-              msg_seq: msgSeq++,
-              ...(replyToMessageId ? { msg_id: replyToMessageId } : {}),
-            };
+      const body = createQQMarkdownMessage(target, content, msgSeq++, replyToMessageId);
       await this.api(path, { method: "POST", body: JSON.stringify(body) });
     }
   }

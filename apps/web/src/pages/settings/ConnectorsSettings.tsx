@@ -66,6 +66,8 @@ export function ConnectorsSettings() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<ConnectorConfig | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState("");
 
   useEffect(() => {
     void refreshConnectorStatuses().catch(() => {});
@@ -96,6 +98,23 @@ export function ConnectorsSettings() {
       setError(cause instanceof Error ? cause.message : "保存连接器失败");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const toggleConnector = async (connector: ConnectorConfig, enabled: boolean) => {
+    setTogglingId(connector.id);
+    setToggleError("");
+    try {
+      await updateSettings({
+        ...settings,
+        connectors: settings.connectors.map((candidate) =>
+          candidate.id === connector.id ? { ...candidate, enabled } : candidate,
+        ),
+      });
+    } catch (cause) {
+      setToggleError(cause instanceof Error ? cause.message : "更新连接器状态失败");
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -149,6 +168,10 @@ export function ConnectorsSettings() {
         </div>
       </div>
 
+      {toggleError && (
+        <div className="mb-3 text-xs text-red-500" aria-live="polite">{toggleError}</div>
+      )}
+
       <div className="flex flex-col gap-3">
         {settings.connectors.length === 0 && (
           <div className="rounded-lg border border-dashed border-zinc-300 p-6 text-center text-sm text-zinc-500 dark:border-zinc-700">
@@ -174,6 +197,13 @@ export function ConnectorsSettings() {
                     {project?.name ?? "工作区不存在"} · {model?.label ?? connector.model.modelId}
                   </div>
                 </div>
+                <Switch
+                  checked={connector.enabled}
+                  disabled={togglingId !== null}
+                  aria-label={`${connector.enabled ? "停用" : "启用"} ${connector.name}`}
+                  title={connector.enabled ? "停用连接器" : "启用连接器"}
+                  onCheckedChange={(enabled) => void toggleConnector(connector, enabled)}
+                />
                 <Badge
                   variant={state === "error" ? "destructive" : "secondary"}
                   className="h-5 px-1.5 text-[10px] font-normal"

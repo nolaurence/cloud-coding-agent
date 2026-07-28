@@ -6,7 +6,7 @@ import { store } from "../store.js";
 import { ConnectorManager } from "./manager.js";
 import type { ConnectorClientCallbacks, ConnectorTarget } from "./types.js";
 import { normalizeFeishuMessage, parseFeishuText } from "./feishu.js";
-import { normalizeQQMessage } from "./qq.js";
+import { createQQMarkdownMessage, normalizeQQMessage } from "./qq.js";
 
 const TEST_PROJECT = {
   id: "project-1",
@@ -32,6 +32,31 @@ test("QQ 消息事件归一化会保留会话和回复目标", () => {
       text: "帮我检查代码",
       target: { platform: "qq", kind: "group", id: "group-1" },
     },
+  );
+});
+
+test("QQ 回复使用原生 Markdown 消息体", () => {
+  assert.deepEqual(
+    createQQMarkdownMessage(
+      { platform: "qq", kind: "group", id: "group-1" },
+      "## 结果\n\n- 已完成",
+      7,
+      "message-1",
+    ),
+    {
+      markdown: { content: "## 结果\n\n- 已完成" },
+      msg_type: 2,
+      msg_seq: 7,
+      msg_id: "message-1",
+    },
+  );
+  assert.deepEqual(
+    createQQMarkdownMessage(
+      { platform: "qq", kind: "channel", id: "channel-1" },
+      "**完成**",
+      8,
+    ),
+    { markdown: { content: "**完成**" }, msg_type: 2 },
   );
 });
 
