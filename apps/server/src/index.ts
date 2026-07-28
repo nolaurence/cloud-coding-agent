@@ -11,6 +11,7 @@ import { Hub } from "./hub.js";
 import {
   createInvite,
   getAdminRegistrationState,
+  getBootstrapAdminUsername,
   getPublicRegistrationPolicy,
   initAuth,
   issueToken,
@@ -70,6 +71,7 @@ async function main() {
   }
   await store.init();
   await initAuth();
+  await store.migrateLegacyWorkspaceOwnership(getBootstrapAdminUsername());
   await initThreadShares();
   console.log(`[cca] data dir: ${DATA_DIR}`);
 

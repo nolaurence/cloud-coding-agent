@@ -332,6 +332,10 @@ export async function initAuth() {
   }
 }
 
+export function getBootstrapAdminUsername(): string {
+  return bootstrapAdminUsername;
+}
+
 export function listUsers(): AdminUser[] {
   return users
     .map(toAdminUser)

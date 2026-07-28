@@ -7,6 +7,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { SettingsLayout } from "./pages/settings/SettingsLayout";
 import { GeneralSettings } from "./pages/settings/GeneralSettings";
 import { ProvidersSettings } from "./pages/settings/ProvidersSettings";
+import { ConnectorsSettings } from "./pages/settings/ConnectorsSettings";
 import { McpSettings } from "./pages/settings/McpSettings";
 import { SkillsSettings } from "./pages/settings/SkillsSettings";
 import { PluginsPage } from "./pages/PluginsPage";
@@ -78,6 +79,16 @@ export default function App() {
             element={
               user.role === "admin" ? (
                 <ProvidersSettings />
+              ) : (
+                <Navigate to="/settings/general" replace />
+              )
+            }
+          />
+          <Route
+            path="connectors"
+            element={
+              user.role === "admin" ? (
+                <ConnectorsSettings />
               ) : (
                 <Navigate to="/settings/general" replace />
               )

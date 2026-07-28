@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ArrowDownToLine,
   Code2,
@@ -10,7 +10,6 @@ import {
   Loader2,
   PanelRightClose,
   RefreshCw,
-  TerminalSquare,
 } from "lucide-react";
 import type { GitCommitResult, GitDiffResult } from "@cca/protocol";
 import { request } from "../lib/client";
@@ -22,16 +21,10 @@ import { DiffViewer } from "./workspace/DiffViewer";
 import { FilesPanel } from "./workspace/FilesPanel";
 import "./workspace/workspace.css";
 
-const TerminalPanel = lazy(async () => {
-  const module = await import("./workspace/TerminalPanel");
-  return { default: module.TerminalPanel };
-});
-
-type PanelTab = "browser" | "terminal" | "files" | "diff" | "context";
+type PanelTab = "browser" | "files" | "diff" | "context";
 
 const tabs: { id: PanelTab; label: string; icon: typeof Globe2 }[] = [
   { id: "browser", label: "浏览器", icon: Globe2 },
-  { id: "terminal", label: "终端", icon: TerminalSquare },
   { id: "files", label: "文件", icon: FolderTree },
   { id: "diff", label: "差异", icon: Code2 },
   { id: "context", label: "上下文", icon: FileCode2 },
@@ -78,13 +71,6 @@ export function RightPanel({
       </div>
       <div className="min-h-0 flex-1">
         <TabsContent value="browser" className="h-full"><BrowserPanel /></TabsContent>
-        <TabsContent value="terminal" className="h-full">
-          {canManageWorkspace ? (
-            <Suspense fallback={<Empty text="正在加载终端…" />}>
-              <TerminalPanel threadId={threadId} />
-            </Suspense>
-          ) : <Empty text="只有会话所有者可以使用终端" />}
-        </TabsContent>
         <TabsContent value="files" className="h-full">
           {projectId ? (
             <FilesPanel

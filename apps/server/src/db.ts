@@ -37,7 +37,8 @@ const MYSQL_CREATE_TABLES = [
   `CREATE TABLE IF NOT EXISTS projects (
     id VARCHAR(191) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
     name TEXT NOT NULL,
-    path TEXT NOT NULL
+    path TEXT NOT NULL,
+    owner_id VARCHAR(191) COLLATE utf8mb4_bin NULL
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   `CREATE TABLE IF NOT EXISTS threads (
     id VARCHAR(191) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
@@ -68,7 +69,8 @@ const SQLITE_CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS projects (
     id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
     name TEXT NOT NULL,
-    path TEXT NOT NULL
+    path TEXT NOT NULL,
+    owner_id TEXT COLLATE BINARY NULL
   );
   CREATE TABLE IF NOT EXISTS threads (
     id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
@@ -172,6 +174,14 @@ async function initMysql(connectionString: string): Promise<void> {
     for (const statement of MYSQL_CREATE_TABLES) {
       await candidate.query(statement);
     }
+    const [projectColumns] = await candidate.query<RowDataPacket[]>(
+      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'projects' AND COLUMN_NAME = 'owner_id'",
+    );
+    if (projectColumns.length === 0) {
+      await candidate.query(
+        "ALTER TABLE projects ADD COLUMN owner_id VARCHAR(191) COLLATE utf8mb4_bin NULL",
+      );
+    }
   } catch (err) {
     await candidate.end();
     throw err;
@@ -193,6 +203,12 @@ function initSqlite(filename: string): void {
     candidate.exec("PRAGMA foreign_keys = ON;");
     if (filename !== ":memory:") candidate.exec("PRAGMA journal_mode = WAL;");
     candidate.exec(SQLITE_CREATE_TABLES);
+    const projectColumns = candidate.prepare("PRAGMA table_info(projects)").all() as Array<{
+      name: string;
+    }>;
+    if (!projectColumns.some((column) => column.name === "owner_id")) {
+      candidate.exec("ALTER TABLE projects ADD COLUMN owner_id TEXT COLLATE BINARY NULL");
+    }
   } catch (err) {
     candidate.close();
     throw err;

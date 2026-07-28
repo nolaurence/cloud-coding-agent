@@ -130,7 +130,7 @@ export function ThreadPage() {
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{thread?.title ?? "会话"}</div>
               {project && (
-                <div className="mt-0.5 flex items-center gap-1 text-[11px] text-zinc-400" title={project.path}>
+                <div className="mt-0.5 flex items-center gap-1 text-[11px] text-zinc-400">
                   <FolderGit2 className="h-3 w-3 shrink-0" />
                   <span className="truncate">{project.name}</span>
                 </div>

@@ -1,11 +1,12 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Blocks, Cpu, Settings2, Users } from "lucide-react";
+import { Blocks, Cable, Cpu, Settings2, Users } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useApp } from "../../lib/store";
 import { buttonVariants } from "@/components/ui/button";
 
 const adminNav = [
   { to: "providers", label: "模型", icon: Cpu },
+  { to: "connectors", label: "连接器", icon: Cable },
   { to: "mcp", label: "MCP 服务器", icon: Blocks },
 ];
 

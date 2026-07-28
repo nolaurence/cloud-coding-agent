@@ -14,7 +14,6 @@ import type {
 } from "@cca/protocol";
 import { COPILOT_HOME } from "./env.js";
 import { store } from "./store.js";
-import { enabledSkillDirectories } from "./skills.js";
 import { createAuthenticatedGitTool } from "./gitOperations.js";
 import { createWorkspacePermissionHandler } from "./permissions.js";
 
@@ -77,7 +76,7 @@ export class CopilotManager {
   private client: CopilotClient | null = null;
   private starting: Promise<void> | null = null;
   private threads = new Map<string, ThreadRuntime>();
-  private sink: ThreadEventSink = () => {};
+  private sinks = new Set<ThreadEventSink>();
   private shellChanged: ShellChangedSink = () => {};
 
   constructor(
@@ -89,7 +88,8 @@ export class CopilotManager {
   ) {}
 
   onThreadEvent(sink: ThreadEventSink) {
-    this.sink = sink;
+    this.sinks.add(sink);
+    return () => this.sinks.delete(sink);
   }
 
   onShellChanged(sink: ShellChangedSink) {
@@ -143,7 +143,7 @@ export class CopilotManager {
   }
 
   private emit(threadId: string, event: ThreadEvent) {
-    this.sink(threadId, event);
+    for (const sink of this.sinks) sink(threadId, event);
   }
 
   private ensurePendingAssistant(
@@ -200,38 +200,17 @@ export class CopilotManager {
       ? settings.providers.find((p) => p.id === modelRef.providerId)
       : undefined;
 
-    const mcpServers: Record<string, unknown> = {};
-    for (const server of settings.mcpServers) {
-      if (!server.enabled) continue;
-      if (server.type === "http" && server.url) {
-        mcpServers[server.name] = {
-          type: "http",
-          url: server.url,
-          headers: server.headers,
-          tools: server.tools.length > 0 ? server.tools : ["*"],
-          timeout: server.timeout,
-        };
-      } else if (server.type === "local" && server.command) {
-        mcpServers[server.name] = {
-          type: "local",
-          command: server.command,
-          args: server.args ?? [],
-          env: server.env,
-          workingDirectory: server.cwd,
-          tools: server.tools.length > 0 ? server.tools : ["*"],
-          timeout: server.timeout,
-        };
-      }
+    const project = store.projects.find((candidate) => candidate.id === thread.projectId);
+    if (!project) throw new Error("会话关联的工作区不存在");
+    if (!thread.userId || project.ownerId !== thread.userId) {
+      throw new Error("会话与工作区所有者不匹配");
     }
-
-    const skills = enabledSkillDirectories();
-    const project = store.projects.find((p) => p.id === thread.projectId);
-    if (!project) throw new Error("会话关联的项目不存在");
     const disableApplyPatch =
       providerConfig?.type === "openai" &&
       (providerConfig.wireApi ?? "completions") === "responses";
     const systemInstructions = [
       "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
+      "所有文件和命令操作只能访问当前工作区。不要尝试读取或修改工作区外的路径，也不要请求绕过沙箱。",
     ];
     if (disableApplyPatch) {
       systemInstructions.push(
@@ -245,7 +224,25 @@ export class CopilotManager {
       includeSubAgentStreamingEvents: false,
       workingDirectory: project.path,
       onPermissionRequest: createWorkspacePermissionHandler(project.path),
-      mcpServers,
+      enableConfigDiscovery: false,
+      requestExtensions: false,
+      mcpServers: {},
+      customAgents: [],
+      skillDirectories: [],
+      pluginDirectories: [],
+      enableSkills: false,
+      enableFileHooks: false,
+      memory: { enabled: false },
+      enableSessionStore: false,
+      skipEmbeddingRetrieval: true,
+      embeddingCacheStorage: "in-memory",
+      sandbox: {
+        enabled: true,
+        allowBypass: false,
+        addCurrentWorkingDirectory: true,
+        sandboxMcpServers: true,
+        sandboxLspServers: true,
+      },
       tools: [createAuthenticatedGitTool(actorId || thread.userId, project.path)],
       systemMessage: {
         mode: "append",
@@ -255,10 +252,6 @@ export class CopilotManager {
     if (disableApplyPatch) {
       // Some Responses-compatible gateways drop free-form custom-tool input.
       config.excludedTools = ["builtin:apply_patch"];
-    }
-    if (skills.dirs.length > 0) {
-      config.skillDirectories = skills.dirs;
-      config.disabledSkills = skills.disabled;
     }
     if (modelRef) {
       config.model = modelRef.modelId;

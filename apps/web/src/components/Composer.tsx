@@ -251,12 +251,8 @@ export function Composer({
       for (const relativePath of fileTokens) {
         if (seen.has(relativePath)) continue;
         seen.add(relativePath);
-        const separator = project.path.includes("\\") ? "\\" : "/";
         attachments.push({
-          path:
-            project.path.replace(/[\\/]+$/, "") +
-            separator +
-            relativePath.split("/").join(separator),
+          path: relativePath,
           displayName: relativePath,
         });
       }

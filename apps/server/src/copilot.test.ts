@@ -95,7 +95,7 @@ function setupStore(t: TestContext, threadId: string, createdAt = Date.now()) {
     settings: store.settings,
     upsertThread: store.upsertThread,
   };
-  const project: Project = { id: "project-1", name: "Project", path: process.cwd() };
+  const project: Project = { id: "project-1", name: "Project", path: process.cwd(), ownerId: "admin" };
   const thread: ThreadMeta = {
     id: threadId,
     projectId: project.id,
@@ -103,11 +103,13 @@ function setupStore(t: TestContext, threadId: string, createdAt = Date.now()) {
     createdAt,
     updatedAt: createdAt,
     archived: false,
+    userId: project.ownerId,
   };
   store.projects = [project];
   store.threads = [thread];
   store.settings = {
     providers: [],
+    connectors: [],
     mcpServers: [],
     skillDirectories: [],
     disabledSkills: [],
@@ -393,6 +395,7 @@ test("records the current collaborator as the message and attachment author", as
   const threadId = randomUUID();
   setupStore(t, threadId);
   store.threads[0]!.userId = "thread-owner";
+  store.projects[0]!.ownerId = "thread-owner";
   const session = new FakeSession();
   const manager = new CopilotManager(() => new FakeClient(session) as unknown as CopilotClient);
   const emitted: ThreadEvent[] = [];
@@ -421,6 +424,7 @@ test("a new subscriber does not replace the actor session during a running turn"
   const threadId = randomUUID();
   setupStore(t, threadId);
   store.threads[0]!.userId = "thread-owner";
+  store.projects[0]!.ownerId = "thread-owner";
   const client = new FakeClient();
   const manager = new CopilotManager(() => client as unknown as CopilotClient);
   t.after(() => manager.shutdown());
@@ -433,7 +437,7 @@ test("a new subscriber does not replace the actor session during a running turn"
   assert.equal(manager.isRunning(threadId), true);
 });
 
-test("registers the authenticated Git tool and fails closed for legacy threads", async (t) => {
+test("creates an isolated session with only the authenticated Git extension", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
   const client = new FakeClient();
@@ -442,12 +446,56 @@ test("registers the authenticated Git tool and fails closed for legacy threads",
 
   await manager.sendMessage(threadId, "拉取远程更新");
   const config = client.createdConfigs[0] as {
+    workingDirectory?: string;
+    enableConfigDiscovery?: boolean;
+    requestExtensions?: boolean;
+    mcpServers?: Record<string, unknown>;
+    customAgents?: unknown[];
+    skillDirectories?: string[];
+    pluginDirectories?: string[];
+    enableSkills?: boolean;
+    enableFileHooks?: boolean;
+    memory?: { enabled?: boolean };
+    enableSessionStore?: boolean;
+    skipEmbeddingRetrieval?: boolean;
+    embeddingCacheStorage?: string;
+    sandbox?: Record<string, boolean>;
     tools?: Array<{ name: string; handler?: (args: unknown) => Promise<unknown> }>;
     systemMessage?: { content?: string };
   };
-  const tool = config.tools?.find((candidate) => candidate.name === "authenticated_git");
-  assert.ok(tool?.handler);
+  assert.equal(config.workingDirectory, process.cwd());
+  assert.equal(config.enableConfigDiscovery, false);
+  assert.equal(config.requestExtensions, false);
+  assert.deepEqual(config.mcpServers, {});
+  assert.deepEqual(config.customAgents, []);
+  assert.deepEqual(config.skillDirectories, []);
+  assert.deepEqual(config.pluginDirectories, []);
+  assert.equal(config.enableSkills, false);
+  assert.equal(config.enableFileHooks, false);
+  assert.deepEqual(config.memory, { enabled: false });
+  assert.equal(config.enableSessionStore, false);
+  assert.equal(config.skipEmbeddingRetrieval, true);
+  assert.equal(config.embeddingCacheStorage, "in-memory");
+  assert.deepEqual(config.sandbox, {
+    enabled: true,
+    allowBypass: false,
+    addCurrentWorkingDirectory: true,
+    sandboxMcpServers: true,
+    sandboxLspServers: true,
+  });
+  assert.deepEqual(config.tools?.map((tool) => tool.name), ["authenticated_git"]);
+  assert.ok(config.tools?.[0]?.handler);
   assert.match(config.systemMessage?.content ?? "", /authenticated_git/);
-  await assert.rejects(tool.handler({ action: "fetch" }), /旧会话没有关联用户/);
   await manager.interrupt(threadId);
+});
+
+test("rejects a thread whose owner does not own its workspace", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.userId = "other-user";
+  const manager = new CopilotManager(() => new FakeClient() as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await assert.rejects(manager.sendMessage(threadId, "test"), /会话与工作区所有者不匹配/);
+  assert.equal(manager.isRunning(threadId), false);
 });

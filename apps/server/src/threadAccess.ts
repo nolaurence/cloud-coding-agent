@@ -7,6 +7,6 @@ export function getThreadAccess(
 ): ThreadAccess | null {
   if (!thread) return null;
   if (thread.userId === user.username) return "owner";
-  if (!thread.userId) return "collaborate";
+  if (!thread.userId) return null;
   return getSharedThreadAccess(thread.id, user.username);
 }

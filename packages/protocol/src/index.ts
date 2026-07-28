@@ -74,9 +74,38 @@ export interface McpServerConfig {
   timeout?: number;
 }
 
+export type ConnectorPlatform = "qq" | "feishu";
+export type ConnectorConnectionState =
+  | "disabled"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "error";
+
+export interface ConnectorConfig {
+  id: string;
+  name: string;
+  platform: ConnectorPlatform;
+  enabled: boolean;
+  appId: string;
+  appSecret: string;
+  projectId: string;
+  model: ModelRef;
+  allowedUserIds?: string[];
+  ownerId?: string;
+}
+
+export interface ConnectorStatus {
+  id: string;
+  state: ConnectorConnectionState;
+  message?: string;
+  updatedAt: number;
+}
+
 export interface AppSettings {
   providers: ModelProviderConfig[];
   defaultModel?: ModelRef;
+  connectors: ConnectorConfig[];
   mcpServers: McpServerConfig[];
   skillDirectories: string[];
   disabledSkills: string[];
@@ -99,17 +128,10 @@ export interface Project {
   id: string;
   name: string;
   path: string;
+  ownerId: string;
 }
 
-export interface DirectoryBrowseEntry {
-  name: string;
-  fullPath: string;
-}
-
-export interface DirectoryBrowseResult {
-  parentPath: string;
-  entries: DirectoryBrowseEntry[];
-}
+export type Workspace = Pick<Project, "id" | "name">;
 
 export type UserRole = "admin" | "user";
 export type ThreadShareMode = "readonly" | "collaborate";
@@ -170,6 +192,11 @@ export interface ThreadMeta {
   shared?: boolean;
   messageAttachments?: Record<string, MessageAttachment[]>;
   messageAuthors?: Record<string, string>;
+  connector?: {
+    connectorId: string;
+    platform: ConnectorPlatform;
+    conversationId: string;
+  };
 }
 
 export interface AuthUser {
@@ -213,7 +240,7 @@ export interface SkillInfo {
 }
 
 export interface ShellState {
-  projects: Project[];
+  projects: Workspace[];
   threads: ThreadMeta[];
   runningThreadIds: string[];
 }
@@ -346,9 +373,8 @@ export type ThreadEvent =
 
 export type ClientMessage =
   | { id: string; type: "shell.subscribe" }
-  | { id: string; type: "directories.browse"; partialPath: string }
-  | { id: string; type: "project.add"; path: string; name?: string }
-  | { id: string; type: "project.remove"; projectId: string }
+  | { id: string; type: "workspace.create"; name: string }
+  | { id: string; type: "workspace.remove"; projectId: string }
   | { id: string; type: "thread.create"; projectId: string; model?: ModelRef }
   | { id: string; type: "thread.delete"; threadId: string }
   | { id: string; type: "thread.setModel"; threadId: string; model: ModelRef }
@@ -363,6 +389,7 @@ export type ClientMessage =
   | { id: string; type: "turn.interrupt"; threadId: string }
   | { id: string; type: "settings.get" }
   | { id: string; type: "settings.update"; settings: AppSettings }
+  | { id: string; type: "connectors.status" }
   | { id: string; type: "skills.list" }
   | { id: string; type: "skill.save"; name: string; description: string; content: string }
   | { id: string; type: "skill.delete"; name: string }
@@ -414,12 +441,14 @@ export type ServerMessage =
   | { type: "auth.user"; user: AuthUser }
   | { type: "shell"; data: ShellState }
   | { type: "settings"; data: AppSettings }
+  | { type: "connectors.status"; data: ConnectorStatus[] }
   | { type: "skills"; data: SkillInfo[] }
   | { type: "terminal.event"; event: TerminalEvent }
   | { type: "thread.event"; threadId: string; event: ThreadEvent };
 
 export const DEFAULT_SETTINGS: AppSettings = {
   providers: [],
+  connectors: [],
   mcpServers: [],
   skillDirectories: [],
   disabledSkills: [],

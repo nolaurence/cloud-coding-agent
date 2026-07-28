@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DEFAULT_SETTINGS, type AppSettings, type Project, type ThreadMeta } from "@cca/protocol";
+import { DEFAULT_SETTINGS, type AppSettings, type ThreadMeta } from "@cca/protocol";
 import {
   closeDb,
   databaseDialect,
@@ -63,7 +63,7 @@ test("SQLite migrates the complete JSON store and persists subsequent updates", 
     ...DEFAULT_SETTINGS,
     skillDirectories: ["/legacy/skills"],
   };
-  const legacyProject: Project = {
+  const legacyProject = {
     id: "project-1",
     name: "Legacy project",
     path: "/workspace/legacy",
@@ -104,6 +104,9 @@ test("SQLite migrates the complete JSON store and persists subsequent updates", 
   assert.equal(store.settings.skillDirectories[0], "/legacy/skills");
   assert.deepEqual(store.projects, [legacyProject]);
   assert.deepEqual(store.threads, [legacyThread]);
+  assert.equal(await store.migrateLegacyWorkspaceOwnership("legacy-admin"), true);
+  assert.deepEqual(store.projects, [{ ...legacyProject, ownerId: "legacy-admin" }]);
+  assert.equal(store.getThread(legacyThread.id)?.userId, "legacy-admin");
   assert.equal(auth.verifyUser("legacy-admin", "legacy-password")?.role, "admin");
   assert.ok(fs.existsSync(databaseFile));
 
@@ -115,7 +118,7 @@ test("SQLite migrates the complete JSON store and persists subsequent updates", 
   assert.equal(busyTimeout.rows[0]?.timeout, 5000);
 
   store.saveSettings({ ...store.settings, disabledSkills: ["updated-skill"] });
-  store.upsertThread({ ...legacyThread, title: "Updated thread", updatedAt: 4 });
+  store.upsertThread({ ...store.getThread(legacyThread.id)!, title: "Updated thread", updatedAt: 4 });
   auth.registerUser("sqlite-user", "secret12");
   await flushDbWrites();
   await closeDb();
@@ -130,7 +133,8 @@ test("SQLite migrates the complete JSON store and persists subsequent updates", 
 
   assert.deepEqual(store.settings.disabledSkills, ["updated-skill"]);
   assert.equal(store.getThread(legacyThread.id)?.title, "Updated thread");
-  assert.deepEqual(store.projects, [legacyProject]);
+  assert.equal(store.getThread(legacyThread.id)?.userId, "legacy-admin");
+  assert.deepEqual(store.projects, [{ ...legacyProject, ownerId: "legacy-admin" }]);
   assert.equal(auth.verifyUser("sqlite-user", "secret12")?.username, "sqlite-user");
 
   const userCount = await query<{ count: number }>("SELECT COUNT(*) AS count FROM users");

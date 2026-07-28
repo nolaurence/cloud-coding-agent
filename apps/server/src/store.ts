@@ -30,6 +30,8 @@ function persist(task: () => Promise<unknown>) {
   enqueueWrite(task);
 }
 
+type StoredProject = Omit<Project, "ownerId"> & { ownerId?: string | null };
+
 function parseJson<T>(value: unknown): T {
   const normalized = Buffer.isBuffer(value) ? value.toString("utf8") : value;
   return (typeof normalized === "string" ? JSON.parse(normalized) : normalized) as T;
@@ -52,10 +54,21 @@ class Store {
     } else {
       const raw = readJson<AppSettings>(SETTINGS_FILE, DEFAULT_SETTINGS);
       this.settings = { ...DEFAULT_SETTINGS, ...raw };
-      this.projects = readJson<Project[]>(PROJECTS_FILE, []);
+      this.projects = readJson<StoredProject[]>(PROJECTS_FILE, []) as Project[];
       this.threads = readJson<ThreadMeta[]>(THREADS_FILE, []);
     }
     this.normalizeStoredReasoningEfforts();
+    const connectors = this.settings.connectors.map((connector) => ({
+      ...connector,
+      allowedUserIds: connector.allowedUserIds?.filter((value) => typeof value === "string"),
+      ownerId: connector.ownerId ||
+        this.projects.find((project) => project.id === connector.projectId)?.ownerId,
+    }));
+    const ownershipChanged = connectors.some(
+      (connector, index) => connector.ownerId !== this.settings.connectors[index]?.ownerId,
+    );
+    this.settings = { ...this.settings, connectors };
+    if (ownershipChanged) this.saveSettings(this.settings);
   }
 
   normalizeStoredReasoningEfforts(
@@ -88,7 +101,7 @@ class Store {
   private async initFromDatabase() {
     const [settingsRows, projectRows, threadRows] = await Promise.all([
       query<{ data: unknown }>("SELECT data FROM settings WHERE id = 1"),
-      query<Project>("SELECT id, name, path FROM projects"),
+      query<StoredProject>("SELECT id, name, path, owner_id AS ownerId FROM projects"),
       query<{ data: unknown }>("SELECT data FROM threads"),
     ]);
     const databaseEmpty =
@@ -96,7 +109,7 @@ class Store {
 
     if (databaseEmpty) {
       const jsonSettings = readJson<AppSettings | null>(SETTINGS_FILE, null);
-      const jsonProjects = readJson<Project[]>(PROJECTS_FILE, []);
+      const jsonProjects = readJson<StoredProject[]>(PROJECTS_FILE, []);
       const jsonThreads = readJson<ThreadMeta[]>(THREADS_FILE, []);
       if (jsonSettings || jsonProjects.length > 0 || jsonThreads.length > 0) {
         console.log(`[cca] migrating json store -> ${databaseDialect()}`);
@@ -115,7 +128,7 @@ class Store {
             await upsert(
               {
                 table: "projects",
-                values: { id: p.id, name: p.name, path: p.path },
+                values: { id: p.id, name: p.name, path: p.path, owner_id: p.ownerId ?? null },
                 conflictColumns: ["id"],
               },
               txQuery,
@@ -134,7 +147,7 @@ class Store {
         });
       }
       this.settings = { ...DEFAULT_SETTINGS, ...(jsonSettings ?? {}) };
-      this.projects = jsonProjects;
+      this.projects = jsonProjects as Project[];
       this.threads = jsonThreads;
       return;
     }
@@ -143,7 +156,7 @@ class Store {
       ...DEFAULT_SETTINGS,
       ...(settingsRows.rows[0] ? parseJson<AppSettings>(settingsRows.rows[0].data) : {}),
     };
-    this.projects = projectRows.rows;
+    this.projects = projectRows.rows as Project[];
     this.threads = threadRows.rows.map((r) => parseJson<ThreadMeta>(r.data));
   }
 
@@ -163,27 +176,108 @@ class Store {
     }
   }
 
-  addProject(project: Project) {
+  async migrateLegacyWorkspaceOwnership(ownerId: string): Promise<boolean> {
+    const legacyProjects = this.projects.filter((project) => !project.ownerId);
+    if (legacyProjects.length === 0) return false;
+
+    const legacyProjectIds = new Set(legacyProjects.map((project) => project.id));
+    const changedThreads = this.threads.filter(
+      (thread) => !thread.userId && legacyProjectIds.has(thread.projectId),
+    );
+    const previousProjects = this.projects;
+    const previousThreads = this.threads;
+    this.projects = this.projects.map((project) =>
+      legacyProjectIds.has(project.id) ? { ...project, ownerId } : project,
+    );
+    this.threads = this.threads.map((thread) =>
+      changedThreads.some((candidate) => candidate.id === thread.id)
+        ? { ...thread, userId: ownerId }
+        : thread,
+    );
+
+    try {
+      if (usingDatabase()) {
+        await transaction(async (txQuery) => {
+          for (const project of this.projects.filter((item) => legacyProjectIds.has(item.id))) {
+            await upsert(
+              {
+                table: "projects",
+                values: {
+                  id: project.id,
+                  name: project.name,
+                  path: project.path,
+                  owner_id: ownerId,
+                },
+                conflictColumns: ["id"],
+                updateColumns: ["name", "path", "owner_id"],
+              },
+              txQuery,
+            );
+          }
+          for (const thread of this.threads.filter((item) =>
+            changedThreads.some((candidate) => candidate.id === item.id),
+          )) {
+            await upsert(
+              {
+                table: "threads",
+                values: { id: thread.id, data: JSON.stringify(thread) },
+                conflictColumns: ["id"],
+                updateColumns: ["data"],
+              },
+              txQuery,
+            );
+          }
+        });
+      } else {
+        writeJson(PROJECTS_FILE, this.projects);
+        writeJson(THREADS_FILE, this.threads);
+      }
+    } catch (error) {
+      this.projects = previousProjects;
+      this.threads = previousThreads;
+      throw error;
+    }
+    return true;
+  }
+
+  async addProject(project: Project): Promise<void> {
+    if (this.projects.some((candidate) => candidate.id === project.id)) {
+      throw new Error("工作区已存在");
+    }
     this.projects.push(project);
-    if (usingDatabase()) {
-      persist(() =>
-        upsert({
+    try {
+      if (usingDatabase()) {
+        await upsert({
           table: "projects",
-          values: { id: project.id, name: project.name, path: project.path },
+          values: {
+            id: project.id,
+            name: project.name,
+            path: project.path,
+            owner_id: project.ownerId,
+          },
           conflictColumns: ["id"],
-        }),
-      );
-    } else {
-      writeJson(PROJECTS_FILE, this.projects);
+        });
+      } else {
+        writeJson(PROJECTS_FILE, this.projects);
+      }
+    } catch (error) {
+      this.projects = this.projects.filter((candidate) => candidate.id !== project.id);
+      throw error;
     }
   }
 
-  removeProject(projectId: string) {
-    this.projects = this.projects.filter((p) => p.id !== projectId);
-    if (usingDatabase()) {
-      persist(() => query("DELETE FROM projects WHERE id = ?", [projectId]));
-    } else {
-      writeJson(PROJECTS_FILE, this.projects);
+  async removeProject(projectId: string): Promise<void> {
+    const previousProjects = this.projects;
+    this.projects = this.projects.filter((project) => project.id !== projectId);
+    try {
+      if (usingDatabase()) {
+        await query("DELETE FROM projects WHERE id = ?", [projectId]);
+      } else {
+        writeJson(PROJECTS_FILE, this.projects);
+      }
+    } catch (error) {
+      this.projects = previousProjects;
+      throw error;
     }
   }
 

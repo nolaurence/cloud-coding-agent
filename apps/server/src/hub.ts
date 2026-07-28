@@ -3,6 +3,8 @@ import type { WebSocket } from "ws";
 import type {
   AppSettings,
   ClientMessage,
+  ConnectorConfig,
+  ConnectorStatus,
   ModelOption,
   ModelRef,
   ServerMessage,
@@ -14,7 +16,6 @@ import type {
 import { store } from "./store.js";
 import { CopilotManager } from "./copilot.js";
 import { searchFiles } from "./files.js";
-import { browseDirectories, resolveProjectDirectory } from "./directories.js";
 import { deleteSkill, listSkills, saveSkill } from "./skills.js";
 import { flattenModels, isReasoningEffort, normalizeModelRefReasoning } from "@cca/protocol";
 import { verifyToken, type TokenPayload } from "./auth.js";
@@ -31,7 +32,8 @@ import {
 import { TerminalManager } from "./terminals.js";
 import { bindGitProvider, listGitBindings, unbindGitProvider } from "./gitBindings.js";
 import { commitProjectChanges, runAuthenticatedGit } from "./gitOperations.js";
-import { removeThreadUploads, removeUploadedImages, validateOwnedUploads } from "./uploads.js";
+import { ConnectorManager } from "./connectors/manager.js";
+import { removeThreadUploads, removeUploadedImages, validateTurnAttachments } from "./uploads.js";
 import {
   createThreadShare,
   deleteThreadShare,
@@ -41,6 +43,7 @@ import {
   revokeThreadShare,
   validateThreadShareToken,
 } from "./threadShares.js";
+import { createUserWorkspace } from "./workspaceProjects.js";
 
 interface ClientConn {
   socket: WebSocket;
@@ -52,6 +55,11 @@ interface ClientConn {
 export class Hub {
   private clients = new Set<ClientConn>();
   private manager = new CopilotManager();
+  private connectors = new ConnectorManager(
+    this.manager,
+    (statuses) => this.broadcastConnectorStatuses(statuses),
+    () => this.broadcastShell(),
+  );
   private terminals = new TerminalManager((ownerId, event) => {
     for (const conn of this.clients) {
       if (conn.user.username === ownerId) this.send(conn, { type: "terminal.event", event });
@@ -64,6 +72,9 @@ export class Hub {
     });
     this.manager.onShellChanged(() => {
       this.broadcastShell();
+    });
+    void this.connectors.applySettings(store.settings.connectors).catch((error) => {
+      console.error("[cca] 连接器启动失败", error);
     });
   }
 
@@ -133,6 +144,21 @@ export class Hub {
     if (conn.user.role !== "admin") throw new Error("仅管理员可以执行此操作");
   }
 
+  private requireOwnedProject(conn: ClientConn, projectId: string) {
+    const project = store.projects.find((candidate) => candidate.id === projectId);
+    if (!project || project.ownerId !== conn.user.username) {
+      throw new Error("工作区不存在或无权访问");
+    }
+    return project;
+  }
+
+  private requireOwnedThreadProject(conn: ClientConn, threadId: string, projectId: string) {
+    const thread = store.getThread(threadId);
+    if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以执行此操作");
+    if (thread?.projectId !== projectId) throw new Error("操作与当前会话工作区不匹配");
+    return { thread, project: this.requireOwnedProject(conn, projectId) };
+  }
+
   private send(conn: ClientConn, msg: ServerMessage) {
     if (conn.socket.readyState === conn.socket.OPEN) {
       conn.socket.send(JSON.stringify(msg));
@@ -158,7 +184,9 @@ export class Hub {
       .sort((a, b) => b.updatedAt - a.updatedAt);
     const visibleIds = new Set(visibleThreads.map((thread) => thread.id));
     return {
-      projects: store.projects,
+      projects: store.projects
+        .filter((project) => project.ownerId === conn.user.username)
+        .map(({ id, name }) => ({ id, name })),
       threads: visibleThreads.map((thread) => this.threadMeta(conn, thread)),
       runningThreadIds: this.manager.runningThreadIds().filter((threadId) => visibleIds.has(threadId)),
     };
@@ -179,15 +207,37 @@ export class Hub {
     }
   }
 
+  private connectorsFor(username: string): ConnectorConfig[] {
+    return store.settings.connectors.filter((connector) => connector.ownerId === username);
+  }
+
+  private connectorStatusesFor(username: string, statuses = this.connectors.getStatuses()): ConnectorStatus[] {
+    const visibleIds = new Set(this.connectorsFor(username).map((connector) => connector.id));
+    return statuses.filter((status) => visibleIds.has(status.id));
+  }
+
   private settingsFor(conn: ClientConn): AppSettings {
-    if (conn.user.role === "admin") return store.settings;
+    const connectors = this.connectorsFor(conn.user.username);
+    if (conn.user.role === "admin") return { ...store.settings, connectors };
     return {
       ...store.settings,
       providers: store.settings.providers.map(({ apiKey: _apiKey, ...provider }) => provider),
+      connectors: [],
       mcpServers: [],
       skillDirectories: [],
       disabledSkills: [],
     };
+  }
+
+  private broadcastConnectorStatuses(statuses: ConnectorStatus[] = this.connectors.getStatuses()) {
+    for (const conn of this.clients) {
+      if (conn.shellSubscribed && conn.user.role === "admin") {
+        this.send(conn, {
+          type: "connectors.status",
+          data: this.connectorStatusesFor(conn.user.username, statuses),
+        });
+      }
+    }
   }
 
   private broadcastSettings() {
@@ -274,6 +324,54 @@ export class Hub {
     }
   }
 
+  private async validateConnectors(
+    connectors: ConnectorConfig[],
+    settings: AppSettings,
+    modelOptions?: readonly ModelOption[],
+  ): Promise<ConnectorConfig[]> {
+    const ids = new Set<string>();
+    const normalized: ConnectorConfig[] = [];
+    for (const connector of connectors) {
+      const id = connector.id.trim();
+      const name = connector.name.trim();
+      const appId = connector.appId.trim();
+      const appSecret = connector.appSecret.trim();
+      const projectId = connector.projectId.trim();
+      if (!id || ids.has(id)) throw new Error("连接器标识不能为空或重复");
+      ids.add(id);
+      if (!name) throw new Error("连接器名称必填");
+      if (connector.platform !== "qq" && connector.platform !== "feishu") {
+        throw new Error("不支持的连接器平台");
+      }
+      if (!appId || !appSecret) throw new Error(`${name} 的 App ID（AK）和 App Secret（AS）必填`);
+      const ownerId = connector.ownerId?.trim();
+      const project = store.projects.find((candidate) => candidate.id === projectId);
+      if (!ownerId || !project || project.ownerId !== ownerId) {
+        throw new Error(`${name} 关联的工作区与所有者不匹配`);
+      }
+      const options = modelOptions ?? (await this.listModelOptions(settings));
+      const model = normalizeModelRefReasoning(connector.model, options);
+      if (!options.some((option) =>
+        option.ref.providerId === model.providerId && option.ref.modelId === model.modelId
+      )) {
+        throw new Error(`${name} 选择的模型不存在`);
+      }
+      await this.validateReasoningEffort(model, settings, options);
+      normalized.push({
+        ...connector,
+        id,
+        name,
+        appId,
+        appSecret,
+        projectId,
+        model,
+        allowedUserIds: [...new Set(connector.allowedUserIds?.map((value) => value.trim()).filter(Boolean) ?? [])],
+        ownerId,
+      });
+    }
+    return normalized;
+  }
+
   private async onMessage(conn: ClientConn, raw: string) {
     let msg: ClientMessage;
     try {
@@ -289,35 +387,33 @@ export class Hub {
           this.send(conn, { type: "shell", data: this.shellState(conn) });
           this.send(conn, { type: "settings", data: this.settingsFor(conn) });
           this.send(conn, { type: "skills", data: listSkills() });
+          if (conn.user.role === "admin") {
+            this.send(conn, { type: "connectors.status", data: this.connectors.getStatuses() });
+          }
           this.reply(conn, msg.id);
           break;
         }
-        case "directories.browse": {
-          this.requireAdmin(conn);
-          this.reply(conn, msg.id, await browseDirectories(msg.partialPath));
-          break;
-        }
-        case "project.add": {
-          this.requireAdmin(conn);
-          const projectPath = await resolveProjectDirectory(msg.path);
-          const name = msg.name?.trim() || projectPath.split(/[\\/]/).filter(Boolean).pop() || projectPath;
-          const project = { id: randomUUID(), name, path: projectPath };
-          store.addProject(project);
+        case "workspace.create": {
+          const { id, name } = await createUserWorkspace(conn.user.username, msg.name);
           this.broadcastShell();
-          this.reply(conn, msg.id, project);
+          this.reply(conn, msg.id, { id, name });
           break;
         }
-        case "project.remove": {
-          this.requireAdmin(conn);
-          store.removeProject(msg.projectId);
+        case "workspace.remove": {
+          this.requireOwnedProject(conn, msg.projectId);
+          if (store.threads.some((thread) => thread.projectId === msg.projectId)) {
+            throw new Error("请先删除工作区内的会话");
+          }
+          if (store.settings.connectors.some((connector) => connector.projectId === msg.projectId)) {
+            throw new Error("请先移除使用该工作区的连接器");
+          }
+          await store.removeProject(msg.projectId);
           this.broadcastShell();
           this.reply(conn, msg.id);
           break;
         }
         case "thread.create": {
-          if (!store.projects.some((project) => project.id === msg.projectId)) {
-            throw new Error("项目不存在");
-          }
+          this.requireOwnedProject(conn, msg.projectId);
           const requestedModel = msg.model ?? store.settings.defaultModel;
           let model = requestedModel;
           if (requestedModel) {
@@ -457,7 +553,13 @@ export class Hub {
         }
         case "turn.start": {
           if (!this.canInteract(conn, store.getThread(msg.threadId))) throw new Error("当前分享仅允许查看");
-          validateOwnedUploads(conn.user.username, msg.attachments);
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          const project = store.projects.find((candidate) => candidate.id === thread.projectId);
+          if (!project || project.ownerId !== thread.userId) {
+            throw new Error("会话关联的工作区无效");
+          }
+          validateTurnAttachments(conn.user.username, project.path, msg.attachments);
           try {
             await this.manager.sendMessage(msg.threadId, msg.text, msg.attachments, conn.user.username);
           } catch (error) {
@@ -496,6 +598,28 @@ export class Hub {
             }
             await this.validateReasoningEffort(defaultModel, nextSettings, modelOptions);
           }
+          modelOptions ??= await this.listModelOptions(nextSettings);
+          const otherConnectors = prev.connectors.filter(
+            (connector) => connector.ownerId !== conn.user.username,
+          );
+          const reservedConnectorIds = new Set(otherConnectors.map((connector) => connector.id));
+          if (nextSettings.connectors.some((connector) => reservedConnectorIds.has(connector.id.trim()))) {
+            throw new Error("连接器标识已被其他用户使用");
+          }
+          const connectors = await this.validateConnectors(
+            nextSettings.connectors.map((connector) => ({
+              ...connector,
+              appSecret: connector.appSecret ||
+                prev.connectors.find(
+                  (candidate) =>
+                    candidate.id === connector.id && candidate.ownerId === conn.user.username,
+                )?.appSecret || "",
+              ownerId: conn.user.username,
+            })),
+            nextSettings,
+            modelOptions,
+          );
+          nextSettings = { ...nextSettings, connectors: [...otherConnectors, ...connectors] };
           const providerChanged =
             modelProvidersChanged ||
             JSON.stringify(prev.mcpServers) !== JSON.stringify(nextSettings.mcpServers) ||
@@ -505,6 +629,7 @@ export class Hub {
             await this.manager.reconfigureOpenSessions();
           }
           store.saveSettings(nextSettings);
+          await this.connectors.applySettings(nextSettings.connectors);
           if (modelProvidersChanged) {
             modelOptions ??= await this.listModelOptions(nextSettings);
             if (store.normalizeStoredReasoningEfforts(modelOptions)) this.broadcastShell();
@@ -512,6 +637,15 @@ export class Hub {
           this.broadcastSettings();
           this.broadcastSkills();
           this.reply(conn, msg.id);
+          break;
+        }
+        case "connectors.status": {
+          this.requireAdmin(conn);
+          this.reply(
+            conn,
+            msg.id,
+            this.connectorStatusesFor(conn.user.username),
+          );
           break;
         }
         case "skills.list": {
@@ -594,35 +728,27 @@ export class Hub {
           break;
         }
         case "files.search": {
-          const project = store.projects.find((p) => p.id === msg.projectId);
-          if (!project) throw new Error("项目不存在");
+          const project = this.requireOwnedProject(conn, msg.projectId);
           this.reply(conn, msg.id, searchFiles(project.path, msg.query));
           break;
         }
         case "project.files": {
-          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
-          if (!project) throw new Error("项目不存在");
+          const project = this.requireOwnedProject(conn, msg.projectId);
           this.reply(conn, msg.id, listProjectFiles(project.path));
           break;
         }
         case "project.directory.list": {
-          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
-          if (!project) throw new Error("项目不存在");
+          const project = this.requireOwnedProject(conn, msg.projectId);
           this.reply(conn, msg.id, listProjectDirectory(project.path, msg.path));
           break;
         }
         case "project.file.read": {
-          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
-          if (!project) throw new Error("项目不存在");
+          const project = this.requireOwnedProject(conn, msg.projectId);
           this.reply(conn, msg.id, readProjectFile(project.path, msg.path));
           break;
         }
         case "project.file.write": {
-          const thread = store.getThread(msg.threadId);
-          if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以直接编辑文件");
-          if (thread?.projectId !== msg.projectId) throw new Error("文件与当前会话项目不匹配");
-          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
-          if (!project) throw new Error("项目不存在");
+          const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
           this.reply(
             conn,
             msg.id,
@@ -631,17 +757,12 @@ export class Hub {
           break;
         }
         case "project.diff": {
-          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
-          if (!project) throw new Error("项目不存在");
+          const project = this.requireOwnedProject(conn, msg.projectId);
           this.reply(conn, msg.id, await projectDiff(project.path));
           break;
         }
         case "project.git.pull": {
-          const thread = store.getThread(msg.threadId);
-          if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以拉取代码");
-          if (thread?.projectId !== msg.projectId) throw new Error("Git 操作与当前会话项目不匹配");
-          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
-          if (!project) throw new Error("项目不存在");
+          const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
           const target = await projectGitPullTarget(project.path);
           this.reply(
             conn,
@@ -656,47 +777,17 @@ export class Hub {
           break;
         }
         case "project.git.commit": {
-          const thread = store.getThread(msg.threadId);
-          if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以提交代码");
-          if (thread?.projectId !== msg.projectId) throw new Error("Git 操作与当前会话项目不匹配");
-          const project = store.projects.find((candidate) => candidate.id === msg.projectId);
-          if (!project) throw new Error("项目不存在");
+          const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
           this.reply(conn, msg.id, await commitProjectChanges(project.path, msg.message));
           break;
         }
         case "terminal.open": {
-          const thread = store.getThread(msg.threadId);
-          if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以使用终端");
-          const project = store.projects.find((candidate) => candidate.id === thread?.projectId);
-          if (!project) throw new Error("项目不存在");
-          this.reply(
-            conn,
-            msg.id,
-            this.terminals.open(
-              conn.user.username,
-              msg.threadId,
-              msg.terminalId,
-              project.path,
-              msg.cols,
-              msg.rows,
-            ),
-          );
-          break;
+          throw new Error("当前部署未启用安全终端");
         }
-        case "terminal.write": {
-          this.terminals.write(conn.user.username, msg.terminalId, msg.data);
-          this.reply(conn, msg.id);
-          break;
-        }
-        case "terminal.resize": {
-          this.terminals.resize(conn.user.username, msg.terminalId, msg.cols, msg.rows);
-          this.reply(conn, msg.id);
-          break;
-        }
+        case "terminal.write":
+        case "terminal.resize":
         case "terminal.close": {
-          this.terminals.close(conn.user.username, msg.terminalId);
-          this.reply(conn, msg.id);
-          break;
+          throw new Error("当前部署未启用安全终端");
         }
         case "git.bindings": {
           this.reply(conn, msg.id, listGitBindings(conn.user.username));
@@ -722,6 +813,7 @@ export class Hub {
 
   async shutdown() {
     this.terminals.shutdown();
+    await this.connectors.shutdown();
     await this.manager.shutdown();
   }
 }

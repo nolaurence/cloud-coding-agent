@@ -7,7 +7,7 @@ import type {
   ChatMessage,
   CreatedInvite,
   CreatedThreadShare,
-  DirectoryBrowseResult,
+  ConnectorStatus,
   InstalledPlugin,
   MarketplacePlugin,
   ModelRef,
@@ -15,7 +15,7 @@ import type {
   ModelOption,
   PluginInstallResult,
   PluginMarketplace,
-  Project,
+  Workspace,
   ProviderModelDiscoveryConfig,
   RegistrationPolicy,
   ServerMessage,
@@ -159,10 +159,11 @@ interface AppState {
   user: AuthUser | null;
   authReady: boolean;
   connected: boolean;
-  projects: Project[];
+  projects: Workspace[];
   threads: ThreadMeta[];
   runningThreadIds: string[];
   settings: AppSettings | null;
+  connectorStatuses: ConnectorStatus[];
   skills: SkillInfo[];
   models: ModelOption[];
   threadStates: Record<string, ThreadState>;
@@ -183,9 +184,8 @@ interface AppState {
   revokeInvite: (inviteId: string) => Promise<void>;
   refreshModels: () => Promise<void>;
   discoverProviderModels: (provider: ProviderModelDiscoveryConfig) => Promise<ModelEntry[]>;
-  browseDirectories: (partialPath: string) => Promise<DirectoryBrowseResult>;
-  addProject: (path: string, name?: string) => Promise<Project>;
-  removeProject: (projectId: string) => Promise<void>;
+  createWorkspace: (name: string) => Promise<Workspace>;
+  removeWorkspace: (projectId: string) => Promise<void>;
   createThread: (projectId: string, model?: ModelRef) => Promise<ThreadMeta>;
   deleteThread: (threadId: string) => Promise<void>;
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
@@ -199,6 +199,7 @@ interface AppState {
   previewThreadShare: (token: string) => Promise<ThreadSharePreview>;
   redeemThreadShare: (token: string) => Promise<ThreadMeta>;
   updateSettings: (settings: AppSettings) => Promise<void>;
+  refreshConnectorStatuses: () => Promise<void>;
   saveSkill: (name: string, description: string, content: string) => Promise<void>;
   deleteSkill: (name: string) => Promise<void>;
   listPluginMarketplaces: () => Promise<PluginMarketplace[]>;
@@ -364,6 +365,8 @@ export const useApp = create<AppState>((set, get) => {
     } else if (msg.type === "settings") {
       set({ settings: msg.data });
       void get().refreshModels();
+    } else if (msg.type === "connectors.status") {
+      set({ connectorStatuses: msg.data });
     } else if (msg.type === "skills") {
       set({ skills: msg.data });
     } else if (msg.type === "auth.user") {
@@ -390,6 +393,7 @@ export const useApp = create<AppState>((set, get) => {
       threads: [],
       runningThreadIds: [],
       settings: null,
+      connectorStatuses: [],
       skills: [],
       models: [],
       threadStates: {},
@@ -413,6 +417,7 @@ export const useApp = create<AppState>((set, get) => {
     threads: [],
     runningThreadIds: [],
     settings: null,
+    connectorStatuses: [],
     skills: [],
     models: [],
     threadStates: {},
@@ -531,17 +536,12 @@ export const useApp = create<AppState>((set, get) => {
       return request<ModelEntry[]>({ type: "provider.models.discover", provider });
     },
 
-    browseDirectories: async (partialPath) => {
-      return request<DirectoryBrowseResult>({ type: "directories.browse", partialPath });
+    createWorkspace: async (name) => {
+      return request<Workspace>({ type: "workspace.create", name });
     },
 
-    addProject: async (path, name) => {
-      const project = await request<Project>({ type: "project.add", path, name });
-      return project;
-    },
-
-    removeProject: async (projectId) => {
-      await request({ type: "project.remove", projectId });
+    removeWorkspace: async (projectId) => {
+      await request({ type: "workspace.remove", projectId });
     },
 
     createThread: async (projectId, model) => {
@@ -659,6 +659,11 @@ export const useApp = create<AppState>((set, get) => {
 
     updateSettings: async (settings) => {
       await request({ type: "settings.update", settings });
+    },
+
+    refreshConnectorStatuses: async () => {
+      const connectorStatuses = await request<ConnectorStatus[]>({ type: "connectors.status" });
+      set({ connectorStatuses });
     },
 
     saveSkill: async (name, description, content) => {

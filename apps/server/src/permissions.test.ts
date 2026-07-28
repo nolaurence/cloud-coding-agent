@@ -1,28 +1,51 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test, { type TestContext } from "node:test";
 import type { PermissionRequest } from "@github/copilot-sdk";
-
-type PermissionRequestWrite = Extract<PermissionRequest, { kind: "write" }>;
-type PermissionRequestShell = Extract<PermissionRequest, { kind: "shell" }>;
-type PermissionRequestRead = Extract<PermissionRequest, { kind: "read" }>;
 import { createWorkspacePermissionHandler } from "./permissions.js";
 
-const handler = createWorkspacePermissionHandler("/projects/demo");
-const invocation = { sessionId: "s" };
+type WriteRequest = Extract<PermissionRequest, { kind: "write" }>;
+type ShellRequest = Extract<PermissionRequest, { kind: "shell" }>;
+type ReadRequest = Extract<PermissionRequest, { kind: "read" }>;
 
-function writeRequest(fileName: string): PermissionRequestWrite {
+const invocation = { sessionId: "session" };
+
+function fixture(t: TestContext) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cca-permissions-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "cca-permissions-outside-"));
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(path.join(root, "src", "inside.ts"), "export {};\n");
+  fs.writeFileSync(path.join(outside, "secret.txt"), "secret\n");
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+  return { root, outside, handler: createWorkspacePermissionHandler(root) };
+}
+
+function writeRequest(fileName: string, requestSandboxBypass = false): WriteRequest {
   return {
     kind: "write",
     fileName,
     diff: "",
     intention: "",
     canOfferSessionApproval: true,
+    ...(requestSandboxBypass ? { requestSandboxBypass } : {}),
   };
 }
 
-function shellRequest(
-  overrides: Partial<PermissionRequestShell>,
-): PermissionRequestShell {
+function readRequest(target: string, requestSandboxBypass = false): ReadRequest {
+  return {
+    kind: "read",
+    path: target,
+    intention: "",
+    ...(requestSandboxBypass ? { requestSandboxBypass } : {}),
+  };
+}
+
+function shellRequest(overrides: Partial<ShellRequest>): ShellRequest {
   return {
     kind: "shell",
     fullCommandText: "",
@@ -36,101 +59,63 @@ function shellRequest(
   };
 }
 
-test("approves writes under /projects", async () => {
-  const result = await handler(writeRequest("/projects/demo/a.ts"), invocation);
-  assert.deepEqual(result, { kind: "approve-once" });
+test("approves workspace paths and pathless shell commands", async (t) => {
+  const { root, handler } = fixture(t);
+  assert.deepEqual(await handler(readRequest("src/inside.ts"), invocation), { kind: "approve-once" });
+  assert.deepEqual(await handler(writeRequest(path.join(root, "src", "new.ts")), invocation), { kind: "approve-once" });
+  assert.deepEqual(await handler(shellRequest({ commands: [{ identifier: "npm", readOnly: false }] }), invocation), { kind: "approve-once" });
 });
 
-test("approves relative writes resolved against the project directory", async () => {
-  const result = await handler(writeRequest("src/a.ts"), invocation);
-  assert.deepEqual(result, { kind: "approve-once" });
+test("rejects absolute, relative, and shell paths outside the workspace", async (t) => {
+  const { root, outside, handler } = fixture(t);
+  for (const target of [path.join(outside, "secret.txt"), path.resolve(root, "..", "escape"), "../../escape"]) {
+    assert.equal((await handler(readRequest(target), invocation)).kind, "reject", target);
+    assert.equal((await handler(writeRequest(target), invocation)).kind, "reject", target);
+  }
+  assert.equal((await handler(shellRequest({ possiblePaths: [path.join(root, "src"), outside] }), invocation)).kind, "reject");
 });
 
-test("approves writes under /workspace", async () => {
-  const result = await handler(writeRequest("/workspace/x.txt"), invocation);
-  assert.deepEqual(result, { kind: "approve-once" });
+test("rejects symbolic-link escapes for existing and new targets", async (t) => {
+  const { root, outside, handler } = fixture(t);
+  const link = path.join(root, "outside-link");
+  try {
+    fs.symlinkSync(outside, link, "junction");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") {
+      t.skip("当前环境不允许创建符号链接");
+      return;
+    }
+    throw error;
+  }
+  assert.equal((await handler(readRequest(path.join(link, "secret.txt")), invocation)).kind, "reject");
+  assert.equal((await handler(writeRequest(path.join(link, "new.txt")), invocation)).kind, "reject");
 });
 
-test("rejects writes outside writable roots", async () => {
-  for (const target of ["/etc/passwd", "/tmp/x", "/projectsx/evil", "../../outside"]) {
-    const result = await handler(writeRequest(target), invocation);
-    assert.equal(result.kind, "reject", target);
+test("rejects sandbox bypasses and non-workspace capabilities by default", async (t) => {
+  const { root, handler } = fixture(t);
+  assert.equal((await handler(writeRequest(path.join(root, "new.ts"), true), invocation)).kind, "reject");
+  assert.equal((await handler(shellRequest({ requestSandboxBypass: true }), invocation)).kind, "reject");
+
+  const denied: PermissionRequest[] = [
+    { kind: "mcp", readOnly: true, serverName: "server", toolName: "tool", toolTitle: "Tool" },
+    { kind: "memory", fact: "secret" },
+    { kind: "hook", toolName: "write" },
+    { kind: "extension-management", operation: "reload" },
+    { kind: "extension-permission-access", extensionName: "extension", capabilities: ["read"] },
+    { kind: "custom-tool", toolName: "other", toolDescription: "Other tool" },
+  ];
+  for (const request of denied) {
+    assert.equal((await handler(request, invocation)).kind, "reject", request.kind);
   }
 });
 
-test("approves read-only shell commands anywhere", async () => {
-  const result = await handler(
-    shellRequest({
-      commands: [{ identifier: "cat", readOnly: true }],
-      possiblePaths: ["/etc/hostname"],
-    }),
-    invocation,
-  );
-  assert.deepEqual(result, { kind: "approve-once" });
+test("only approves the registered custom tool and non-bypass URL access", async (t) => {
+  const { handler } = fixture(t);
+  assert.deepEqual(await handler({ kind: "custom-tool", toolName: "authenticated_git", toolDescription: "Git" }, invocation), { kind: "approve-once" });
+  assert.deepEqual(await handler({ kind: "url", url: "https://example.com", intention: "fetch" }, invocation), { kind: "approve-once" });
+  assert.equal((await handler({ kind: "url", url: "https://example.com", intention: "fetch", requestSandboxBypass: true }, invocation)).kind, "reject");
 });
 
-test("approves mutating shell commands scoped to writable roots", async () => {
-  const result = await handler(
-    shellRequest({
-      commands: [{ identifier: "rm", readOnly: false }],
-      possiblePaths: ["/projects/demo/dist"],
-    }),
-    invocation,
-  );
-  assert.deepEqual(result, { kind: "approve-once" });
-});
-
-test("approves mutating shell commands without paths in a writable project", async () => {
-  const result = await handler(
-    shellRequest({ commands: [{ identifier: "npm", readOnly: false }] }),
-    invocation,
-  );
-  assert.deepEqual(result, { kind: "approve-once" });
-});
-
-test("rejects shell writes outside writable roots", async () => {
-  const redirected = await handler(
-    shellRequest({
-      hasWriteFileRedirection: true,
-      possiblePaths: ["/tmp/out"],
-    }),
-    invocation,
-  );
-  assert.equal(redirected.kind, "reject");
-
-  const mixed = await handler(
-    shellRequest({
-      commands: [{ identifier: "cp", readOnly: false }],
-      possiblePaths: ["/projects/demo/a", "/var/lib/b"],
-    }),
-    invocation,
-  );
-  assert.equal(mixed.kind, "reject");
-});
-
-test("rejects sandbox bypass requests", async () => {
-  const result = await handler(
-    shellRequest({ requestSandboxBypass: true }),
-    invocation,
-  );
-  assert.equal(result.kind, "reject");
-});
-
-test("rejects mutating commands when the project itself is outside writable roots", async () => {
-  const outside = createWorkspacePermissionHandler("/opt/app");
-  const result = await outside(
-    shellRequest({ commands: [{ identifier: "make", readOnly: false }] }),
-    invocation,
-  );
-  assert.equal(result.kind, "reject");
-});
-
-test("approves other request kinds (read, mcp, url)", async () => {
-  const read: PermissionRequestRead = {
-    kind: "read",
-    path: "/etc/hosts",
-    intention: "",
-  };
-  const result = await handler(read, invocation);
-  assert.deepEqual(result, { kind: "approve-once" });
+test("rejects non-existent workspace roots", () => {
+  assert.throws(() => createWorkspacePermissionHandler("/path/that/does/not/exist"), /ENOENT/);
 });

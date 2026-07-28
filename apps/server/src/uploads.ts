@@ -17,15 +17,38 @@ export function uploadUsage(directory: string): number {
   }, 0);
 }
 
-export function validateOwnedUploads(username: string, attachments?: TurnAttachment[]) {
-  const directory = uploadDirectory(username);
+function isInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" ||
+    (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+export function validateTurnAttachments(
+  username: string,
+  projectPath: string,
+  attachments?: TurnAttachment[],
+) {
+  const uploadRoot = uploadDirectory(username);
+  const workspaceRoot = fs.realpathSync(projectPath);
   for (const attachment of attachments ?? []) {
-    if (!attachment.imageId) continue;
-    if (!IMAGE_ID_PATTERN.test(attachment.imageId)) throw new Error("图片标识无效");
-    const expectedPath = path.join(directory, attachment.imageId);
-    if (path.resolve(attachment.path) !== expectedPath || !fs.existsSync(expectedPath)) {
-      throw new Error("图片不存在或不属于当前用户");
+    if (attachment.imageId) {
+      if (!IMAGE_ID_PATTERN.test(attachment.imageId)) throw new Error("图片标识无效");
+      const expectedPath = path.join(uploadRoot, attachment.imageId);
+      if (path.resolve(attachment.path) !== expectedPath || !fs.existsSync(expectedPath)) {
+        throw new Error("图片不存在或不属于当前用户");
+      }
+      continue;
     }
+    let realAttachment: string;
+    try {
+      realAttachment = fs.realpathSync(path.resolve(workspaceRoot, attachment.path));
+    } catch {
+      throw new Error("附件不存在或不属于当前工作区");
+    }
+    if (!isInside(workspaceRoot, realAttachment) || !fs.statSync(realAttachment).isFile()) {
+      throw new Error("附件不存在或不属于当前工作区");
+    }
+    attachment.path = realAttachment;
   }
 }
 

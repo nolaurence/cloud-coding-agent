@@ -17,11 +17,11 @@ export const GIT_BINDINGS_FILE = path.join(root, "git-bindings.json");
 export const SECRET_FILE = path.join(root, "secret.key");
 export const SKILLS_DIR = path.join(root, "skills");
 export const COPILOT_HOME = path.join(root, "copilot-home");
-export const WORKSPACES_DIR = path.join(root, "workspaces");
+export const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT?.trim() || "/workspace");
 export const UPLOADS_DIR = path.join(root, "uploads");
 
 export function ensureDataDirs() {
-  for (const dir of [root, SKILLS_DIR, COPILOT_HOME, WORKSPACES_DIR, UPLOADS_DIR]) {
+  for (const dir of [root, SKILLS_DIR, COPILOT_HOME, WORKSPACE_ROOT, UPLOADS_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }

@@ -1,14 +1,6 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { PermissionHandler, PermissionRequestResult } from "@github/copilot-sdk";
-
-const WRITABLE_ROOTS = ["/projects", "/workspace"];
-
-function isWritablePath(target: string, workingDirectory: string): boolean {
-  const absolute = path.resolve(workingDirectory, target);
-  return WRITABLE_ROOTS.some(
-    (root) => absolute === root || absolute.startsWith(root + path.sep),
-  );
-}
 
 const APPROVE: PermissionRequestResult = { kind: "approve-once" };
 
@@ -16,37 +8,61 @@ function reject(feedback: string): PermissionRequestResult {
   return { kind: "reject", feedback };
 }
 
-const RULE_HINT = "仅 /projects 和 /workspace 可读写,其他目录只读";
+function isInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative));
+}
 
-export function createWorkspacePermissionHandler(
-  workingDirectory: string,
-): PermissionHandler {
+function nearestExistingPath(target: string): string {
+  let current = target;
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+  return current;
+}
+
+function isWorkspacePath(workspaceRoot: string, target: string): boolean {
+  const absolute = path.resolve(workspaceRoot, target);
+  if (!isInside(workspaceRoot, absolute)) return false;
+  try {
+    const existing = nearestExistingPath(absolute);
+    return isInside(workspaceRoot, fs.realpathSync(existing));
+  } catch {
+    return false;
+  }
+}
+
+export function createWorkspacePermissionHandler(workingDirectory: string): PermissionHandler {
+  const workspaceRoot = fs.realpathSync(workingDirectory);
+
   return (request) => {
+    if ("requestSandboxBypass" in request && request.requestSandboxBypass) {
+      return reject("不允许绕过工作区沙箱");
+    }
+    if (request.kind === "read") {
+      return isWorkspacePath(workspaceRoot, request.path)
+        ? APPROVE
+        : reject("读取路径超出当前工作区：" + request.path);
+    }
     if (request.kind === "write") {
-      return isWritablePath(request.fileName, workingDirectory)
+      return isWorkspacePath(workspaceRoot, request.fileName)
         ? APPROVE
-        : reject(`写入路径超出可写范围(${RULE_HINT}):${request.fileName}`);
+        : reject("写入路径超出当前工作区：" + request.fileName);
     }
-
     if (request.kind === "shell") {
-      if (request.requestSandboxBypass) {
-        return reject(`不允许请求沙箱外执行(${RULE_HINT})`);
-      }
-      const mutating =
-        request.hasWriteFileRedirection ||
-        request.commands.some((command) => !command.readOnly);
-      if (!mutating) return APPROVE;
-      // 无法解析出路径时按工作目录判定(例如 npm test 这类在项目内执行的命令)
-      const targets =
-        request.possiblePaths.length > 0
-          ? request.possiblePaths
-          : [workingDirectory];
-      return targets.every((target) => isWritablePath(target, workingDirectory))
+      const targets = request.possiblePaths.length > 0 ? request.possiblePaths : [workspaceRoot];
+      return targets.every((target) => isWorkspacePath(workspaceRoot, target))
         ? APPROVE
-        : reject(`命令涉及可写范围外的路径(${RULE_HINT}):${targets.join(", ")}`);
+        : reject("命令访问了当前工作区外的路径：" + targets.join(", "));
     }
-
-    // 读、MCP、URL 等其他请求保持放行
-    return APPROVE;
+    if (request.kind === "custom-tool") {
+      return request.toolName === "authenticated_git"
+        ? APPROVE
+        : reject("工作区会话不允许执行未注册的自定义工具");
+    }
+    if (request.kind === "url") return APPROVE;
+    return reject("当前工具类型未启用工作区隔离，已拒绝执行");
   };
 }
