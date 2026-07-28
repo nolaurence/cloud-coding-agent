@@ -92,7 +92,7 @@ export function Sidebar({
     <aside className="flex h-full w-full shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:w-[17rem] md:rounded-lg md:border dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex h-12 items-center gap-2 px-4">
         <BrandLogo className="h-6 w-6" />
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold">云端编码助手</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold">kcloud-coding-agent</span>
         {!connected && (
           <WifiOff className="h-3.5 w-3.5 text-amber-500" aria-label="正在连接服务器" />
         )}
