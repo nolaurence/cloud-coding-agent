@@ -192,7 +192,7 @@ async function gitFixture(t: test.TestContext): Promise<string> {
   return root;
 }
 
-test("projectDiff includes tracked and untracked changes", async (t) => {
+test("projectDiff includes tracked and untracked text changes", async (t) => {
   const root = await gitFixture(t);
   await Promise.all([
     fs.writeFile(path.join(root, "README.md"), "# changed\n"),
@@ -203,9 +203,75 @@ test("projectDiff includes tracked and untracked changes", async (t) => {
 
   assert.equal(result.branch, "main");
   assert.equal(result.files, 2);
+  assert.equal(result.additions, 2);
+  assert.equal(result.deletions, 1);
   assert.equal(result.untracked, 1);
   assert.deepEqual(result.untrackedFiles, ["new file.txt"]);
-  assert.match(result.patch, /README\.md/);
+  assert.match(result.patch, /diff --git a\/README\.md b\/README\.md/);
+  assert.match(result.patch, /diff --git a\/new file\.txt b\/new file\.txt/);
+  assert.match(result.patch, /\+new/);
+});
+
+test("projectDiff renders one net diff for staged and unstaged edits", async (t) => {
+  const root = await gitFixture(t);
+  await fs.writeFile(path.join(root, "README.md"), "# staged\n");
+  await git(root, ["add", "README.md"]);
+  await fs.writeFile(path.join(root, "README.md"), "# final\n");
+
+  const result = await projectDiff(root);
+
+  assert.equal(result.files, 1);
+  assert.equal(result.additions, 1);
+  assert.equal(result.deletions, 1);
+  assert.equal(result.patch.match(/diff --git a\/README\.md/g)?.length, 1);
+  assert.match(result.patch, /\+# final/);
+  assert.doesNotMatch(result.patch, /\+# staged/);
+});
+
+test("projectDiff skips unsafe untracked content but keeps it in the file count", async (t) => {
+  const root = await gitFixture(t);
+  await Promise.all([
+    fs.writeFile(path.join(root, "text.txt"), "visible\n"),
+    fs.writeFile(path.join(root, "binary.dat"), Buffer.from([0, 1, 2, 3])),
+    fs.writeFile(path.join(root, "large.txt"), Buffer.alloc(1024 * 1024 + 1, 97)),
+  ]);
+
+  const result = await projectDiff(root);
+
+  assert.equal(result.files, 3);
+  assert.equal(result.untracked, 3);
+  assert.match(result.patch, /text\.txt/);
+  assert.doesNotMatch(result.patch, /binary\.dat/);
+  assert.doesNotMatch(result.patch, /large\.txt/);
+});
+
+test("projectDiff uses current file content before the first commit", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-empty-git-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await git(root, ["init", "--initial-branch=main"]);
+  await fs.writeFile(path.join(root, "first.txt"), "staged\n");
+  await git(root, ["add", "first.txt"]);
+  await fs.writeFile(path.join(root, "first.txt"), "working\n");
+
+  const result = await projectDiff(root);
+
+  assert.equal(result.branch, "main");
+  assert.equal(result.files, 1);
+  assert.equal(result.additions, 1);
+  assert.equal(result.deletions, 0);
+  assert.match(result.patch, /\+working/);
+  assert.doesNotMatch(result.patch, /\+staged/);
+});
+
+test("projectDiff truncates oversized tracked diffs without failing", async (t) => {
+  const root = await gitFixture(t);
+  await fs.writeFile(path.join(root, "README.md"), `${"x".repeat(2 * 1024 * 1024 + 256)}\n`);
+
+  const result = await projectDiff(root);
+
+  assert.equal(result.files, 1);
+  assert.equal(result.truncated, true);
+  assert.equal(result.patch.length, 2 * 1024 * 1024);
 });
 
 test("commitProjectChanges stages all changes and creates a hook-free commit", async (t) => {

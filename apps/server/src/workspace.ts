@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import type {
@@ -230,42 +230,175 @@ function gitCommandError(error: unknown, operation: string): Error {
   return new Error(`${operation}失败：${detail}`);
 }
 
-export async function projectDiff(root: string): Promise<GitDiffResult> {
-  let patch = "";
-  let statusEntries: GitStatusEntry[] = [];
-  let branch: string | undefined;
+async function gitHeadExists(root: string): Promise<boolean> {
   try {
-    const [unstaged, staged, status, currentBranch] = await Promise.all([
-      execFileAsync("git", ["diff", "--no-ext-diff", "--no-color"], { cwd: root, maxBuffer: MAX_DIFF_SIZE * 2 }),
-      execFileAsync("git", ["diff", "--cached", "--no-ext-diff", "--no-color"], { cwd: root, maxBuffer: MAX_DIFF_SIZE * 2 }),
+    await execFileAsync("git", ["rev-parse", "--verify", "--quiet", "HEAD"], { cwd: root });
+    return true;
+  } catch (error) {
+    const code = (error as { code?: unknown })?.code;
+    if (code === 1 || code === 128) return false;
+    throw error;
+  }
+}
+
+function patchPath(prefix: "a" | "b", relativePath: string): string {
+  const value = `${prefix}/${relativePath}`;
+  return /[\t\n\r"\\]/.test(value) ? JSON.stringify(value) : value;
+}
+
+function newTextFilePatch(root: string, relativePath: string): string | undefined {
+  const canonical = canonicalRoot(root);
+  const target = path.resolve(canonical, relativePath);
+  if (target === canonical || !target.startsWith(canonical + path.sep)) return undefined;
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (!stat.isFile() || stat.size > MAX_FILE_SIZE) return undefined;
+
+  let buffer: Buffer;
+  try {
+    buffer = fs.readFileSync(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (buffer.length > MAX_FILE_SIZE || buffer.includes(0)) return undefined;
+  const content = buffer.toString("utf8");
+  if (!Buffer.from(content, "utf8").equals(buffer)) return undefined;
+
+  const mode = stat.mode & 0o111 ? "100755" : "100644";
+  const oldPath = patchPath("a", relativePath);
+  const newPath = patchPath("b", relativePath);
+  const header = [
+    `diff --git ${oldPath} ${newPath}`,
+    `new file mode ${mode}`,
+    "--- /dev/null",
+    `+++ ${newPath}`,
+  ];
+  if (content.length === 0) return `${header.join("\n")}\n`;
+
+  const lines = content.split("\n");
+  const hasFinalNewline = content.endsWith("\n");
+  if (hasFinalNewline) lines.pop();
+  const body = lines.map((line) => `+${line}`).join("\n");
+  return [
+    ...header,
+    `@@ -0,0 +1,${lines.length} @@`,
+    body,
+    ...(hasFinalNewline ? [] : ["\\ No newline at end of file"]),
+    "",
+  ].join("\n");
+}
+
+function appendPatch(current: string, addition: string): string {
+  if (!current) return addition;
+  return `${current.replace(/\n*$/, "")}\n${addition}`;
+}
+
+function trackedDiffPatch(root: string): Promise<{ patch: string; truncated: boolean }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["diff", "--no-ext-diff", "--no-color", "HEAD", "--"], {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let patch = "";
+    let stderr = "";
+    let truncated = false;
+    let spawnError: Error | undefined;
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      const remaining = MAX_DIFF_SIZE - patch.length;
+      if (remaining > 0) patch += chunk.slice(0, remaining);
+      if (chunk.length > remaining) {
+        truncated = true;
+        child.kill("SIGTERM");
+      }
+    });
+    child.stderr.on("data", (chunk: string) => {
+      if (stderr.length < 32_768) stderr += chunk.slice(0, 32_768 - stderr.length);
+    });
+    child.on("error", (error) => {
+      spawnError = error;
+    });
+    child.on("close", (code) => {
+      if (spawnError) {
+        reject(spawnError);
+        return;
+      }
+      if (truncated || code === 0) {
+        resolve({ patch, truncated });
+        return;
+      }
+      reject(Object.assign(new Error(`git diff 退出码 ${code ?? "未知"}`), { stderr }));
+    });
+  });
+}
+
+export async function projectDiff(root: string): Promise<GitDiffResult> {
+  try {
+    const [status, currentBranch, hasHead] = await Promise.all([
       execFileAsync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
         cwd: root,
         maxBuffer: MAX_DIFF_SIZE * 2,
       }),
       execFileAsync("git", ["branch", "--show-current"], { cwd: root }),
+      gitHeadExists(root),
     ]);
-    patch = [staged.stdout, unstaged.stdout].filter(Boolean).join("\n");
-    statusEntries = parseGitStatus(status.stdout);
-    branch = currentBranch.stdout.trim() || undefined;
+    const statusEntries = parseGitStatus(status.stdout);
+    const branch = currentBranch.stdout.trim() || undefined;
+    const untrackedFiles = statusEntries
+      .filter((entry) => entry.status === "??")
+      .map((entry) => entry.path);
+
+    let patch = "";
+    let truncated = false;
+    if (hasHead) {
+      const tracked = await trackedDiffPatch(root);
+      patch = tracked.patch;
+      truncated = tracked.truncated;
+    }
+
+    const newFilePaths = hasHead
+      ? untrackedFiles
+      : statusEntries.map((entry) => entry.path);
+    const renderablePaths = newFilePaths.slice(0, MAX_UNTRACKED_FILES);
+    if (newFilePaths.length > renderablePaths.length) truncated = true;
+    for (const relativePath of truncated ? [] : renderablePaths) {
+      const filePatch = newTextFilePatch(root, relativePath);
+      if (!filePatch) continue;
+      const nextPatch = appendPatch(patch, filePatch);
+      if (nextPatch.length > MAX_DIFF_SIZE) {
+        truncated = true;
+        break;
+      }
+      patch = nextPatch;
+    }
+
+    const additions = (patch.match(/^\+(?!\+\+)/gm) ?? []).length;
+    const deletions = (patch.match(/^-(?!--)/gm) ?? []).length;
+    if (patch.length > MAX_DIFF_SIZE) {
+      patch = patch.slice(0, MAX_DIFF_SIZE);
+      truncated = true;
+    }
+    return {
+      patch,
+      files: statusEntries.length,
+      additions,
+      deletions,
+      truncated,
+      branch,
+      untracked: untrackedFiles.length,
+      untrackedFiles: untrackedFiles.slice(0, MAX_UNTRACKED_FILES),
+    };
   } catch (error) {
     throw gitCommandError(error, "读取 Git 差异");
   }
-  const additions = (patch.match(/^\+(?!\+\+)/gm) ?? []).length;
-  const deletions = (patch.match(/^-(?!--)/gm) ?? []).length;
-  const untrackedFiles = statusEntries
-    .filter((entry) => entry.status === "??")
-    .map((entry) => entry.path);
-  const truncated = patch.length > MAX_DIFF_SIZE;
-  return {
-    patch: truncated ? patch.slice(0, MAX_DIFF_SIZE) : patch,
-    files: statusEntries.length,
-    additions,
-    deletions,
-    truncated,
-    branch,
-    untracked: untrackedFiles.length,
-    untrackedFiles: untrackedFiles.slice(0, MAX_UNTRACKED_FILES),
-  };
 }
 
 export async function projectGitPullTarget(root: string): Promise<{ remote: string; branch: string }> {

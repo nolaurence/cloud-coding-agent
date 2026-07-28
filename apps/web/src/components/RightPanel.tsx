@@ -18,6 +18,7 @@ import { useApp, useThreadState } from "../lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DiffViewer } from "./workspace/DiffViewer";
 import { FilesPanel } from "./workspace/FilesPanel";
 import "./workspace/workspace.css";
 
@@ -206,17 +207,6 @@ function DiffPanel({
     }
   };
 
-  const untrackedText = diff?.untrackedFiles.length
-    ? [
-        "未跟踪文件:",
-        ...diff.untrackedFiles.map((path) => `  ${path}`),
-        ...(diff.untracked > diff.untrackedFiles.length
-          ? [`  …另有 ${diff.untracked - diff.untrackedFiles.length} 个文件`]
-          : []),
-      ].join("\n")
-    : "";
-  const patch = [diff?.patch, untrackedText].filter(Boolean).join("\n\n");
-
   return (
     <div className="flex h-full flex-col">
       <div className="flex min-h-10 items-center justify-between gap-2 border-b border-zinc-200 px-3 py-1.5 text-xs dark:border-zinc-800">
@@ -260,9 +250,13 @@ function DiffPanel({
           {notice}
         </div>
       ) : null}
-      <pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-3 font-mono text-xs leading-5">
-        {loading && !diff ? "正在读取 Git 差异…" : patch || "暂无未提交差异"}
-      </pre>
+      <DiffViewer
+        patch={diff?.patch}
+        loading={loading && !diff}
+        truncated={diff?.truncated ?? false}
+        untrackedFiles={diff?.untrackedFiles ?? []}
+        untrackedTotal={diff?.untracked ?? 0}
+      />
       {editable && (
         <form
           className="flex shrink-0 gap-2 border-t border-zinc-200 p-2 dark:border-zinc-800"

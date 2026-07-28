@@ -5,7 +5,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type PropsWithChildren,
 } from "react";
 import type { FileContents } from "@pierre/diffs";
 import type { ProjectFileContent, ProjectFileWriteResult } from "@cca/protocol";
@@ -14,14 +13,13 @@ import {
   EditorProvider,
   File,
   Virtualizer,
-  WorkerPoolContextProvider,
   type FileOptions,
-  useWorkerPool,
 } from "@pierre/diffs/react";
-import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
 import { request } from "../../lib/client";
 import { useApp } from "../../lib/store";
+import { resolveDiffThemeName } from "../../lib/diffRendering";
 import { useTheme } from "../../lib/theme";
+import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { FileAutosaver, type FileSaveState } from "./fileAutosaver";
 import {
   clearFileDraft,
@@ -36,12 +34,6 @@ const VIRTUALIZER_CONFIG = {
   overscrollSize: 600,
   intersectionObserverMargin: 1_200,
 } as const;
-const WORKER_POOL_OPTIONS = {
-  workerFactory: () => new DiffsWorker(),
-  poolSize: Math.max(2, Math.min(6, Math.floor((navigator.hardwareConcurrency || 4) / 2))),
-  totalASTLRUCacheSize: 240,
-} as const;
-
 export interface ProjectFileEditorHandle {
   discard: () => void;
 }
@@ -69,19 +61,6 @@ function contentCacheKey(path: string, content: string) {
 
 function saveError(reason: unknown) {
   return reason instanceof Error ? reason.message : "文件保存失败";
-}
-
-function WorkerThemeSync({
-  theme,
-  children,
-}: PropsWithChildren<{ theme: "pierre-light" | "pierre-dark" }>) {
-  const workerPool = useWorkerPool();
-  useEffect(() => {
-    void workerPool?.setRenderOptions({ theme }).catch((reason: unknown) => {
-      console.error("代码高亮主题切换失败", reason);
-    });
-  }, [theme, workerPool]);
-  return children;
 }
 
 export const ProjectFileEditor = forwardRef<ProjectFileEditorHandle, ProjectFileEditorProps>(
@@ -278,7 +257,7 @@ export const ProjectFileEditor = forwardRef<ProjectFileEditorHandle, ProjectFile
       },
     }), [autosaver, draftOwner, file.path, projectId]);
 
-    const themeName = resolvedTheme === "dark" ? "pierre-dark" : "pierre-light";
+    const themeName = resolveDiffThemeName(resolvedTheme);
     const options = useMemo<FileOptions<unknown>>(() => ({
       disableFileHeader: true,
       overflow: wordWrap ? "wrap" : "scroll",
@@ -287,17 +266,9 @@ export const ProjectFileEditor = forwardRef<ProjectFileEditorHandle, ProjectFile
     }), [resolvedTheme, themeName, wordWrap]);
 
     return (
-      <WorkerPoolContextProvider
-        poolOptions={WORKER_POOL_OPTIONS}
-        highlighterOptions={{
-          theme: themeName,
-          tokenizeMaxLineLength: 1_000,
-          useTokenTransformer: true,
-        }}
-      >
-        <WorkerThemeSync theme={themeName}>
-          <EditorProvider editor={editor}>
-            <div
+      <DiffWorkerPoolProvider>
+        <EditorProvider editor={editor}>
+          <div
               ref={containerRef}
               className="flex h-full min-h-0 flex-1"
               data-file-editor={file.path}
@@ -314,10 +285,9 @@ export const ProjectFileEditor = forwardRef<ProjectFileEditorHandle, ProjectFile
                   contentEditable={editable}
                 />
               </Virtualizer>
-            </div>
-          </EditorProvider>
-        </WorkerThemeSync>
-      </WorkerPoolContextProvider>
+          </div>
+        </EditorProvider>
+      </DiffWorkerPoolProvider>
     );
   },
 );
