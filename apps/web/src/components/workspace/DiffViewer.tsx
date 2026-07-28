@@ -30,13 +30,11 @@ const DIFF_VIEWER_CSS = `
   --diffs-bg-hover-override: color-mix(in srgb, var(--background) 94%, var(--foreground));
   --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground));
   --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 92%, var(--foreground));
-  --diffs-bg-addition-override: color-mix(in srgb, var(--background) 90%, oklch(0.62 0.17 145));
-  --diffs-bg-addition-number-override: color-mix(in srgb, var(--background) 84%, oklch(0.62 0.17 145));
-  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 80%, oklch(0.62 0.17 145));
+  --diffs-bg-addition-override: oklch(0.62 0.17 145);
+  --diffs-bg-addition-number-override: oklch(0.55 0.18 145);
   --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 74%, oklch(0.62 0.17 145));
-  --diffs-bg-deletion-override: color-mix(in srgb, var(--background) 91%, var(--destructive));
-  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--background) 85%, var(--destructive));
-  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 81%, var(--destructive));
+  --diffs-bg-deletion-override: var(--destructive);
+  --diffs-bg-deletion-number-override: var(--destructive);
   --diffs-bg-deletion-emphasis-override: color-mix(in srgb, var(--background) 75%, var(--destructive));
   background-color: var(--diffs-bg) !important;
 }
