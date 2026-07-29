@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">Kloud Coding Agent</title>
   <desc id="desc">A liquid glass K monogram inside a rounded rectangle.</desc>
   <defs>
@@ -32,19 +32,13 @@
       <stop offset="0.5" stop-color="#9AFFF4" stop-opacity="0.22"/>
       <stop offset="1" stop-color="#FFB0A2" stop-opacity="0.5"/>
     </linearGradient>
-    <filter id="shellShadow" x="18" y="18" width="988" height="1006" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="30" stdDeviation="26" flood-color="#02070A" flood-opacity="0.48"/>
-    </filter>
-    <filter id="markShadow" x="180" y="138" width="632" height="744" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="24" stdDeviation="24" flood-color="#00161B" flood-opacity="0.52"/>
-      <feDropShadow dx="0" dy="-5" stdDeviation="7" flood-color="#FFFFFF" flood-opacity="0.18"/>
-    </filter>
     <clipPath id="shellClip">
       <rect x="64" y="64" width="896" height="896" rx="224"/>
     </clipPath>
   </defs>
 
-  <g filter="url(#shellShadow)">
+  <g>
+    <rect x="72" y="80" width="880" height="880" rx="216" fill="#02070A" fill-opacity="0.34"/>
     <rect x="64" y="64" width="896" height="896" rx="224" fill="url(#shell)"/>
     <g clip-path="url(#shellClip)">
       <rect x="64" y="64" width="896" height="896" fill="url(#cyanGlow)"/>
@@ -58,7 +52,12 @@
   <rect x="112" y="112" width="800" height="800" rx="188" fill="url(#panel)" stroke="#FFFFFF" stroke-opacity="0.2" stroke-width="3"/>
   <path d="M177 254C236 155 341 125 498 126C650 127 769 167 845 267" fill="none" stroke="#FFFFFF" stroke-opacity="0.28" stroke-width="12" stroke-linecap="round"/>
 
-  <g filter="url(#markShadow)" fill="none" stroke="url(#glass)" stroke-width="126" stroke-linecap="round" stroke-linejoin="round">
+  <g transform="translate(0 18)" fill="none" stroke="#00161B" stroke-opacity="0.38" stroke-width="138" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M340 274V750"/>
+    <path d="M389 517L650 276"/>
+    <path d="M389 517L672 758"/>
+  </g>
+  <g fill="none" stroke="url(#glass)" stroke-width="126" stroke-linecap="round" stroke-linejoin="round">
     <path d="M340 274V750"/>
     <path d="M389 517L650 276"/>
     <path d="M389 517L672 758"/>

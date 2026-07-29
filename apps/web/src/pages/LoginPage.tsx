@@ -74,7 +74,7 @@ export function LoginPage() {
     <div className="flex h-full items-center justify-center bg-white px-6 dark:bg-zinc-950">
       <div className="w-full max-w-sm py-10">
         <div className="mb-7 flex flex-col items-center gap-2">
-          <BrandLogo className="mb-1 h-14 w-14 drop-shadow-lg" />
+          <BrandLogo className="mb-1 h-14 w-14" />
           <h1 className="text-lg font-semibold">云端编码助手</h1>
           <p className="text-xs text-zinc-500">
             {mode === "login" ? "登录以继续" : "创建新账户"}
