@@ -32,6 +32,16 @@ import {
 import { TerminalManager } from "./terminals.js";
 import { bindGitProvider, listGitBindings, unbindGitProvider } from "./gitBindings.js";
 import { commitProjectChanges, runAuthenticatedGit } from "./gitOperations.js";
+import {
+  assertProjectGitVersion,
+  projectGitFileDiff,
+  projectGitLog,
+  projectGitPushTarget,
+  projectGitStatus,
+  stageProjectFiles,
+  unstageProjectFiles,
+  withProjectGitMutation,
+} from "./gitWorkspace.js";
 import { ConnectorManager } from "./connectors/manager.js";
 import { removeThreadUploads, removeUploadedImages, validateTurnAttachments } from "./uploads.js";
 import {
@@ -761,24 +771,99 @@ export class Hub {
           this.reply(conn, msg.id, await projectDiff(project.path));
           break;
         }
-        case "project.git.pull": {
-          const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
-          const target = await projectGitPullTarget(project.path);
+        case "project.git.status": {
+          const project = this.requireOwnedProject(conn, msg.projectId);
+          this.reply(conn, msg.id, await projectGitStatus(project.path));
+          break;
+        }
+        case "project.git.log": {
+          const project = this.requireOwnedProject(conn, msg.projectId);
           this.reply(
             conn,
             msg.id,
-            await runAuthenticatedGit(conn.user.username, project.path, {
-              action: "pull",
-              remote: target.remote,
-              branch: target.branch,
-              strategy: "ff-only",
+            await projectGitLog(project.path, { limit: msg.limit, query: msg.query }),
+          );
+          break;
+        }
+        case "project.git.fileDiff": {
+          const project = this.requireOwnedProject(conn, msg.projectId);
+          this.reply(
+            conn,
+            msg.id,
+            await projectGitFileDiff(project.path, msg.path, msg.staged),
+          );
+          break;
+        }
+        case "project.git.stage": {
+          const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
+          await stageProjectFiles(project.path, msg.paths, {
+            expectedHead: msg.expectedHead,
+            expectedIndexTree: msg.expectedIndexTree,
+          });
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "project.git.unstage": {
+          const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
+          await unstageProjectFiles(project.path, msg.paths, {
+            expectedHead: msg.expectedHead,
+            expectedIndexTree: msg.expectedIndexTree,
+          });
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "project.git.pull": {
+          const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
+          this.reply(
+            conn,
+            msg.id,
+            await withProjectGitMutation(project.path, async () => {
+              const target = await projectGitPullTarget(project.path);
+              return runAuthenticatedGit(conn.user.username, project.path, {
+                action: "pull",
+                remote: target.remote,
+                branch: target.branch,
+                strategy: "ff-only",
+              });
+            }),
+          );
+          break;
+        }
+        case "project.git.push": {
+          const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
+          this.reply(
+            conn,
+            msg.id,
+            await withProjectGitMutation(project.path, async () => {
+              const target = await projectGitPushTarget(project.path);
+              return runAuthenticatedGit(conn.user.username, project.path, {
+                action: "push",
+                remote: target.remote,
+                branch: target.branch,
+                setUpstream: target.setUpstream,
+              });
             }),
           );
           break;
         }
         case "project.git.commit": {
           const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
-          this.reply(conn, msg.id, await commitProjectChanges(project.path, msg.message));
+          this.reply(
+            conn,
+            msg.id,
+            await withProjectGitMutation(project.path, async () => {
+              if (msg.expectedHead !== undefined || msg.expectedIndexTree !== undefined) {
+                if (msg.expectedHead === undefined || msg.expectedIndexTree === undefined) {
+                  throw new Error("Git 工作区版本不完整");
+                }
+                await assertProjectGitVersion(project.path, {
+                  expectedHead: msg.expectedHead,
+                  expectedIndexTree: msg.expectedIndexTree,
+                });
+              }
+              return commitProjectChanges(project.path, msg.message, { stageAll: msg.stageAll });
+            }),
+          );
           break;
         }
         case "terminal.open": {

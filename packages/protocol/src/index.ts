@@ -317,6 +317,49 @@ export interface GitCommitResult {
   summary: string;
 }
 
+export type GitFileStatus = "M" | "A" | "D" | "R" | "C" | "U" | "?";
+
+export interface GitFileChange {
+  path: string;
+  oldPath?: string;
+  staged?: GitFileStatus;
+  unstaged?: GitFileStatus;
+}
+
+export interface GitWorkspaceStatus {
+  head: string | null;
+  indexTree: string;
+  branch?: string;
+  detached: boolean;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  files: GitFileChange[];
+}
+
+export interface GitLogCommit {
+  hash: string;
+  shortHash: string;
+  parents: string[];
+  author: string;
+  email: string;
+  date: number;
+  subject: string;
+  refs: string[];
+}
+
+export interface GitLogResult {
+  commits: GitLogCommit[];
+  hasMore: boolean;
+}
+
+export interface GitFileDiffResult {
+  path: string;
+  staged: boolean;
+  patch: string;
+  truncated: boolean;
+}
+
 export type GitProvider = "github" | "gitee";
 
 export interface GitBinding {
@@ -417,8 +460,30 @@ export type ClientMessage =
       expectedVersion: string;
     }
   | { id: string; type: "project.diff"; projectId: string }
+  | { id: string; type: "project.git.status"; projectId: string }
+  | { id: string; type: "project.git.log"; projectId: string; limit?: number; query?: string }
+  | { id: string; type: "project.git.fileDiff"; projectId: string; path: string; staged: boolean }
+  | {
+      id: string;
+      type: "project.git.stage" | "project.git.unstage";
+      threadId: string;
+      projectId: string;
+      paths: string[];
+      expectedHead: string | null;
+      expectedIndexTree: string;
+    }
   | { id: string; type: "project.git.pull"; threadId: string; projectId: string }
-  | { id: string; type: "project.git.commit"; threadId: string; projectId: string; message: string }
+  | { id: string; type: "project.git.push"; threadId: string; projectId: string }
+  | {
+      id: string;
+      type: "project.git.commit";
+      threadId: string;
+      projectId: string;
+      message: string;
+      stageAll?: boolean;
+      expectedHead?: string | null;
+      expectedIndexTree?: string;
+    }
   | {
       id: string;
       type: "terminal.open";

@@ -5,10 +5,33 @@ import path from "node:path";
 import test from "node:test";
 import {
   buildAuthenticatedGitEnv,
+  commitProjectChanges,
   normalizeGitRemote,
   runAuthenticatedGit,
   type GitRunner,
 } from "./gitOperations.js";
+
+test("commit can preserve the existing index without staging the working tree", async () => {
+  const calls: string[][] = [];
+  const runGit: GitRunner = async (args) => {
+    calls.push(args);
+    if (args[0] === "diff") return { stdout: "staged.txt\0", stderr: "" };
+    if (args.includes("commit")) return { stdout: "committed", stderr: "" };
+    if (args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
+    return { stdout: "", stderr: "" };
+  };
+
+  const result = await commitProjectChanges(
+    process.cwd(),
+    "selected files",
+    { stageAll: false },
+    { runGit, baseEnv: { PATH: process.env.PATH } },
+  );
+
+  assert.equal(result.hash, "abc123");
+  assert.equal(calls.some((args) => args[0] === "add"), false);
+  assert.deepEqual(calls[0], ["diff", "--cached", "--name-only", "-z"]);
+});
 
 test("normalizes GitHub and Gitee HTTPS and SSH remotes", () => {
   assert.deepEqual(normalizeGitRemote("git@github.com:acme/widgets.git"), {

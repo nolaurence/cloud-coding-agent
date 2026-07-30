@@ -53,6 +53,10 @@ interface GitOperationDependencies {
   baseEnv?: NodeJS.ProcessEnv;
 }
 
+export interface CommitProjectOptions {
+  stageAll?: boolean;
+}
+
 function providerForHost(hostname: string): GitProvider | null {
   if (hostname === "github.com") return "github";
   if (hostname === "gitee.com") return "gitee";
@@ -266,6 +270,7 @@ function outputFor(action: AuthenticatedGitAction, result: GitRunResult): string
 export async function commitProjectChanges(
   cwd: string,
   message: string,
+  options: CommitProjectOptions = {},
   dependencies: Pick<GitOperationDependencies, "runGit" | "baseEnv"> = {},
 ): Promise<GitCommitResult> {
   const normalizedMessage = typeof message === "string" ? message.trim() : "";
@@ -278,7 +283,9 @@ export async function commitProjectChanges(
   const runGit = dependencies.runGit ?? defaultGitRunner;
   const env = sanitizedGitEnv(dependencies.baseEnv ?? process.env);
   try {
-    await runGit(["add", "--all", "--"], gitOptions(cwd, env));
+    if (options.stageAll !== false) {
+      await runGit(["add", "--all", "--"], gitOptions(cwd, env));
+    }
     const staged = await runGit(["diff", "--cached", "--name-only", "-z"], gitOptions(cwd, env));
     if (!staged.stdout) throw new Error("没有可提交的更改");
     const commit = await runGit(

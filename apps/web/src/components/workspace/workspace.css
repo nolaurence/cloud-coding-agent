@@ -71,3 +71,27 @@
 .dark .workspace-diff-viewer {
   scrollbar-color: #52525b transparent;
 }
+
+.git-workspace {
+  container-type: inline-size;
+}
+
+.git-workspace-layout {
+  grid-template-rows: minmax(180px, 38%) minmax(0, 1fr);
+}
+
+.git-workspace-sidebar {
+  border-bottom: 1px solid var(--border);
+}
+
+@container (min-width: 720px) {
+  .git-workspace-layout {
+    grid-template-columns: minmax(240px, 34%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .git-workspace-sidebar {
+    border-right: 1px solid var(--border);
+    border-bottom: 0;
+  }
+}
