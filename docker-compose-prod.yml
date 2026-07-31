@@ -1,5 +1,6 @@
 services:
   agent:
+    image: ${CCA_IMAGE:?未设置 CCA_IMAGE}
     build: .
     ports:
       - "${APP_PORT:-7001}:8787"
