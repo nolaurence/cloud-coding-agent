@@ -16,6 +16,7 @@ import { COPILOT_HOME } from "./env.js";
 import { store } from "./store.js";
 import { createAuthenticatedGitTool } from "./gitOperations.js";
 import { createWorkspacePermissionHandler } from "./permissions.js";
+import { browserPool, createBrowserUseTool } from "./browser.js";
 
 interface ThreadRuntime {
   threadId: string;
@@ -243,7 +244,10 @@ export class CopilotManager {
         sandboxMcpServers: true,
         sandboxLspServers: true,
       },
-      tools: [createAuthenticatedGitTool(actorId || thread.userId, project.path)],
+      tools: [
+        createAuthenticatedGitTool(actorId || thread.userId, project.path),
+        createBrowserUseTool(browserPool.forThread(thread.id)),
+      ],
       systemMessage: {
         mode: "append",
         content: systemInstructions.join("\n"),

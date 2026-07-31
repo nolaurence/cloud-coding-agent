@@ -28,6 +28,8 @@ import { store } from "./store.js";
 import { uploadDirectory, uploadUsage } from "./uploads.js";
 import { initThreadShares, validateThreadShareToken } from "./threadShares.js";
 import { getThreadAccess } from "./threadAccess.js";
+import { browserPool, NOVNC_ROOT } from "./browser.js";
+import WebSocket from "ws";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -87,6 +89,73 @@ async function main() {
   const hub = new Hub();
 
   app.get("/health", async () => ({ ok: true }));
+  app.get("/api/browser/status", async (req, reply) => {
+    const user = authenticate(req.headers.authorization);
+    if (!user) return reply.code(401).send({ error: "未授权" });
+    const { threadId } = req.query as { threadId?: string };
+    const thread = threadId ? store.getThread(threadId) : undefined;
+    if (!thread || getThreadAccess(user, thread) !== "owner") {
+      return reply.code(403).send({ error: "只有会话所有者可以查看 Agent 浏览器" });
+    }
+    const manager = browserPool.forThread(thread.id);
+    if (manager.enabled && !manager.status().ready && !manager.status().starting) {
+      void manager.start().catch((error) => console.error(`[cca] 会话 ${thread.id} 浏览器启动失败`, error));
+    }
+    return manager.status();
+  });
+
+  app.post("/api/browser/ticket", async (req, reply) => {
+    const user = authenticate(req.headers.authorization);
+    if (!user) return reply.code(401).send({ error: "未授权" });
+    const { threadId } = (req.body ?? {}) as { threadId?: string };
+    const thread = threadId ? store.getThread(threadId) : undefined;
+    if (!thread || getThreadAccess(user, thread) !== "owner") {
+      return reply.code(403).send({ error: "只有会话所有者可以查看 Agent 浏览器" });
+    }
+    const manager = browserPool.forThread(thread.id);
+    await manager.start();
+    return { ticket: browserPool.issueTicket(thread.id, user.username) };
+  });
+
+  if (fs.existsSync(NOVNC_ROOT)) {
+    await app.register(fastifyStatic, {
+      root: NOVNC_ROOT,
+      prefix: "/novnc/",
+      decorateReply: false,
+    });
+  }
+
+  await app.register(async (scope) => {
+    scope.get("/browser-vnc", { websocket: true }, (socket, req) => {
+      const ticket = new URL(req.url, "http://localhost").searchParams.get("ticket") ?? "";
+      const access = browserPool.consumeTicket(ticket);
+      if (!access) {
+        socket.close(4401, "unauthorized");
+        return;
+      }
+      let upstream: WebSocket;
+      try {
+        upstream = new WebSocket(`ws://127.0.0.1:${browserPool.forThread(access.threadId).vncWebSocketPort()}`);
+      } catch {
+        socket.close(1011, "browser unavailable");
+        return;
+      }
+      const pending: Array<{ data: WebSocket.RawData; binary: boolean }> = [];
+      socket.on("message", (data, binary) => {
+        if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary });
+        else if (upstream.readyState === WebSocket.CONNECTING) pending.push({ data, binary });
+      });
+      upstream.on("message", (data, binary) => {
+        if (socket.readyState === socket.OPEN) socket.send(data, { binary });
+      });
+      upstream.on("open", () => {
+        for (const message of pending.splice(0)) upstream.send(message.data, { binary: message.binary });
+      });
+      upstream.on("error", () => socket.close(1011, "browser unavailable"));
+      upstream.on("close", () => socket.close());
+      socket.on("close", () => upstream.close());
+    });
+  });
 
   app.get("/api/auth/registration", async () => getPublicRegistrationPolicy());
 
@@ -277,6 +346,7 @@ async function main() {
     shuttingDown = true;
     try {
       await hub.shutdown();
+      await browserPool.stop();
       await app.close();
       await closeDb();
     } catch (err) {

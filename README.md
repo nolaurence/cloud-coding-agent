@@ -51,6 +51,8 @@ docker compose -f docker-compose-standalone.yml up -d --build
 
 部署完成后打开 `http://localhost:8787`(修改了 `APP_PORT` 时使用对应端口)。SQLite 数据库和其他应用数据保存在 `agent-data` volume 中;宿主机的 `WORKSPACE_DIR` 会挂载到容器 `/workspace`,在界面中添加项目时应使用 `/workspace` 下的容器路径。
 
+镜像内置 Chromium、Xvfb、x11vnc、websockify 和 noVNC。每个会话会按需启动隔离的浏览器、显示服务和用户目录;右侧「浏览器」面板通过同源 WebSocket 显示该会话,Agent 则使用 `browser_use` 工具导航、查看页面、点击和输入,无需额外暴露 VNC 端口。浏览器默认禁止访问本机、内网和云元数据地址;如需让 Agent 调试本地开发服务,请显式设置 `BROWSER_ALLOW_PRIVATE_NETWORK=true`。
+
 常用维护命令:
 
 ```bash
@@ -61,7 +63,7 @@ docker compose -f docker-compose-standalone.yml down       # 保留 agent-data �
 
 ### 不使用 Docker
 
-需要 Node.js 22.13 或更高版本、npm 和 Git。首次部署时安装依赖并构建前端:
+需要 Node.js 22.13 或更高版本、npm、Git、Chromium、Xvfb、x11vnc、websockify 和 noVNC。Debian/Ubuntu 可执行 `sudo apt install chromium xvfb x11vnc websockify novnc` 安装浏览器链路。默认仅允许浏览器访问公网 HTTP/HTTPS 地址;如需访问本机或内网开发服务,启动时添加 `BROWSER_ALLOW_PRIVATE_NETWORK=true`。首次部署时安装依赖并构建前端:
 
 ```bash
 git clone <本仓库地址> cloud-coding-agent

@@ -483,8 +483,9 @@ test("creates an isolated session with only the authenticated Git extension", as
     sandboxMcpServers: true,
     sandboxLspServers: true,
   });
-  assert.deepEqual(config.tools?.map((tool) => tool.name), ["authenticated_git"]);
+  assert.deepEqual(config.tools?.map((tool) => tool.name), ["authenticated_git", "browser_use"]);
   assert.ok(config.tools?.[0]?.handler);
+  assert.ok(config.tools?.[1]?.handler);
   assert.match(config.systemMessage?.content ?? "", /authenticated_git/);
   await manager.interrupt(threadId);
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ExternalLink,
   FileCode2,
@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 import { useApp, useThreadState } from "../lib/store";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FilesPanel } from "./workspace/FilesPanel";
 import { GitPanel } from "./workspace/GitPanel";
@@ -65,7 +64,7 @@ export function RightPanel({
         </Button>
       </div>
       <div className="min-h-0 flex-1">
-        <TabsContent value="browser" className="h-full"><BrowserPanel /></TabsContent>
+        <TabsContent value="browser" className="h-full"><BrowserPanel threadId={threadId} /></TabsContent>
         <TabsContent value="files" className="h-full">
           {projectId ? (
             <FilesPanel
@@ -95,23 +94,91 @@ function Empty({ text }: { text: string }) {
   return <div className="flex h-full items-center justify-center p-6 text-sm text-zinc-500">{text}</div>;
 }
 
-function BrowserPanel() {
-  const [draft, setDraft] = useState("http://localhost:5173");
-  const [url, setUrl] = useState("http://localhost:5173");
-  const normalized = /^https?:\/\//i.test(url) ? url : `http://${url}`;
+function BrowserPanel({ threadId }: { threadId: string }) {
+  const token = localStorage.getItem("cca-token") ?? "";
+  const [reloadKey, setReloadKey] = useState(0);
+  const [browser, setBrowser] = useState<{ ready: boolean; ticket?: string; error?: string } | null>(null);
+  const issueTicket = async (signal?: AbortSignal) => {
+    const response = await fetch("/api/browser/ticket", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId }),
+      signal,
+    });
+    const data = await response.json() as { ticket?: string; error?: string };
+    if (!response.ok || !data.ticket) throw new Error(data.error || "无法连接浏览器");
+    return data.ticket;
+  };
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = async () => {
+      try {
+        const response = await fetch(`/api/browser/status?threadId=${encodeURIComponent(threadId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        });
+        const data = await response.json() as { ready?: boolean; error?: string };
+        if (!response.ok) throw new Error(data.error || "无法获取浏览器状态");
+        if (data.ready) {
+          setBrowser({ ready: true, ticket: await issueTicket(controller.signal) });
+        } else {
+          setBrowser({ ready: false, error: data.error });
+          timer = setTimeout(() => void load(), 1_000);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setBrowser({ ready: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+    };
+    setBrowser(null);
+    void load();
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [reloadKey, threadId, token]);
+  const openInNewWindow = () => {
+    const popup = window.open("about:blank", "_blank", "noopener,noreferrer");
+    if (!popup) {
+      setBrowser((current) => ({ ready: false, error: current?.error || "浏览器阻止了新窗口" }));
+      return;
+    }
+    void issueTicket().then((ticket) => {
+      popup.location.href = browserUrl(ticket);
+    }).catch((error) => {
+      popup.close();
+      setBrowser({ ready: false, error: error instanceof Error ? error.message : String(error) });
+    });
+  };
+  const url = browser?.ticket ? browserUrl(browser.ticket) : "";
   return (
     <div className="flex h-full flex-col">
-      <form className="flex gap-1 border-b border-zinc-200 p-2 dark:border-zinc-800" onSubmit={(event) => { event.preventDefault(); setUrl(draft.trim()); }}>
-        <Input className="min-w-0 flex-1 text-xs" value={draft} onChange={(event) => setDraft(event.target.value)} aria-label="预览地址" />
-        <Button type="submit" variant="ghost" size="icon" aria-label="刷新预览" title="刷新预览"><RefreshCw className="h-3.5 w-3.5" /></Button>
-        <Button asChild variant="ghost" size="icon">
-          <a href={normalized} target="_blank" rel="noreferrer" aria-label="在新窗口打开" title="在新窗口打开"><ExternalLink className="h-3.5 w-3.5" /></a>
-        </Button>
-      </form>
-      <iframe key={normalized} src={normalized} title="网页预览" className="min-h-0 flex-1 bg-white" sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts" />
-      <div className="border-t border-zinc-200 px-2 py-1 text-[10px] text-zinc-400 dark:border-zinc-800">目标站点禁止 iframe 时，请使用右上角新窗口打开。</div>
+      <div className="flex items-center gap-1 border-b border-zinc-200 p-2 dark:border-zinc-800">
+        <div className="min-w-0 flex-1 truncate px-2 text-xs text-zinc-500">Agent 浏览器</div>
+        <Button type="button" variant="ghost" size="icon" onClick={() => setReloadKey((value) => value + 1)} aria-label="重新连接" title="重新连接"><RefreshCw className="h-3.5 w-3.5" /></Button>
+        <Button type="button" variant="ghost" size="icon" disabled={!browser?.ready} onClick={openInNewWindow} aria-label="在新窗口打开" title="在新窗口打开"><ExternalLink className="h-3.5 w-3.5" /></Button>
+      </div>
+      {browser?.ready && url ? (
+        <iframe key={reloadKey} src={url} title="Agent 浏览器" className="min-h-0 flex-1 bg-black" allow="clipboard-read; clipboard-write" />
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-sm text-zinc-500">
+          {browser?.error || "浏览器正在启动…"}
+        </div>
+      )}
+      <div className="border-t border-zinc-200 px-2 py-1 text-[10px] text-zinc-400 dark:border-zinc-800">这里显示 Agent 通过 browser_use 操作的同一个 Chromium 会话。</div>
     </div>
   );
+}
+
+function browserUrl(ticket: string) {
+  return `/novnc/vnc.html?${new URLSearchParams({
+    autoconnect: "true",
+    resize: "scale",
+    reconnect: "false",
+    path: `browser-vnc?ticket=${encodeURIComponent(ticket)}`,
+  }).toString()}`;
 }
 
 function ContextPanel({ threadId }: { threadId: string }) {
