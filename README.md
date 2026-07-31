@@ -35,25 +35,61 @@ npm install
 npm run dev        # server :8787 + web :5173(代理 /ws)
 ```
 
-## 生产
+## Standalone 部署
 
-```bash
-npm run build      # 构建 web
-npm start          # server 于 :8787 提供 API + 静态页面
-```
+Standalone 模式使用内置 SQLite,适合单机或个人服务。应用数据、用户配置、会话记录和 Copilot 运行时状态需要持久化到同一个数据目录;不要让多个实例同时读写同一个 SQLite 文件。
 
-## Docker 云端部署
+### 使用 Docker(推荐)
 
-单容器 SQLite 部署(推荐用于单机和个人服务):
+需要 Docker 和 Docker Compose。仓库已提供单容器 Compose 配置:
 
 ```bash
 cp .env.standalone.example .env
-# 修改 .env 中的 ADMIN_PASSWORD
+# 修改 .env 中的 ADMIN_PASSWORD;按需设置 APP_PORT 和 WORKSPACE_DIR
 docker compose -f docker-compose-standalone.yml up -d --build
-# 打开 http://localhost:8787
 ```
 
-该 Compose 只启动 `agent`,数据库位于持久化卷中的 `/data/cca.db`,无需额外数据库服务。`WORKSPACE_DIR` 指定挂载到容器 `/workspace` 的代码目录。请勿让多个容器同时挂载并写入同一个 SQLite 数据文件;需要多实例时使用外部 MySQL。
+部署完成后打开 `http://localhost:8787`(修改了 `APP_PORT` 时使用对应端口)。SQLite 数据库和其他应用数据保存在 `agent-data` volume 中;宿主机的 `WORKSPACE_DIR` 会挂载到容器 `/workspace`,在界面中添加项目时应使用 `/workspace` 下的容器路径。
+
+常用维护命令:
+
+```bash
+docker compose -f docker-compose-standalone.yml logs -f agent
+docker compose -f docker-compose-standalone.yml restart agent
+docker compose -f docker-compose-standalone.yml down       # 保留 agent-data 数据卷
+```
+
+### 不使用 Docker
+
+需要 Node.js 22.13 或更高版本、npm 和 Git。首次部署时安装依赖并构建前端:
+
+```bash
+git clone <本仓库地址> cloud-coding-agent
+cd cloud-coding-agent
+npm ci
+npm run build
+```
+
+创建持久化数据目录和 Agent 工作目录,然后启动服务:
+
+```bash
+mkdir -p ./data ./workspace
+
+CCA_DATA_DIR="$PWD/data" \
+DATABASE_URL="sqlite:$PWD/data/cca.db" \
+WORKSPACE_ROOT="$PWD/workspace" \
+ADMIN_USERNAME="admin" \
+ADMIN_PASSWORD="请替换为强密码" \
+HOST="0.0.0.0" \
+PORT="8787" \
+npm start
+```
+
+服务启动后打开 `http://localhost:8787`。生产环境建议通过 systemd、Supervisor 等进程管理器托管上述命令,并使用 Nginx、Caddy 等反向代理配置 HTTPS 和 WebSocket 转发。必须持久化并备份 `CCA_DATA_DIR`;其中包含 SQLite 数据库、加密密钥、上传文件、技能和会话运行时状态。项目可以使用服务器上的任意绝对路径,由运行服务的系统用户负责读写权限。
+
+如需修改监听端口或数据路径,调整对应环境变量后重启服务。升级时拉取新代码,重新执行 `npm ci && npm run build`,再重启进程。
+
+## 其他 Docker 部署方式
 
 内置 MySQL 的开发部署:
 
