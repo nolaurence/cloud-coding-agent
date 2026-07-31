@@ -3,6 +3,7 @@ import { FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import type { ModelRef } from "@cca/protocol";
 import { useApp, useThreadState } from "../lib/store";
+import { threadComposerDraftKey } from "../lib/composerDrafts";
 import { ChatView } from "../components/ChatView";
 import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
@@ -182,6 +183,7 @@ export function ThreadPage() {
                 <div className="pointer-events-auto">
                   <Composer
                     key={threadId}
+                    draftKey={threadComposerDraftKey(threadId)}
                     threadId={threadId}
                     projectId={thread?.projectId}
                     running={state.running}
@@ -208,18 +210,23 @@ export function ThreadPage() {
           )}
         </div>
       </div>
-      {canManageThread && panelOpen && (
+      {canManageThread && (
         <>
-          <RightPanelResizeHandle
-            handlers={resizeHandlers}
-            width={panelWidth}
-            minWidth={RIGHT_PANEL_MIN_WIDTH}
-            maxWidth={panelMaxWidth}
-            resizing={resizing}
-          />
+          {panelOpen && (
+            <RightPanelResizeHandle
+              handlers={resizeHandlers}
+              width={panelWidth}
+              minWidth={RIGHT_PANEL_MIN_WIDTH}
+              maxWidth={panelMaxWidth}
+              resizing={resizing}
+            />
+          )}
           <div
             id="thread-workspace-panel"
-            className={`fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto lg:my-[10px] lg:mr-[10px] lg:w-[var(--right-panel-width)] lg:shrink-0 lg:rounded-lg lg:border lg:border-zinc-200 dark:bg-zinc-950 lg:dark:border-zinc-800 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`}
+            aria-hidden={!panelOpen}
+            className={panelOpen
+              ? `fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto lg:my-[10px] lg:mr-[10px] lg:w-[var(--right-panel-width)] lg:shrink-0 lg:rounded-lg lg:border lg:border-zinc-200 dark:bg-zinc-950 lg:dark:border-zinc-800 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`
+              : "hidden"}
             style={{ "--right-panel-width": `${panelWidth}px` } as CSSProperties}
           >
             <RightPanel threadId={threadId} projectId={thread?.projectId} onClose={() => setPanelOpen(false)} />

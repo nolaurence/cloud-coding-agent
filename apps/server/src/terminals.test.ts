@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { TerminalEvent } from "@cca/protocol";
-import { TerminalManager, type TerminalSpawner } from "./terminals.js";
+import { TerminalManager, terminalEnvironment, type TerminalSpawner } from "./terminals.js";
 
 class FakeTerminal {
   writes: string[] = [];
@@ -72,6 +72,7 @@ test("terminal sessions stream PTY data, retain history, accept input and resize
   assert.equal(spawnCalls[0]?.options.cwd, "/workspace");
   assert.equal(spawnCalls[0]?.options.name, "xterm-256color");
   assert.equal(spawnCalls[0]?.options.env.TERM, "xterm-256color");
+  assert.equal("encoding" in (spawnCalls[0]?.options ?? {}), false);
 
   processes[0]?.emitData("\u001b[32mready\u001b[0m\r\n");
   assert.deepEqual(events, [
@@ -96,6 +97,25 @@ test("terminal sessions stream PTY data, retain history, accept input and resize
     rows: 25,
   });
   assert.deepEqual(processes[0]?.resizes, [{ cols: 90, rows: 25 }]);
+});
+
+test("terminal environment keeps shell essentials without exposing service secrets", () => {
+  const env = terminalEnvironment("/workspace", {
+    PATH: "/usr/bin",
+    LANG: "zh_CN.UTF-8",
+    DATABASE_URL: "mysql://secret",
+    ADMIN_PASSWORD: "secret",
+    API_KEY: "secret",
+  });
+
+  assert.equal(env.PATH, "/usr/bin");
+  assert.equal(env.LANG, "zh_CN.UTF-8");
+  assert.equal(env.HOME, "/workspace");
+  assert.equal(env.USERPROFILE, "/workspace");
+  assert.equal(env.TERM, "xterm-256color");
+  assert.equal(env.DATABASE_URL, undefined);
+  assert.equal(env.ADMIN_PASSWORD, undefined);
+  assert.equal(env.API_KEY, undefined);
 });
 
 test("late exit from a closed terminal cannot delete a replacement with the same id", () => {

@@ -867,12 +867,40 @@ export class Hub {
           break;
         }
         case "terminal.open": {
-          throw new Error("当前部署未启用安全终端");
+          const thread = store.getThread(msg.threadId);
+          if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以使用终端");
+          const project = store.projects.find((candidate) => candidate.id === thread?.projectId);
+          if (!project || project.ownerId !== conn.user.username) {
+            throw new Error("工作区不存在或无权访问");
+          }
+          this.reply(
+            conn,
+            msg.id,
+            this.terminals.open(
+              conn.user.username,
+              msg.threadId,
+              msg.terminalId,
+              project.path,
+              msg.cols,
+              msg.rows,
+            ),
+          );
+          break;
         }
-        case "terminal.write":
-        case "terminal.resize":
+        case "terminal.write": {
+          this.terminals.write(conn.user.username, msg.terminalId, msg.data);
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "terminal.resize": {
+          this.terminals.resize(conn.user.username, msg.terminalId, msg.cols, msg.rows);
+          this.reply(conn, msg.id);
+          break;
+        }
         case "terminal.close": {
-          throw new Error("当前部署未启用安全终端");
+          this.terminals.close(conn.user.username, msg.terminalId);
+          this.reply(conn, msg.id);
+          break;
         }
         case "git.bindings": {
           this.reply(conn, msg.id, listGitBindings(conn.user.username));

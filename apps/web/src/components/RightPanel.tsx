@@ -1,27 +1,38 @@
 import { useEffect, useState } from "react";
 import {
   ExternalLink,
-  FileCode2,
+  FileDiff,
   FolderTree,
-  GitBranch,
+  Gauge,
   Globe2,
   PanelRightClose,
+  Plus,
   RefreshCw,
+  SquareTerminal,
+  X,
 } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { useApp, useThreadState } from "../lib/store";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FilesPanel } from "./workspace/FilesPanel";
 import { GitPanel } from "./workspace/GitPanel";
+import { TerminalPanel } from "./workspace/TerminalPanel";
 import "./workspace/workspace.css";
 
-type PanelTab = "browser" | "files" | "diff" | "context";
+type PanelTab = "browser" | "terminal" | "files" | "diff" | "context";
 
-const tabs: { id: PanelTab; label: string; icon: typeof Globe2 }[] = [
-  { id: "browser", label: "浏览器", icon: Globe2 },
-  { id: "files", label: "文件", icon: FolderTree },
-  { id: "diff", label: "Git", icon: GitBranch },
-  { id: "context", label: "上下文", icon: FileCode2 },
+const panelOptions: {
+  id: PanelTab;
+  label: string;
+  description: string;
+  icon: typeof Globe2;
+}[] = [
+  { id: "browser", label: "浏览器", description: "查看 Agent 操作的浏览器。", icon: Globe2 },
+  { id: "terminal", label: "终端", description: "在此工作区运行 Shell。", icon: SquareTerminal },
+  { id: "files", label: "文件", description: "浏览和编辑工作区文件。", icon: FolderTree },
+  { id: "diff", label: "差异", description: "检查并提交代码更改。", icon: FileDiff },
+  { id: "context", label: "上下文", description: "查看会话消息与工具统计。", icon: Gauge },
 ];
 
 export function RightPanel({
@@ -33,60 +44,176 @@ export function RightPanel({
   projectId?: string;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<PanelTab>("files");
+  const [openTabs, setOpenTabs] = useState<PanelTab[]>([]);
+  const [activeTab, setActiveTab] = useState<PanelTab | null>(null);
   const thread = useApp((state) => state.threads.find((candidate) => candidate.id === threadId));
   const draftOwner = useApp((state) => state.user?.username ?? "anonymous");
   const canManageWorkspace = thread?.access === "owner";
 
+  const openTab = (tab: PanelTab) => {
+    setOpenTabs((current) => current.includes(tab) ? current : [...current, tab]);
+    setActiveTab(tab);
+  };
+
+  const closeTab = (tab: PanelTab) => {
+    const index = openTabs.indexOf(tab);
+    const next = openTabs.filter((candidate) => candidate !== tab);
+    setOpenTabs(next);
+    if (activeTab === tab) setActiveTab(next[index] ?? next[index - 1] ?? null);
+  };
+
+  const renderPanel = (tab: PanelTab) => {
+    switch (tab) {
+      case "browser":
+        return <BrowserPanel threadId={threadId} />;
+      case "terminal":
+        return <TerminalPanel threadId={threadId} />;
+      case "files":
+        return projectId ? (
+          <FilesPanel
+            projectId={projectId}
+            threadId={threadId}
+            draftOwner={draftOwner}
+            editable={canManageWorkspace}
+          />
+        ) : <Empty text="项目不存在" />;
+      case "diff":
+        return projectId ? (
+          <GitPanel
+            projectId={projectId}
+            threadId={threadId}
+            editable={canManageWorkspace}
+          />
+        ) : <Empty text="项目不存在" />;
+      case "context":
+        return <ContextPanel threadId={threadId} />;
+    }
+  };
+
   return (
     <Tabs
-      value={tab}
-      onValueChange={(value) => setTab(value as PanelTab)}
+      value={activeTab ?? ""}
+      onValueChange={(value) => setActiveTab(value as PanelTab)}
       className="flex h-full min-h-0 w-full flex-col gap-0 bg-white dark:bg-zinc-950"
     >
-      <div className="flex h-11 shrink-0 items-center border-b border-zinc-200 px-1 dark:border-zinc-800">
-        <TabsList variant="line" className="h-10 min-w-0 flex-1 justify-start overflow-x-auto overflow-y-hidden rounded-none p-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {tabs.map((item) => (
-            <TabsTrigger
-              key={item.id}
-              value={item.id}
-              aria-label={item.label}
-              title={item.label}
-              className="h-10 flex-none px-2 text-xs"
-            >
-              <item.icon className="h-3.5 w-3.5" />
-              <span className="hidden lg:inline">{item.label}</span>
-            </TabsTrigger>
-          ))}
-        </TabsList>
+      <div className="flex h-12 shrink-0 items-center gap-1 border-b border-zinc-200 px-2 dark:border-zinc-800">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+          <TabsList variant="line" className="h-10 min-w-0 max-w-[calc(100%_-_2rem)] flex-none justify-start gap-1 overflow-x-auto overflow-y-hidden rounded-none p-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {openTabs.map((tab) => {
+              const item = panelOptions.find((candidate) => candidate.id === tab)!;
+              const selected = activeTab === tab;
+              return (
+                <div
+                  key={item.id}
+                  className={`group flex h-8 shrink-0 items-center rounded-md transition-colors ${selected ? "bg-zinc-100 text-zinc-950 dark:bg-zinc-800 dark:text-zinc-50" : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"}`}
+                >
+                  <TabsTrigger
+                    value={item.id}
+                    aria-label={item.label}
+                    title={item.label}
+                    className="h-8 flex-none rounded-r-none px-2 text-xs after:hidden data-active:bg-transparent dark:data-active:bg-transparent"
+                  >
+                    <item.icon className="h-3.5 w-3.5" />
+                    <span>{item.label}</span>
+                  </TabsTrigger>
+                  <button
+                    type="button"
+                    className="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-100"
+                    aria-label={`关闭${item.label}标签`}
+                    title={`关闭${item.label}`}
+                    onClick={() => closeTab(item.id)}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              );
+            })}
+          </TabsList>
+          <PanelPicker openTabs={openTabs} onSelect={openTab} />
+        </div>
         <Button type="button" variant="ghost" size="icon-sm" aria-label="关闭面板" title="关闭面板" onClick={onClose}>
           <PanelRightClose className="h-4 w-4" />
         </Button>
       </div>
       <div className="min-h-0 flex-1">
-        <TabsContent value="browser" className="h-full"><BrowserPanel threadId={threadId} /></TabsContent>
-        <TabsContent value="files" className="h-full">
-          {projectId ? (
-            <FilesPanel
-              projectId={projectId}
-              threadId={threadId}
-              draftOwner={draftOwner}
-              editable={canManageWorkspace}
-            />
-          ) : <Empty text="项目不存在" />}
-        </TabsContent>
-        <TabsContent value="diff" className="h-full">
-          {projectId ? (
-            <GitPanel
-              projectId={projectId}
-              threadId={threadId}
-              editable={canManageWorkspace}
-            />
-          ) : <Empty text="项目不存在" />}
-        </TabsContent>
-        <TabsContent value="context" className="h-full"><ContextPanel threadId={threadId} /></TabsContent>
+        {openTabs.length === 0 ? (
+          <PanelEmptyState onSelect={openTab} />
+        ) : openTabs.map((tab) => (
+          <TabsContent
+            key={tab}
+            value={tab}
+            forceMount
+            className="h-full data-[state=inactive]:hidden"
+          >
+            {renderPanel(tab)}
+          </TabsContent>
+        ))}
       </div>
     </Tabs>
+  );
+}
+
+function PanelPicker({
+  openTabs,
+  onSelect,
+}: {
+  openTabs: PanelTab[];
+  onSelect: (tab: PanelTab) => void;
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="添加面板" title="添加面板">
+          <Plus className="h-4 w-4" />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          sideOffset={6}
+          align="start"
+          className="z-50 min-w-44 rounded-lg bg-white p-1.5 text-zinc-900 shadow-lg ring-1 ring-zinc-950/10 outline-none dark:bg-zinc-900 dark:text-zinc-100 dark:ring-white/10"
+        >
+          {panelOptions.map((item) => (
+            <DropdownMenu.Item
+              key={item.id}
+              className="flex h-9 cursor-default select-none items-center gap-2 rounded-md px-2 text-sm outline-none data-[highlighted]:bg-zinc-100 dark:data-[highlighted]:bg-zinc-800"
+              onSelect={() => onSelect(item.id)}
+            >
+              <item.icon className="h-4 w-4 shrink-0 text-zinc-500" />
+              <span className="flex-1">{item.label}</span>
+              {openTabs.includes(item.id) && <span className="text-[10px] text-zinc-400">已打开</span>}
+            </DropdownMenu.Item>
+          ))}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+function PanelEmptyState({ onSelect }: { onSelect: (tab: PanelTab) => void }) {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center overflow-y-auto p-5 sm:p-8">
+      <div className="w-full max-w-2xl">
+        <div className="mb-6 text-center">
+          <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">打开面板</h2>
+          <p className="mt-1 text-xs text-zinc-500">选择要在右侧显示的内容</p>
+        </div>
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(13rem,100%),1fr))] gap-2.5">
+          {panelOptions.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="group min-h-28 rounded-lg border border-zinc-200 p-4 text-left transition-colors hover:border-zinc-300 hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+              onClick={() => onSelect(item.id)}
+            >
+              <item.icon className="mb-3 h-5 w-5 text-zinc-500 transition-colors group-hover:text-zinc-800 dark:group-hover:text-zinc-200" />
+              <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{item.label}</div>
+              <div className="mt-1 text-xs leading-5 text-zinc-500">{item.description}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 

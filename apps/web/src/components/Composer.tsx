@@ -56,6 +56,7 @@ function escapeRegExp(value: string): string {
 }
 
 export function Composer({
+  draftKey,
   threadId,
   projectId,
   running,
@@ -66,6 +67,7 @@ export function Composer({
   footerControls,
   footerError,
 }: {
+  draftKey: string;
   threadId?: string;
   projectId?: string;
   running: boolean;
@@ -82,7 +84,9 @@ export function Composer({
   const skills = useApp((state) => state.skills);
   const projects = useApp((state) => state.projects);
   const searchFiles = useApp((state) => state.searchFiles);
-  const [text, setText] = useState("");
+  const text = useApp((state) => state.composerDrafts[draftKey] ?? "");
+  const setComposerDraft = useApp((state) => state.setComposerDraft);
+  const clearComposerDraft = useApp((state) => state.clearComposerDraft);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [fileResults, setFileResults] = useState<string[]>([]);
   const [searchingFiles, setSearchingFiles] = useState(false);
@@ -177,7 +181,7 @@ export function Composer({
     const token = trigger.kind === "file" ? `@${itemKey}` : `/${itemKey}`;
     const next = text.slice(0, trigger.start) + token + " " + text.slice(caret);
     const nextCaret = trigger.start + token.length + 1;
-    setText(next);
+    setComposerDraft(draftKey, next);
     setTrigger(null);
     requestAnimationFrame(() => {
       element.focus();
@@ -194,7 +198,7 @@ export function Composer({
     const insertion = `${needsSpace ? " " : ""}${symbol}`;
     const next = text.slice(0, start) + insertion + text.slice(end);
     const nextCaret = start + insertion.length;
-    setText(next);
+    setComposerDraft(draftKey, next);
     requestAnimationFrame(() => {
       element.focus();
       element.setSelectionRange(nextCaret, nextCaret);
@@ -282,7 +286,7 @@ export function Composer({
     try {
       const imageAttachments = await Promise.all(images.map((image) => uploadImage(image.file)));
       await onSend(prompt, [...attachments, ...imageAttachments]);
-      setText("");
+      clearComposerDraft(draftKey, text);
       setTrigger(null);
       images.forEach((image) => URL.revokeObjectURL(image.previewUrl));
       setImages([]);
@@ -447,7 +451,7 @@ export function Composer({
           placeholder={placeholder ?? "输入消息"}
           value={text}
           onChange={(event) => {
-            setText(event.target.value);
+            setComposerDraft(draftKey, event.target.value);
             setSubmitError("");
             requestAnimationFrame(updateTrigger);
           }}

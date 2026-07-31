@@ -3,6 +3,7 @@ import { FolderPlus, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { ModelRef, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
+import { NEW_CHAT_DRAFT_KEY } from "../lib/composerDrafts";
 import { BrandLogo } from "../components/BrandLogo";
 import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
@@ -116,6 +117,7 @@ export function NewChatPage() {
               </Select>
             </div>
             <Composer
+              draftKey={NEW_CHAT_DRAFT_KEY}
               projectId={effectiveProjectId}
               running={creating}
               onSend={(text, attachments) => onSend(text, attachments)}

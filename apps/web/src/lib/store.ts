@@ -38,6 +38,12 @@ import {
   onReconnect,
   request,
 } from "./client";
+import {
+  clearComposerDraft,
+  threadComposerDraftKey,
+  updateComposerDraft,
+  type ComposerDrafts,
+} from "./composerDrafts";
 
 const TOKEN_KEY = "cca-token";
 const SHARE_TOKENS_KEY = "cca-thread-share-tokens";
@@ -167,6 +173,7 @@ interface AppState {
   skills: SkillInfo[];
   models: ModelOption[];
   threadStates: Record<string, ThreadState>;
+  composerDrafts: ComposerDrafts;
   activeThreadId: string | null;
   workspacePanelOpen: boolean;
   shareDialogOpen: boolean;
@@ -214,6 +221,8 @@ interface AppState {
   uninstallPlugin: (name: string, directSourceId?: string) => Promise<void>;
   setPluginEnabled: (name: string, enabled: boolean) => Promise<void>;
   searchFiles: (projectId: string, query: string) => Promise<string[]>;
+  setComposerDraft: (key: string, text: string) => void;
+  clearComposerDraft: (key: string, expectedText: string) => void;
   setWorkspacePanelOpen: (open: boolean) => void;
   setShareDialogOpen: (open: boolean) => void;
 }
@@ -397,6 +406,7 @@ export const useApp = create<AppState>((set, get) => {
       skills: [],
       models: [],
       threadStates: {},
+      composerDrafts: {},
       activeThreadId: null,
       workspacePanelOpen: false,
       shareDialogOpen: false,
@@ -421,6 +431,7 @@ export const useApp = create<AppState>((set, get) => {
     skills: [],
     models: [],
     threadStates: {},
+    composerDrafts: {},
     activeThreadId: null,
     workspacePanelOpen: false,
     shareDialogOpen: false,
@@ -491,6 +502,14 @@ export const useApp = create<AppState>((set, get) => {
 
     setWorkspacePanelOpen: (open) => set({ workspacePanelOpen: open }),
     setShareDialogOpen: (open) => set({ shareDialogOpen: open }),
+    setComposerDraft: (key, text) =>
+      set((state) => ({
+        composerDrafts: updateComposerDraft(state.composerDrafts, key, text),
+      })),
+    clearComposerDraft: (key, expectedText) =>
+      set((state) => ({
+        composerDrafts: clearComposerDraft(state.composerDrafts, key, expectedText),
+      })),
 
     getRegistrationPolicy: () => apiFetch<RegistrationPolicy>("/api/auth/registration"),
 
@@ -553,7 +572,14 @@ export const useApp = create<AppState>((set, get) => {
       set((s) => {
         const threadStates = { ...s.threadStates };
         delete threadStates[threadId];
-        return { threadStates };
+        return {
+          threadStates,
+          composerDrafts: updateComposerDraft(
+            s.composerDrafts,
+            threadComposerDraftKey(threadId),
+            "",
+          ),
+        };
       });
     },
 

@@ -15,7 +15,6 @@ interface TerminalSpawnOptions {
   rows: number;
   cwd: string;
   env: NodeJS.ProcessEnv;
-  encoding: string;
 }
 
 export type TerminalSpawner = (
@@ -44,6 +43,21 @@ const MIN_COLS = 2;
 const MAX_COLS = 500;
 const MIN_ROWS = 1;
 const MAX_ROWS = 200;
+const SAFE_ENVIRONMENT_KEYS = [
+  "PATH",
+  "Path",
+  "PATHEXT",
+  "SystemRoot",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TMP",
+  "TEMP",
+  "TMPDIR",
+] as const;
 
 const defaultSpawner: TerminalSpawner = (file, args, options) =>
   spawnPty(file, args, options);
@@ -67,6 +81,24 @@ function shellCommand(): { file: string; args: string[] } {
     return { file: process.env.COMSPEC || "powershell.exe", args: [] };
   }
   return { file: process.env.SHELL || "/bin/sh", args: [] };
+}
+
+export function terminalEnvironment(
+  cwd: string,
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of SAFE_ENVIRONMENT_KEYS) {
+    if (source[key] !== undefined) env[key] = source[key];
+  }
+  return {
+    ...env,
+    HOME: cwd,
+    USERPROFILE: cwd,
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+    TERM_PROGRAM: "cloud-coding-agent",
+  };
 }
 
 function snapshot(session: TerminalSession): TerminalSnapshot {
@@ -127,13 +159,7 @@ export class TerminalManager {
       cols,
       rows,
       cwd,
-      env: {
-        ...process.env,
-        TERM: "xterm-256color",
-        COLORTERM: "truecolor",
-        TERM_PROGRAM: "cloud-coding-agent",
-      },
-      encoding: "utf8",
+      env: terminalEnvironment(cwd),
     });
     const session: TerminalSession = {
       id: terminalId,
