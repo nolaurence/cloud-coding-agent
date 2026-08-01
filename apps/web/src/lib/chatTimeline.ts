@@ -1,8 +1,9 @@
-import type { ChatMessage, ToolActivity } from "@cca/protocol";
+import type { ChatMessage, SubagentActivity, ToolActivity } from "@cca/protocol";
 
 export type ChatTimelineEntry =
   | { kind: "message"; id: string; at: number; message: ChatMessage }
-  | { kind: "tool"; id: string; at: number; activity: ToolActivity };
+  | { kind: "tool"; id: string; at: number; activity: ToolActivity }
+  | { kind: "subagent"; id: string; at: number; subagent: SubagentActivity };
 
 export type ChatTimelineBlock =
   | { kind: "system"; id: string; at: number; message: ChatMessage }
@@ -15,19 +16,25 @@ export type ChatTimelineBlock =
     };
 
 function entryTurnId(entry: ChatTimelineEntry): string {
-  return entry.kind === "message" ? entry.message.turnId : entry.activity.turnId;
+  if (entry.kind === "message") return entry.message.turnId;
+  return entry.kind === "tool" ? entry.activity.turnId : entry.subagent.turnId;
 }
 
 function compareEntries(left: ChatTimelineEntry, right: ChatTimelineEntry): number {
   if (left.at !== right.at) return left.at - right.at;
-  if (left.kind !== right.kind) return left.kind === "message" ? -1 : 1;
+  if (left.kind !== right.kind) {
+    const rank = { message: 0, subagent: 1, tool: 2 } as const;
+    return rank[left.kind] - rank[right.kind];
+  }
   return left.id.localeCompare(right.id);
 }
 
 export function deriveChatTimeline(
   messages: readonly ChatMessage[],
   activities: readonly ToolActivity[],
+  subagents: readonly SubagentActivity[] = [],
 ): ChatTimelineBlock[] {
+  const delegatedToolCallIds = new Set(subagents.map((subagent) => subagent.toolCallId));
   const entries: ChatTimelineEntry[] = [
     ...messages.map((message) => ({
       kind: "message" as const,
@@ -35,11 +42,17 @@ export function deriveChatTimeline(
       at: message.createdAt,
       message,
     })),
-    ...activities.map((activity) => ({
+    ...activities.filter((activity) => !delegatedToolCallIds.has(activity.id)).map((activity) => ({
       kind: "tool" as const,
       id: `tool:${activity.id}`,
       at: activity.startedAt,
       activity,
+    })),
+    ...subagents.filter((subagent) => !subagent.parentAgentId).map((subagent) => ({
+      kind: "subagent" as const,
+      id: `subagent:${subagent.id}`,
+      at: subagent.startedAt,
+      subagent,
     })),
   ].sort(compareEntries);
 
@@ -104,8 +117,11 @@ export function turnStartedAt(entries: readonly ChatTimelineEntry[]): number | n
 export function turnEndedAt(entries: readonly ChatTimelineEntry[]): number | null {
   let endedAt: number | null = null;
   for (const entry of entries) {
-    const candidate =
-      entry.kind === "tool" ? (entry.activity.endedAt ?? entry.activity.startedAt) : entry.at;
+    const candidate = entry.kind === "tool"
+      ? (entry.activity.endedAt ?? entry.activity.startedAt)
+      : entry.kind === "subagent"
+        ? (entry.subagent.endedAt ?? entry.subagent.startedAt)
+        : entry.at;
     endedAt = endedAt === null ? candidate : Math.max(endedAt, candidate);
   }
   return endedAt;

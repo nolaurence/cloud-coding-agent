@@ -23,6 +23,7 @@ import type {
   ServerMessage,
   ShellState,
   SkillInfo,
+  SubagentActivity,
   ThreadEvent,
   ThreadMeta,
   ThreadShareMode,
@@ -108,6 +109,7 @@ function rememberShareToken(username: string, token: string) {
 interface ThreadState {
   messages: ChatMessage[];
   activities: ToolActivity[];
+  subagents: SubagentActivity[];
   contextUsage: ContextUsage | null;
   running: boolean;
   loaded: boolean;
@@ -120,6 +122,7 @@ interface ThreadState {
 const emptyThread: ThreadState = {
   messages: [],
   activities: [],
+  subagents: [],
   contextUsage: null,
   running: false,
   loaded: false,
@@ -132,6 +135,7 @@ const emptyThread: ThreadState = {
 function inferActiveTurn(
   messages: readonly ChatMessage[],
   activities: readonly ToolActivity[],
+  subagents: readonly SubagentActivity[],
 ): { turnId: string | null; startedAt: number | null } {
   let turnId: string | null = null;
   let latestAt = -1;
@@ -148,20 +152,37 @@ function inferActiveTurn(
       latestAt = activity.startedAt;
     }
   }
+  for (const subagent of subagents) {
+    if (subagent.turnId && subagent.startedAt >= latestAt) {
+      turnId = subagent.turnId;
+      latestAt = subagent.startedAt;
+    }
+  }
 
   if (!turnId) return { turnId: null, startedAt: null };
   const userMessage = messages.find(
     (message) => message.turnId === turnId && message.role === "user",
   );
   const turnActivities = activities.filter((activity) => activity.turnId === turnId);
+  const turnSubagents = subagents.filter((subagent) => subagent.turnId === turnId);
   const firstActivityAt = turnActivities.reduce<number | null>(
     (earliest, activity) =>
       earliest === null ? activity.startedAt : Math.min(earliest, activity.startedAt),
     null,
   );
+  const firstSubagentAt = turnSubagents.reduce<number | null>(
+    (earliest, subagent) =>
+      earliest === null ? subagent.startedAt : Math.min(earliest, subagent.startedAt),
+    null,
+  );
+  const firstWorkAt = firstActivityAt === null
+    ? firstSubagentAt
+    : firstSubagentAt === null
+      ? firstActivityAt
+      : Math.min(firstActivityAt, firstSubagentAt);
   return {
     turnId,
-    startedAt: userMessage?.createdAt ?? firstActivityAt,
+    startedAt: userMessage?.createdAt ?? firstWorkAt,
   };
 }
 
@@ -238,12 +259,13 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
       const activeTurn = event.running
         ? event.live
           ? { turnId: event.live.turnId, startedAt: event.live.startedAt }
-          : inferActiveTurn(event.messages, event.activities)
+          : inferActiveTurn(event.messages, event.activities, event.subagents ?? [])
         : { turnId: null, startedAt: null };
       return {
         ...state,
         messages: event.messages,
         activities: event.activities,
+        subagents: event.subagents ?? [],
         contextUsage: event.contextUsage ?? null,
         running: event.running,
         loaded: true,
@@ -336,6 +358,110 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
           ? state.activities.map((a) => (a.id === event.activity.id ? event.activity : a))
           : [...state.activities, event.activity],
       };
+    case "subagent.update":
+      return {
+        ...state,
+        activeTurnId: state.running
+          ? event.subagent.turnId || state.activeTurnId
+          : state.activeTurnId,
+        activeTurnStartedAt:
+          state.running && state.activeTurnStartedAt === null
+            ? event.subagent.startedAt
+            : state.activeTurnStartedAt,
+        subagents: state.subagents.some((subagent) => subagent.id === event.subagent.id)
+          ? state.subagents.map((subagent) =>
+              subagent.id === event.subagent.id ? event.subagent : subagent,
+            )
+          : [...state.subagents, event.subagent],
+      };
+    case "subagent.message_delta": {
+      const existing = state.subagents.find(
+        (subagent) => subagent.id === event.subagentId,
+      );
+      const placeholder: SubagentActivity = existing ?? {
+        id: event.subagentId,
+        turnId: state.activeTurnId ?? "",
+        toolCallId: event.subagentId,
+        agentName: "subagent",
+        agentDisplayName: "子代理",
+        agentDescription: "正在执行委派任务",
+        status: "running",
+        messages: [],
+        activities: [],
+        startedAt: event.startedAt,
+      };
+      const previousLive = placeholder.live;
+      const switchedMessage = Boolean(
+        previousLive?.messageId && previousLive.messageId !== event.messageId,
+      );
+      const messages = switchedMessage && previousLive && (previousLive.text || previousLive.reasoning)
+        ? [
+            ...placeholder.messages,
+            {
+              id: previousLive.messageId!,
+              role: "assistant" as const,
+              text: previousLive.text,
+              reasoning: previousLive.reasoning || undefined,
+              createdAt: previousLive.startedAt,
+            },
+          ]
+        : placeholder.messages;
+      const live = switchedMessage || !previousLive
+        ? {
+            messageId: event.messageId,
+            text: event.delta,
+            reasoning: "",
+            startedAt: event.startedAt,
+          }
+        : {
+            ...previousLive,
+            messageId: previousLive.messageId ?? event.messageId,
+            text: previousLive.text + event.delta,
+          };
+      const next = { ...placeholder, messages, live };
+      return {
+        ...state,
+        subagents: existing
+          ? state.subagents.map((subagent) =>
+              subagent.id === event.subagentId ? next : subagent,
+            )
+          : [...state.subagents, next],
+      };
+    }
+    case "subagent.reasoning_delta": {
+      const existing = state.subagents.find(
+        (subagent) => subagent.id === event.subagentId,
+      );
+      const placeholder: SubagentActivity = existing ?? {
+        id: event.subagentId,
+        turnId: state.activeTurnId ?? "",
+        toolCallId: event.subagentId,
+        agentName: "subagent",
+        agentDisplayName: "子代理",
+        agentDescription: "正在执行委派任务",
+        status: "running",
+        messages: [],
+        activities: [],
+        startedAt: event.startedAt,
+      };
+      const next = {
+        ...placeholder,
+        live: {
+          ...placeholder.live,
+          text: placeholder.live?.text ?? "",
+          reasoning: (placeholder.live?.reasoning ?? "") + event.delta,
+          startedAt: placeholder.live?.startedAt ?? event.startedAt,
+        },
+      };
+      return {
+        ...state,
+        subagents: existing
+          ? state.subagents.map((subagent) =>
+              subagent.id === event.subagentId ? next : subagent,
+            )
+          : [...state.subagents, next],
+      };
+    }
     case "context.usage":
       return {
         ...state,

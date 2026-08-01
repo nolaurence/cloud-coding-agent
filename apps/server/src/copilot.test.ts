@@ -6,13 +6,18 @@ import type { AppSettings, Project, ThreadEvent, ThreadMeta } from "@cca/protoco
 import { CopilotManager, normalizeGeneratedCommitMessage } from "./copilot.js";
 import { store } from "./store.js";
 
-function sessionEvent(type: SessionEvent["type"], data: unknown): SessionEvent {
+function sessionEvent(
+  type: SessionEvent["type"],
+  data: unknown,
+  agentId?: string,
+): SessionEvent {
   return {
     id: randomUUID(),
     parentId: null,
     timestamp: new Date().toISOString(),
     type,
     data,
+    ...(agentId ? { agentId } : {}),
   } as SessionEvent;
 }
 
@@ -203,6 +208,215 @@ test("keeps a request running across assistant tool turns until session.idle", a
   assert.equal(emitted.filter((event) => event.kind === "turn.end").length, 1);
   const toolComplete = emitted.find((event) => event.kind === "tool.complete");
   assert.equal(toolComplete?.kind === "tool.complete" ? toolComplete.activity.result : undefined, "updated src/index.ts");
+});
+
+test("streams SDK subagent work without flattening child tools into the parent", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "并行探索代码库");
+  session.emit(
+    sessionEvent("tool.execution_start", {
+      toolCallId: "task-call",
+      toolName: "task",
+      arguments: {
+        description: "查找会话恢复逻辑",
+        prompt: "定位并解释会话恢复相关代码",
+        agent_type: "explore",
+      },
+    }),
+  );
+  session.emit(
+    sessionEvent(
+      "subagent.started",
+      {
+        toolCallId: "task-call",
+        agentName: "explore",
+        agentDisplayName: "Explore",
+        agentDescription: "代码库探索代理",
+        model: "gpt-5-mini",
+      },
+      "agent-1",
+    ),
+  );
+  session.emit(
+    sessionEvent(
+      "tool.execution_start",
+      {
+        toolCallId: "child-read",
+        toolName: "read_file",
+        arguments: { path: "src/session.ts" },
+      },
+      "agent-1",
+    ),
+  );
+  session.emit(
+    sessionEvent(
+      "assistant.message_delta",
+      { messageId: "child-message", deltaContent: "正在检查" },
+      "agent-1",
+    ),
+  );
+  session.emit(
+    sessionEvent(
+      "tool.execution_complete",
+      {
+        toolCallId: "child-read",
+        success: true,
+        result: { content: "session source" },
+      },
+      "agent-1",
+    ),
+  );
+  session.emit(
+    sessionEvent(
+      "assistant.message",
+      {
+        messageId: "child-message",
+        content: "恢复逻辑位于 src/session.ts",
+      },
+      "agent-1",
+    ),
+  );
+  session.emit(
+    sessionEvent(
+      "subagent.completed",
+      {
+        toolCallId: "task-call",
+        agentName: "explore",
+        agentDisplayName: "Explore",
+        model: "gpt-5-mini",
+        durationMs: 1_250,
+        totalTokens: 420,
+        totalToolCalls: 1,
+      },
+      "agent-1",
+    ),
+  );
+  session.emit(
+    sessionEvent("tool.execution_complete", {
+      toolCallId: "task-call",
+      success: true,
+      result: { content: "恢复逻辑位于 src/session.ts" },
+    }),
+  );
+  session.emit(sessionEvent("session.idle", {}));
+
+  const snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  assert.deepEqual(snapshot.activities.map((activity) => activity.id), ["task-call"]);
+  assert.equal(snapshot.subagents?.length, 1);
+  const subagent = snapshot.subagents?.[0];
+  assert.equal(subagent?.id, "agent-1");
+  assert.equal(subagent?.agentDescription, "代码库探索代理");
+  assert.equal(subagent?.taskDescription, "查找会话恢复逻辑");
+  assert.equal(subagent?.prompt, "定位并解释会话恢复相关代码");
+  assert.equal(subagent?.status, "complete");
+  assert.equal(subagent?.messages[0]?.role, "assistant");
+  assert.equal(subagent?.messages[0]?.text, "恢复逻辑位于 src/session.ts");
+  assert.deepEqual(subagent?.activities.map((activity) => activity.id), ["child-read"]);
+  assert.ok(emitted.some((event) => event.kind === "subagent.message_delta"));
+});
+
+test("keeps background multi-turn agents idle and preserves every follow-up prompt", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "后台检查代码");
+  session.emit(sessionEvent("tool.execution_start", {
+    toolCallId: "background-task",
+    toolName: "task",
+    arguments: {
+      description: "持续检查代码",
+      prompt: "先检查服务端",
+      agent_type: "explore",
+      mode: "background",
+    },
+  }));
+  session.emit(sessionEvent("subagent.started", {
+    toolCallId: "background-task",
+    agentName: "explore",
+    agentDisplayName: "Explore",
+    agentDescription: "代码库探索代理",
+  }, "background-agent"));
+  session.emit(sessionEvent("tool.execution_complete", {
+    toolCallId: "background-task",
+    success: true,
+    result: { content: "后台代理已启动，agent_id=background-agent" },
+  }));
+  session.emit(sessionEvent("user.message", { content: "先检查服务端" }, "background-agent"));
+  session.emit(sessionEvent("assistant.message", {
+    messageId: "background-answer-1",
+    content: "服务端检查完成",
+  }, "background-agent"));
+  session.emit(sessionEvent("system.notification", {
+    content: "后台代理正在等待后续任务",
+    kind: {
+      type: "agent_idle",
+      agentId: "background-agent",
+      agentType: "explore",
+      description: "持续检查代码",
+    },
+  }));
+  session.emit(sessionEvent("session.idle", {}));
+
+  let snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  let subagent = snapshot.subagents?.[0];
+  assert.equal(subagent?.status, "idle");
+  assert.deepEqual(
+    subagent?.messages.map((message) => [message.role, message.text]),
+    [
+      ["user", "先检查服务端"],
+      ["assistant", "服务端检查完成"],
+    ],
+  );
+  assert.ok(!subagent?.messages.some((message) => message.text.includes("agent_id")));
+
+  await manager.sendMessage(threadId, "让后台代理继续检查");
+  session.emit(sessionEvent("user.message", { content: "继续检查 Web 状态" }, "background-agent"));
+  session.emit(sessionEvent("assistant.message", {
+    messageId: "background-answer-2",
+    content: "Web 状态检查完成",
+  }, "background-agent"));
+  session.emit(sessionEvent("system.notification", {
+    content: "后台代理再次等待",
+    kind: {
+      type: "agent_idle",
+      agentId: "background-agent",
+      agentType: "explore",
+      description: "持续检查代码",
+    },
+  }));
+  session.emit(sessionEvent("session.idle", {}));
+
+  snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  subagent = snapshot.subagents?.[0];
+  assert.equal(subagent?.status, "idle");
+  assert.deepEqual(
+    subagent?.messages.map((message) => [message.role, message.text]),
+    [
+      ["user", "先检查服务端"],
+      ["assistant", "服务端检查完成"],
+      ["user", "继续检查 Web 状态"],
+      ["assistant", "Web 状态检查完成"],
+    ],
+  );
 });
 
 test("tracks context usage in events, snapshots, and thread metadata", async (t) => {
@@ -510,6 +724,153 @@ test("restores tool failures and interrupted tools from session history", async 
   );
 });
 
+test("restores subagent history and enriches child events that precede lifecycle metadata", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId, Date.now() - 10_000);
+  const history = [
+    sessionEvent("user.message", { content: "探索代码" }),
+    sessionEvent("tool.execution_start", {
+      toolCallId: "task-history",
+      toolName: "task",
+      arguments: {
+        description: "检查存储层",
+        prompt: "检查存储层恢复行为",
+        agent_type: "explore",
+      },
+    }),
+    sessionEvent(
+      "user.message",
+      { content: "检查存储层恢复行为" },
+      "history-agent",
+    ),
+    sessionEvent(
+      "assistant.message",
+      { messageId: "child-history-message", content: "存储层使用 JSON 回退" },
+      "history-agent",
+    ),
+    sessionEvent(
+      "tool.execution_start",
+      {
+        toolCallId: "child-history-tool",
+        toolName: "read_file",
+        arguments: { path: "src/store.ts" },
+      },
+      "history-agent",
+    ),
+    sessionEvent(
+      "subagent.started",
+      {
+        toolCallId: "task-history",
+        agentName: "explore",
+        agentDisplayName: "Explore",
+        agentDescription: "代码库探索代理",
+      },
+      "history-agent",
+    ),
+    sessionEvent(
+      "tool.execution_complete",
+      {
+        toolCallId: "child-history-tool",
+        success: true,
+        result: { content: "store source" },
+      },
+      "history-agent",
+    ),
+    sessionEvent(
+      "subagent.completed",
+      {
+        toolCallId: "task-history",
+        agentName: "explore",
+        agentDisplayName: "Explore",
+        totalToolCalls: 1,
+      },
+      "history-agent",
+    ),
+    sessionEvent("tool.execution_complete", {
+      toolCallId: "task-history",
+      success: true,
+      result: { content: "done" },
+    }),
+  ];
+  const session = new FakeSession(history);
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  const snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  const subagent = snapshot.subagents?.[0];
+  assert.equal(subagent?.id, "history-agent");
+  assert.equal(subagent?.toolCallId, "task-history");
+  assert.equal(subagent?.agentDescription, "代码库探索代理");
+  assert.equal(subagent?.taskDescription, "检查存储层");
+  assert.equal(subagent?.prompt, "检查存储层恢复行为");
+  assert.equal(subagent?.status, "complete");
+  assert.deepEqual(
+    subagent?.messages.map((message) => [message.role, message.text]),
+    [
+      ["user", "检查存储层恢复行为"],
+      ["assistant", "存储层使用 JSON 回退"],
+    ],
+  );
+  assert.equal(subagent?.activities[0]?.status, "complete");
+  assert.deepEqual(snapshot.activities.map((activity) => activity.id), ["task-history"]);
+});
+
+test("marks a previously idle background agent interrupted after session resume", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId, Date.now() - 10_000);
+  const history = [
+    sessionEvent("user.message", { content: "启动后台检查" }),
+    sessionEvent("tool.execution_start", {
+      toolCallId: "idle-task",
+      toolName: "task",
+      arguments: {
+        description: "后台检查",
+        prompt: "检查服务端",
+        agent_type: "explore",
+        mode: "background",
+      },
+    }),
+    sessionEvent("subagent.started", {
+      toolCallId: "idle-task",
+      agentName: "explore",
+      agentDisplayName: "Explore",
+      agentDescription: "代码库探索代理",
+    }, "idle-agent"),
+    sessionEvent("user.message", { content: "检查服务端" }, "idle-agent"),
+    sessionEvent("assistant.message", {
+      messageId: "idle-answer",
+      content: "第一轮检查完成",
+    }, "idle-agent"),
+    sessionEvent("system.notification", {
+      content: "后台代理正在等待",
+      kind: {
+        type: "agent_idle",
+        agentId: "idle-agent",
+        agentType: "explore",
+        description: "后台检查",
+      },
+    }),
+  ];
+  const manager = new CopilotManager(
+    () => new FakeClient(new FakeSession(history)) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  const snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  assert.equal(snapshot.subagents?.[0]?.status, "cancelled");
+  assert.equal(snapshot.subagents?.[0]?.error, "子代理执行已中断");
+  assert.deepEqual(
+    snapshot.subagents?.[0]?.messages.map((message) => message.role),
+    ["user", "assistant"],
+  );
+});
+
 test("restores an unfinished streamed answer from session history", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId, Date.now() - 10_000);
@@ -591,6 +952,7 @@ test("creates an isolated session with only the authenticated Git extension", as
   await manager.sendMessage(threadId, "拉取远程更新");
   const config = client.createdConfigs[0] as {
     workingDirectory?: string;
+    includeSubAgentStreamingEvents?: boolean;
     enableConfigDiscovery?: boolean;
     requestExtensions?: boolean;
     mcpServers?: Record<string, unknown>;
@@ -608,6 +970,7 @@ test("creates an isolated session with only the authenticated Git extension", as
     systemMessage?: { content?: string };
   };
   assert.equal(config.workingDirectory, process.cwd());
+  assert.equal(config.includeSubAgentStreamingEvents, true);
   assert.equal(config.enableConfigDiscovery, false);
   assert.equal(config.requestExtensions, false);
   assert.deepEqual(config.mcpServers, {});

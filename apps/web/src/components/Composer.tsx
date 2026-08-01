@@ -39,6 +39,10 @@ let nextImageId = 0;
 const CONTEXT_RING_RADIUS = 7;
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
 const tokenFormatter = new Intl.NumberFormat("zh-CN");
+const compactTokenFormatter = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 0,
+});
 const SLASH_COMMANDS: CompletionItem[] = [
   {
     key: "compact",
@@ -52,7 +56,9 @@ function ContextUsageIndicator({ usage }: { usage: ContextUsage | null }) {
   const usedTokens = usage ? Math.max(0, usage.usedTokens) : 0;
   const maxTokens = usage && usage.maxTokens > 0 ? usage.maxTokens : 0;
   const ratio = maxTokens > 0 ? Math.min(usedTokens / maxTokens, 1) : 0;
-  const percentage = ratio > 0 && ratio < 0.01 ? "<1" : String(Math.round(ratio * 100));
+  const roundedPercentage = Math.round(ratio * 100);
+  const percentage = ratio > 0 && ratio < 0.01 ? "<1" : String(roundedPercentage);
+  const remainingPercentage = Math.max(0, 100 - roundedPercentage);
   const label = usage
     ? `上下文已使用 ${tokenFormatter.format(usedTokens)} / ${tokenFormatter.format(maxTokens)} 个 token（${percentage}%）`
     : "上下文用量暂不可用";
@@ -94,7 +100,28 @@ function ContextUsageIndicator({ usage }: { usage: ContextUsage | null }) {
           </svg>
         </span>
       </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={6}>{label}</TooltipContent>
+      <TooltipContent
+        side="top"
+        sideOffset={8}
+        showArrow={false}
+        className="max-w-none flex-col items-stretch gap-0.5 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-zinc-950 shadow-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+      >
+        <div className="text-center text-xs font-medium text-zinc-400 dark:text-zinc-500">
+          上下文窗口：
+        </div>
+        {usage ? (
+          <>
+            <div className="whitespace-nowrap text-sm leading-5">
+              {percentage}% 已用（剩余 {remainingPercentage}%）
+            </div>
+            <div className="whitespace-nowrap text-sm leading-5">
+              已用 {compactTokenFormatter.format(usedTokens).toLowerCase()} 标记，共 {compactTokenFormatter.format(maxTokens).toLowerCase()}
+            </div>
+          </>
+        ) : (
+          <div className="whitespace-nowrap text-sm leading-5 text-zinc-500">用量暂不可用</div>
+        )}
+      </TooltipContent>
     </Tooltip>
   );
 }

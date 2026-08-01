@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ChatMessage, ToolActivity } from "@cca/protocol";
+import type { ChatMessage, SubagentActivity, ToolActivity } from "@cca/protocol";
 import {
   deriveChatTimeline,
   findTerminalAssistantEntry,
@@ -30,6 +30,30 @@ function activity(
     endedAt,
     toolName: "read_file",
     status: endedAt ? "complete" : "running",
+  };
+}
+
+function subagent(
+  id: string,
+  turnId: string,
+  toolCallId: string,
+  startedAt: number,
+  endedAt?: number,
+  parentAgentId?: string,
+): SubagentActivity {
+  return {
+    id,
+    turnId,
+    parentAgentId,
+    toolCallId,
+    agentName: "explore",
+    agentDisplayName: "Explore",
+    agentDescription: "探索代码",
+    status: endedAt ? "complete" : "running",
+    messages: [],
+    activities: [],
+    startedAt,
+    endedAt,
   };
 }
 
@@ -75,4 +99,23 @@ test("turn boundaries use the user prompt and completed tool timestamp", () => {
 
   assert.equal(turnStartedAt(turn.entries), 1_000);
   assert.equal(turnEndedAt(turn.entries), 2_500);
+});
+
+test("replaces delegated task tools with one top-level subagent entry", () => {
+  const root = subagent("agent-1", "turn", "task-tool", 1_400, 2_600);
+  const nested = subagent("agent-2", "turn", "nested-task", 1_700, 2_100, "agent-1");
+  const blocks = deriveChatTimeline(
+    [message("user", "user", "turn", 1_000)],
+    [activity("task-tool", "turn", 1_300, 2_650), activity("root-read", "turn", 1_500, 1_600)],
+    [root, nested],
+  );
+  const turn = blocks[0];
+  assert.equal(turn?.kind, "turn");
+  if (turn?.kind !== "turn") return;
+
+  assert.deepEqual(
+    turn.entries.map((entry) => entry.id),
+    ["message:user", "subagent:agent-1", "tool:root-read"],
+  );
+  assert.equal(turnEndedAt(turn.entries), 2_600);
 });

@@ -9,6 +9,8 @@ import type {
   ContextUsage,
   MessageAttachment,
   ModelRef,
+  SubagentActivity,
+  SubagentMessage,
   ThreadEvent,
   ThreadMeta,
   ToolActivity,
@@ -26,6 +28,7 @@ interface ThreadRuntime {
   attaching: Promise<CopilotSession> | null;
   messages: ChatMessage[];
   activities: ToolActivity[];
+  subagents: SubagentActivity[];
   contextUsage: ContextUsage | undefined;
   running: boolean;
   compacting: boolean;
@@ -59,6 +62,8 @@ type UsageInfoData = Extract<SessionEvent, { type: "session.usage_info" }>["data
 type CopilotSetModelOptions = NonNullable<Parameters<CopilotSession["setModel"]>[1]>;
 type CopilotReasoningEffort = NonNullable<CopilotSetModelOptions["reasoningEffort"]>;
 
+type SubagentStartData = Extract<SessionEvent, { type: "subagent.started" }>["data"];
+
 function stringifyArguments(args: ToolStartData["arguments"]): string | undefined {
   if (!args) return undefined;
   try {
@@ -78,6 +83,38 @@ function toolResult(data: ToolCompleteData): string | undefined {
 function activityName(data: ToolStartData): string {
   const toolName = data.mcpToolName ?? data.toolName;
   return data.mcpServerName ? `${data.mcpServerName}/${toolName}` : toolName;
+}
+
+function parseToolArguments(raw: string | undefined): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringArgument(
+  args: Record<string, unknown> | undefined,
+  ...keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = args?.[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function copySubagent(subagent: SubagentActivity): SubagentActivity {
+  return {
+    ...subagent,
+    messages: subagent.messages.map((message) => ({ ...message })),
+    activities: subagent.activities.map((activity) => ({ ...activity })),
+    live: subagent.live ? { ...subagent.live } : undefined,
+  };
 }
 
 function normalizeContextUsage(value: ContextUsage | undefined): ContextUsage | undefined {
@@ -175,6 +212,7 @@ export class CopilotManager {
         attaching: null,
         messages: [],
         activities: [],
+        subagents: [],
         contextUsage: normalizeContextUsage(store.getThread(threadId)?.contextUsage),
         running: false,
         compacting: false,
@@ -255,6 +293,168 @@ export class CopilotManager {
     if (emit) this.emit(rt.threadId, { kind: "assistant.message", message });
   }
 
+  private emitSubagent(rt: ThreadRuntime, subagent: SubagentActivity) {
+    this.emit(rt.threadId, { kind: "subagent.update", subagent: copySubagent(subagent) });
+  }
+
+  private findSubagent(
+    rt: ThreadRuntime,
+    agentId: string | undefined,
+    toolCallId?: string,
+  ): SubagentActivity | undefined {
+    return rt.subagents.find(
+      (subagent) =>
+        (agentId && subagent.id === agentId) ||
+        (toolCallId && subagent.toolCallId === toolCallId),
+    );
+  }
+
+  private spawningActivity(rt: ThreadRuntime, toolCallId: string) {
+    const rootActivity = rt.activities.find((activity) => activity.id === toolCallId);
+    if (rootActivity) return { activity: rootActivity, parentAgentId: undefined };
+    for (const subagent of rt.subagents) {
+      const activity = subagent.activities.find((candidate) => candidate.id === toolCallId);
+      if (activity) return { activity, parentAgentId: subagent.id };
+    }
+    return undefined;
+  }
+
+  private enrichSubagentFromTool(
+    subagent: SubagentActivity,
+    activity: ToolActivity,
+    parentAgentId?: string,
+  ) {
+    const args = parseToolArguments(activity.args);
+    subagent.parentAgentId ??= parentAgentId;
+    subagent.prompt ??= stringArgument(args, "prompt", "task");
+    const description = stringArgument(args, "description", "name");
+    if (description) subagent.taskDescription = description;
+    const agentName = stringArgument(args, "subagent_type", "agent_type", "agentType");
+    if (agentName && subagent.agentName === "subagent") subagent.agentName = agentName;
+  }
+
+  private activateSubagent(subagent: SubagentActivity) {
+    if (subagent.status === "running") return;
+    subagent.status = "running";
+    subagent.idleSince = undefined;
+    subagent.endedAt = undefined;
+    subagent.durationMs = undefined;
+    subagent.totalTokens = undefined;
+    subagent.totalToolCalls = undefined;
+    subagent.error = undefined;
+  }
+
+  private ensureSubagent(
+    rt: ThreadRuntime,
+    agentId: string | undefined,
+    toolCallId: string | undefined,
+    startedAt: number,
+    data?: SubagentStartData,
+  ): SubagentActivity {
+    const existing = this.findSubagent(rt, agentId, toolCallId);
+    if (existing) {
+      if (toolCallId) existing.toolCallId = toolCallId;
+      if (data) {
+        existing.agentName = data.agentName;
+        existing.agentDisplayName = data.agentDisplayName;
+        existing.agentDescription = data.agentDescription;
+        existing.model = data.model ?? existing.model;
+      }
+      const spawning = toolCallId ? this.spawningActivity(rt, toolCallId) : undefined;
+      if (spawning) {
+        this.enrichSubagentFromTool(existing, spawning.activity, spawning.parentAgentId);
+      }
+      return existing;
+    }
+
+    const id = agentId ?? toolCallId ?? `subagent-${randomUUID()}`;
+    const resolvedToolCallId = toolCallId ?? id;
+    const subagent: SubagentActivity = {
+      id,
+      turnId: rt.currentTurnId ?? "",
+      toolCallId: resolvedToolCallId,
+      agentName: data?.agentName ?? "subagent",
+      agentDisplayName: data?.agentDisplayName ?? "子代理",
+      agentDescription: data?.agentDescription ?? "正在执行委派任务",
+      model: data?.model,
+      status: "running",
+      messages: [],
+      activities: [],
+      startedAt,
+    };
+    const spawning = this.spawningActivity(rt, resolvedToolCallId);
+    if (spawning) {
+      this.enrichSubagentFromTool(subagent, spawning.activity, spawning.parentAgentId);
+    }
+    rt.subagents.push(subagent);
+    return subagent;
+  }
+
+  private ensurePendingSubagentMessage(
+    subagent: SubagentActivity,
+    startedAt: number,
+    messageId?: string,
+  ) {
+    if (
+      subagent.live &&
+      messageId &&
+      subagent.live.messageId &&
+      subagent.live.messageId !== messageId
+    ) {
+      this.commitPendingSubagentMessage(subagent);
+    }
+    if (!subagent.live) {
+      subagent.live = { messageId, text: "", reasoning: "", startedAt };
+    } else if (messageId && !subagent.live.messageId) {
+      subagent.live.messageId = messageId;
+    }
+    return subagent.live;
+  }
+
+  private commitPendingSubagentMessage(subagent: SubagentActivity) {
+    const live = subagent.live;
+    subagent.live = undefined;
+    if (!live || (!live.text && !live.reasoning)) return;
+    this.upsertSubagentMessage(subagent, {
+      id: live.messageId ?? `partial-${subagent.id}-${subagent.messages.length}`,
+      role: "assistant",
+      text: live.text,
+      reasoning: live.reasoning || undefined,
+      createdAt: live.startedAt,
+    });
+  }
+
+  private upsertSubagentMessage(subagent: SubagentActivity, message: SubagentMessage) {
+    const index = subagent.messages.findIndex((candidate) => candidate.id === message.id);
+    if (index >= 0) subagent.messages[index] = message;
+    else subagent.messages.push(message);
+  }
+
+  private captureDelegatedToolResult(
+    rt: ThreadRuntime,
+    activity: ToolActivity,
+    createdAt: number,
+  ): SubagentActivity | undefined {
+    const subagent = this.findSubagent(rt, undefined, activity.id);
+    if (
+      !subagent ||
+      subagent.status !== "complete" ||
+      activity.status !== "complete" ||
+      !activity.result ||
+      subagent.messages.length > 0 ||
+      subagent.live
+    ) {
+      return subagent;
+    }
+    this.upsertSubagentMessage(subagent, {
+      id: `result-${activity.id}`,
+      role: "assistant",
+      text: activity.result,
+      createdAt,
+    });
+    return subagent;
+  }
+
   private buildSessionConfig(thread: ThreadMeta, settings: AppSettings, actorId: string) {
     const modelRef = thread.model ?? settings.defaultModel;
     const providerConfig = modelRef
@@ -282,7 +482,7 @@ export class CopilotManager {
     const config: Record<string, unknown> = {
       sessionId: thread.id,
       streaming: true,
-      includeSubAgentStreamingEvents: false,
+      includeSubAgentStreamingEvents: true,
       workingDirectory: project.path,
       onPermissionRequest: createWorkspacePermissionHandler(project.path),
       enableConfigDiscovery: false,
@@ -438,6 +638,32 @@ export class CopilotManager {
     }
   }
 
+  private failRunningSubagents(
+    rt: ThreadRuntime,
+    message: string,
+    endedAt: number,
+    status: "error" | "cancelled" = "error",
+    includeIdle = false,
+  ) {
+    for (const subagent of rt.subagents) {
+      if (subagent.status !== "running" && !(includeIdle && subagent.status === "idle")) {
+        continue;
+      }
+      this.commitPendingSubagentMessage(subagent);
+      subagent.status = status;
+      subagent.error = message;
+      subagent.idleSince = undefined;
+      subagent.endedAt = endedAt;
+      for (const activity of subagent.activities) {
+        if (activity.status !== "running") continue;
+        activity.status = "error";
+        activity.result = message;
+        activity.endedAt = endedAt;
+      }
+      this.emitSubagent(rt, subagent);
+    }
+  }
+
   private handleSessionEvent(rt: ThreadRuntime, event: SessionEvent) {
     const threadId = rt.threadId;
     const ts = Date.parse(event.timestamp) || Date.now();
@@ -459,8 +685,20 @@ export class CopilotManager {
         break;
       }
       case "user.message": {
-        if (event.agentId) break;
         const data = event.data;
+        if (event.agentId) {
+          const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+          this.activateSubagent(subagent);
+          subagent.prompt ??= data.content;
+          this.upsertSubagentMessage(subagent, {
+            id: event.id,
+            role: "user",
+            text: data.content,
+            createdAt: ts,
+          });
+          this.emitSubagent(rt, subagent);
+          break;
+        }
         const turnId = rt.currentTurnId ?? `turn-${randomUUID()}`;
         rt.currentTurnId = turnId;
         const message: ChatMessage = {
@@ -504,8 +742,21 @@ export class CopilotManager {
         break;
       }
       case "assistant.message_delta": {
-        if (event.agentId) break;
         const data = event.data;
+        if (event.agentId) {
+          const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+          this.activateSubagent(subagent);
+          const live = this.ensurePendingSubagentMessage(subagent, ts, data.messageId);
+          live.text += data.deltaContent;
+          this.emit(threadId, {
+            kind: "subagent.message_delta",
+            subagentId: subagent.id,
+            messageId: data.messageId,
+            delta: data.deltaContent,
+            startedAt: live.startedAt,
+          });
+          break;
+        }
         const pending = this.ensurePendingAssistant(
           rt,
           rt.currentTurnId ?? "",
@@ -522,8 +773,20 @@ export class CopilotManager {
         break;
       }
       case "assistant.reasoning_delta": {
-        if (event.agentId) break;
         const data = event.data;
+        if (event.agentId) {
+          const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+          this.activateSubagent(subagent);
+          const live = this.ensurePendingSubagentMessage(subagent, ts);
+          live.reasoning += data.deltaContent;
+          this.emit(threadId, {
+            kind: "subagent.reasoning_delta",
+            subagentId: subagent.id,
+            delta: data.deltaContent,
+            startedAt: live.startedAt,
+          });
+          break;
+        }
         const pending = this.ensurePendingAssistant(rt, rt.currentTurnId ?? "", ts);
         pending.reasoning += data.deltaContent;
         this.emit(threadId, {
@@ -535,8 +798,25 @@ export class CopilotManager {
         break;
       }
       case "assistant.message": {
-        if (event.agentId) break;
         const data = event.data;
+        if (event.agentId) {
+          const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+          if (!data.content && !data.reasoningText) break;
+          if (subagent.live?.messageId && subagent.live.messageId !== data.messageId) {
+            this.commitPendingSubagentMessage(subagent);
+          } else {
+            subagent.live = undefined;
+          }
+          this.upsertSubagentMessage(subagent, {
+            id: data.messageId,
+            role: "assistant",
+            text: data.content,
+            reasoning: data.reasoningText,
+            createdAt: ts,
+          });
+          this.emitSubagent(rt, subagent);
+          break;
+        }
         if (!data.content && !data.reasoningText) break;
         const message: ChatMessage = {
           id: data.messageId,
@@ -565,14 +845,52 @@ export class CopilotManager {
           args: stringifyArguments(data.arguments),
           startedAt: ts,
         };
+        if (event.agentId) {
+          const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+          this.activateSubagent(subagent);
+          const index = subagent.activities.findIndex(
+            (candidate) => candidate.id === activity.id,
+          );
+          if (index >= 0) subagent.activities[index] = activity;
+          else subagent.activities.push(activity);
+          const child = this.findSubagent(rt, undefined, activity.id);
+          if (child) this.enrichSubagentFromTool(child, activity, subagent.id);
+          this.emitSubagent(rt, subagent);
+          if (child) this.emitSubagent(rt, child);
+          break;
+        }
         const index = rt.activities.findIndex((candidate) => candidate.id === activity.id);
         if (index >= 0) rt.activities[index] = activity;
         else rt.activities.push(activity);
+        const delegated = this.findSubagent(rt, undefined, activity.id);
+        if (delegated) {
+          this.enrichSubagentFromTool(delegated, activity);
+          this.emitSubagent(rt, delegated);
+        }
         this.emit(threadId, { kind: "tool.start", activity });
         break;
       }
       case "tool.execution_complete": {
         const data = event.data;
+        if (event.agentId) {
+          const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+          const existing = subagent.activities.find((a) => a.id === data.toolCallId);
+          const activity: ToolActivity = existing ?? {
+            id: data.toolCallId,
+            turnId: rt.currentTurnId ?? "",
+            toolName: data.toolDescription?.name ?? "tool",
+            status: "running",
+            startedAt: ts,
+          };
+          activity.status = data.success ? "complete" : "error";
+          activity.result = toolResult(data);
+          activity.endedAt = ts;
+          if (!existing) subagent.activities.push(activity);
+          const delegated = this.captureDelegatedToolResult(rt, activity, ts);
+          this.emitSubagent(rt, subagent);
+          if (delegated) this.emitSubagent(rt, delegated);
+          break;
+        }
         const existing = rt.activities.find((a) => a.id === data.toolCallId);
         const activity: ToolActivity = existing ?? {
           id: data.toolCallId,
@@ -585,7 +903,80 @@ export class CopilotManager {
         activity.result = toolResult(data);
         activity.endedAt = ts;
         if (!existing) rt.activities.push(activity);
+        const delegated = this.captureDelegatedToolResult(rt, activity, ts);
         this.emit(threadId, { kind: "tool.complete", activity });
+        if (delegated) this.emitSubagent(rt, delegated);
+        break;
+      }
+      case "subagent.started": {
+        const subagent = this.ensureSubagent(
+          rt,
+          event.agentId,
+          event.data.toolCallId,
+          ts,
+          event.data,
+        );
+        this.activateSubagent(subagent);
+        this.emitSubagent(rt, subagent);
+        break;
+      }
+      case "subagent.completed": {
+        const data = event.data;
+        const subagent = this.ensureSubagent(rt, event.agentId, data.toolCallId, ts);
+        this.commitPendingSubagentMessage(subagent);
+        subagent.status = "complete";
+        subagent.idleSince = undefined;
+        subagent.agentName = data.agentName;
+        subagent.agentDisplayName = data.agentDisplayName;
+        subagent.model = data.model ?? subagent.model;
+        subagent.endedAt = ts;
+        subagent.durationMs = data.durationMs;
+        subagent.totalTokens = data.totalTokens;
+        subagent.totalToolCalls = data.totalToolCalls;
+        this.emitSubagent(rt, subagent);
+        break;
+      }
+      case "subagent.failed": {
+        const data = event.data;
+        const subagent = this.ensureSubagent(rt, event.agentId, data.toolCallId, ts);
+        this.commitPendingSubagentMessage(subagent);
+        subagent.status = "error";
+        subagent.idleSince = undefined;
+        subagent.agentName = data.agentName;
+        subagent.agentDisplayName = data.agentDisplayName;
+        subagent.model = data.model ?? subagent.model;
+        subagent.endedAt = ts;
+        subagent.durationMs = data.durationMs;
+        subagent.totalTokens = data.totalTokens;
+        subagent.totalToolCalls = data.totalToolCalls;
+        subagent.error = data.error;
+        this.emitSubagent(rt, subagent);
+        break;
+      }
+      case "system.notification": {
+        const notification = event.data.kind;
+        if (notification.type === "agent_idle") {
+          const subagent = this.ensureSubagent(rt, notification.agentId, undefined, ts);
+          this.commitPendingSubagentMessage(subagent);
+          subagent.status = "idle";
+          subagent.agentName = notification.agentType;
+          subagent.taskDescription ??= notification.description;
+          subagent.idleSince = ts;
+          subagent.endedAt = undefined;
+          subagent.error = undefined;
+          this.emitSubagent(rt, subagent);
+        } else if (notification.type === "agent_completed") {
+          const subagent = this.ensureSubagent(rt, notification.agentId, undefined, ts);
+          this.commitPendingSubagentMessage(subagent);
+          subagent.status = notification.status === "completed" ? "complete" : "error";
+          subagent.agentName = notification.agentType;
+          subagent.taskDescription ??= notification.description;
+          subagent.prompt ??= notification.prompt;
+          subagent.idleSince = undefined;
+          subagent.endedAt = ts;
+          if (notification.status === "failed") subagent.error ??= "子代理执行失败";
+          this.emitSubagent(rt, subagent);
+        }
         break;
       }
       case "session.usage_info": {
@@ -597,12 +988,18 @@ export class CopilotManager {
       case "session.idle": {
         if (event.agentId) break;
         this.failRunningTools(rt, event.data.aborted ? "工具执行已中止" : "工具执行未正常结束", ts);
+        this.failRunningSubagents(
+          rt,
+          event.data.aborted ? "子代理执行已中止" : "子代理执行未正常结束",
+          ts,
+        );
         this.finishTurn(rt);
         break;
       }
       case "session.error": {
         if (event.agentId) break;
         this.failRunningTools(rt, event.data.message, ts);
+        this.failRunningSubagents(rt, event.data.message, ts);
         this.emit(threadId, { kind: "error", message: event.data.message });
         this.finishTurn(rt);
         break;
@@ -610,12 +1007,14 @@ export class CopilotManager {
       case "abort": {
         if (event.agentId) break;
         this.failRunningTools(rt, "工具执行已中止", ts);
+        this.failRunningSubagents(rt, "子代理执行已中止", ts, "cancelled");
         this.finishTurn(rt);
         break;
       }
       case "session.shutdown": {
         if (event.agentId) break;
         this.failRunningTools(rt, "会话已断开", ts);
+        this.failRunningSubagents(rt, "会话已断开", ts, "cancelled", true);
         this.finishTurn(rt);
         break;
       }
@@ -679,6 +1078,7 @@ export class CopilotManager {
     try {
       const events = await session.getEvents();
       rt.pendingAssistant = null;
+      rt.subagents = [];
       let turnId = "";
       let lastTimestamp = Date.now();
       for (const event of events) {
@@ -689,10 +1089,22 @@ export class CopilotManager {
             if (!event.agentId && !turnId) turnId = event.data.turnId;
             break;
           case "user.message": {
-            if (event.agentId) break;
-            this.commitPendingAssistant(rt, false);
             const data = event.data;
+            if (event.agentId) {
+              const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+              this.activateSubagent(subagent);
+              subagent.prompt ??= data.content;
+              this.upsertSubagentMessage(subagent, {
+                id: event.id,
+                role: "user",
+                text: data.content,
+                createdAt: ts,
+              });
+              break;
+            }
+            this.commitPendingAssistant(rt, false);
             turnId = `turn-${randomUUID()}`;
+            rt.currentTurnId = turnId;
             rt.messages.push({
               id: event.id,
               role: "user",
@@ -705,8 +1117,14 @@ export class CopilotManager {
             break;
           }
           case "assistant.message_delta": {
-            if (event.agentId) break;
             const data = event.data;
+            if (event.agentId) {
+              const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+              this.activateSubagent(subagent);
+              this.ensurePendingSubagentMessage(subagent, ts, data.messageId).text +=
+                data.deltaContent;
+              break;
+            }
             const pending = this.ensurePendingAssistant(
               rt,
               turnId,
@@ -718,14 +1136,36 @@ export class CopilotManager {
             break;
           }
           case "assistant.reasoning_delta": {
-            if (event.agentId) break;
+            if (event.agentId) {
+              const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+              this.activateSubagent(subagent);
+              this.ensurePendingSubagentMessage(subagent, ts).reasoning +=
+                event.data.deltaContent;
+              break;
+            }
             const pending = this.ensurePendingAssistant(rt, turnId, ts, undefined, false);
             pending.reasoning += event.data.deltaContent;
             break;
           }
           case "assistant.message": {
-            if (event.agentId) break;
             const data = event.data;
+            if (event.agentId) {
+              const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+              if (!data.content && !data.reasoningText) break;
+              if (subagent.live?.messageId && subagent.live.messageId !== data.messageId) {
+                this.commitPendingSubagentMessage(subagent);
+              } else {
+                subagent.live = undefined;
+              }
+              this.upsertSubagentMessage(subagent, {
+                id: data.messageId,
+                role: "assistant",
+                text: data.content,
+                reasoning: data.reasoningText,
+                createdAt: ts,
+              });
+              break;
+            }
             if (!data.content && !data.reasoningText) break;
             rt.pendingAssistant = null;
             rt.messages.push({
@@ -740,19 +1180,34 @@ export class CopilotManager {
           }
           case "tool.execution_start": {
             const data = event.data;
-            rt.activities.push({
+            const activity: ToolActivity = {
               id: data.toolCallId,
               turnId,
               toolName: activityName(data),
               status: "running",
               args: stringifyArguments(data.arguments),
               startedAt: ts,
-            });
+            };
+            if (event.agentId) {
+              const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
+              this.activateSubagent(subagent);
+              subagent.activities.push(activity);
+              const child = this.findSubagent(rt, undefined, activity.id);
+              if (child) this.enrichSubagentFromTool(child, activity, subagent.id);
+              break;
+            }
+            rt.activities.push(activity);
+            const delegated = this.findSubagent(rt, undefined, activity.id);
+            if (delegated) this.enrichSubagentFromTool(delegated, activity);
             break;
           }
           case "tool.execution_complete": {
             const data = event.data;
-            const existing = rt.activities.find((a) => a.id === data.toolCallId);
+            const owner = event.agentId
+              ? this.ensureSubagent(rt, event.agentId, undefined, ts)
+              : undefined;
+            const activities = owner?.activities ?? rt.activities;
+            const existing = activities.find((a) => a.id === data.toolCallId);
             const activity: ToolActivity = existing ?? {
               id: data.toolCallId,
               turnId,
@@ -763,7 +1218,74 @@ export class CopilotManager {
             activity.status = data.success ? "complete" : "error";
             activity.result = toolResult(data);
             activity.endedAt = ts;
-            if (!existing) rt.activities.push(activity);
+            if (!existing) activities.push(activity);
+            this.captureDelegatedToolResult(rt, activity, ts);
+            break;
+          }
+          case "subagent.started": {
+            const subagent = this.ensureSubagent(
+              rt,
+              event.agentId,
+              event.data.toolCallId,
+              ts,
+              event.data,
+            );
+            this.activateSubagent(subagent);
+            break;
+          }
+          case "subagent.completed": {
+            const data = event.data;
+            const subagent = this.ensureSubagent(rt, event.agentId, data.toolCallId, ts);
+            this.commitPendingSubagentMessage(subagent);
+            subagent.status = "complete";
+            subagent.idleSince = undefined;
+            subagent.agentName = data.agentName;
+            subagent.agentDisplayName = data.agentDisplayName;
+            subagent.model = data.model ?? subagent.model;
+            subagent.endedAt = ts;
+            subagent.durationMs = data.durationMs;
+            subagent.totalTokens = data.totalTokens;
+            subagent.totalToolCalls = data.totalToolCalls;
+            break;
+          }
+          case "subagent.failed": {
+            const data = event.data;
+            const subagent = this.ensureSubagent(rt, event.agentId, data.toolCallId, ts);
+            this.commitPendingSubagentMessage(subagent);
+            subagent.status = "error";
+            subagent.idleSince = undefined;
+            subagent.agentName = data.agentName;
+            subagent.agentDisplayName = data.agentDisplayName;
+            subagent.model = data.model ?? subagent.model;
+            subagent.endedAt = ts;
+            subagent.durationMs = data.durationMs;
+            subagent.totalTokens = data.totalTokens;
+            subagent.totalToolCalls = data.totalToolCalls;
+            subagent.error = data.error;
+            break;
+          }
+          case "system.notification": {
+            const notification = event.data.kind;
+            if (notification.type === "agent_idle") {
+              const subagent = this.ensureSubagent(rt, notification.agentId, undefined, ts);
+              this.commitPendingSubagentMessage(subagent);
+              subagent.status = "idle";
+              subagent.agentName = notification.agentType;
+              subagent.taskDescription ??= notification.description;
+              subagent.idleSince = ts;
+              subagent.endedAt = undefined;
+              subagent.error = undefined;
+            } else if (notification.type === "agent_completed") {
+              const subagent = this.ensureSubagent(rt, notification.agentId, undefined, ts);
+              this.commitPendingSubagentMessage(subagent);
+              subagent.status = notification.status === "completed" ? "complete" : "error";
+              subagent.agentName = notification.agentType;
+              subagent.taskDescription ??= notification.description;
+              subagent.prompt ??= notification.prompt;
+              subagent.idleSince = undefined;
+              subagent.endedAt = ts;
+              if (notification.status === "failed") subagent.error ??= "子代理执行失败";
+            }
             break;
           }
           case "session.usage_info": {
@@ -782,6 +1304,20 @@ export class CopilotManager {
         activity.status = "error";
         activity.result = "工具执行被中断";
         activity.endedAt = lastTimestamp;
+      }
+      for (const subagent of rt.subagents) {
+        if (subagent.status !== "running" && subagent.status !== "idle") continue;
+        this.commitPendingSubagentMessage(subagent);
+        subagent.status = "cancelled";
+        subagent.error = "子代理执行已中断";
+        subagent.idleSince = undefined;
+        subagent.endedAt = lastTimestamp;
+        for (const activity of subagent.activities) {
+          if (activity.status !== "running") continue;
+          activity.status = "error";
+          activity.result = "工具执行被中断";
+          activity.endedAt = lastTimestamp;
+        }
       }
       rt.currentTurnId = null;
     } catch (err) {
@@ -808,6 +1344,7 @@ export class CopilotManager {
       kind: "snapshot",
       messages: rt.messages,
       activities: rt.activities,
+      subagents: rt.subagents.map(copySubagent),
       running: rt.running,
       contextUsage: rt.contextUsage,
       live: rt.pendingAssistant
@@ -901,6 +1438,7 @@ export class CopilotManager {
       await session?.abort();
     } finally {
       this.failRunningTools(rt, "工具执行已中止", Date.now());
+      this.failRunningSubagents(rt, "子代理执行已中止", Date.now(), "cancelled");
       this.finishTurn(rt);
     }
   }

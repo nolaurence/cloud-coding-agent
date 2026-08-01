@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
+import { ArrowLeft, FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import type { ModelRef } from "@cca/protocol";
 import { useApp, useThreadState } from "../lib/store";
@@ -42,6 +42,7 @@ export function ThreadPage() {
   const canInteract = canManageThread || thread?.access === "collaborate";
   const [switchingModel, setSwitchingModel] = useState(false);
   const [modelError, setModelError] = useState("");
+  const [viewingSubagentId, setViewingSubagentId] = useState<string | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
   const [layoutWidth, setLayoutWidth] = useState(0);
   const layoutRef = useRef<HTMLDivElement>(null);
@@ -87,6 +88,7 @@ export function ThreadPage() {
     modelRequestRef.current += 1;
     setSwitchingModel(false);
     setModelError("");
+    setViewingSubagentId(null);
   }, [threadId]);
 
   useEffect(() => {
@@ -120,7 +122,7 @@ export function ThreadPage() {
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [canInteract, threadId]);
+  }, [canInteract, threadId, viewingSubagentId]);
 
   if (!threadId) return null;
 
@@ -173,7 +175,12 @@ export function ThreadPage() {
             aria-hidden="true"
             className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b from-white to-transparent dark:from-zinc-950"
           />
-          <ChatView threadId={threadId} bottomInset={canInteract ? composerHeight : 0} />
+          <ChatView
+            threadId={threadId}
+            bottomInset={canInteract ? composerHeight : 0}
+            selectedSubagentId={viewingSubagentId}
+            onSubagentViewChange={setViewingSubagentId}
+          />
           {canInteract && (
             <div ref={composerOverlayRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-2">
               <div
@@ -182,31 +189,50 @@ export function ThreadPage() {
               />
               <div className="relative mx-auto max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
                 <div className="pointer-events-auto">
-                  <Composer
-                    key={threadId}
-                    draftKey={threadComposerDraftKey(threadId)}
-                    threadId={threadId}
-                    projectId={thread?.projectId}
-                    contextUsage={state.contextUsage}
-                    running={state.running}
-                    onSend={(text, attachments) => sendMessage(threadId, text, attachments)}
-                    onInterrupt={() => interrupt(threadId)}
-                    onCompact={() => compactContext(threadId)}
-                    footerError={canManageThread ? modelError : undefined}
-                    footerControls={canManageThread ? (
-                      <>
-                        <ModelPicker value={effectiveModel} onChange={(ref) => void onModelChange(ref)} disabled={state.running || switchingModel} />
-                        <ReasoningEffortPicker
-                          compact
-                          model={effectiveModel}
-                          disabled={state.running || switchingModel}
-                          onChange={(reasoningEffort) => {
-                            if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
-                          }}
-                        />
-                      </>
-                    ) : undefined}
-                  />
+                  <div className={viewingSubagentId ? "hidden" : undefined}>
+                    <Composer
+                      key={threadId}
+                      draftKey={threadComposerDraftKey(threadId)}
+                      threadId={threadId}
+                      projectId={thread?.projectId}
+                      contextUsage={state.contextUsage}
+                      running={state.running}
+                      onSend={(text, attachments) => sendMessage(threadId, text, attachments)}
+                      onInterrupt={() => interrupt(threadId)}
+                      onCompact={() => compactContext(threadId)}
+                      footerError={canManageThread ? modelError : undefined}
+                      footerControls={canManageThread ? (
+                        <>
+                          <ModelPicker value={effectiveModel} onChange={(ref) => void onModelChange(ref)} disabled={state.running || switchingModel} />
+                          <ReasoningEffortPicker
+                            compact
+                            model={effectiveModel}
+                            disabled={state.running || switchingModel}
+                            onChange={(reasoningEffort) => {
+                              if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
+                            }}
+                          />
+                        </>
+                      ) : undefined}
+                    />
+                  </div>
+                  {viewingSubagentId && (
+                    <div className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                      <span className="min-w-0 text-sm text-zinc-500 dark:text-zinc-400">
+                        子代理详情为只读
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0"
+                        onClick={() => setViewingSubagentId(null)}
+                      >
+                        <ArrowLeft className="h-3.5 w-3.5" />
+                        返回主会话
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

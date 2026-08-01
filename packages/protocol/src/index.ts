@@ -418,11 +418,49 @@ export interface ToolActivity {
   endedAt?: number;
 }
 
+export interface SubagentMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  reasoning?: string;
+  createdAt: number;
+}
+
+export interface SubagentActivity {
+  id: string;
+  turnId: string;
+  parentAgentId?: string;
+  toolCallId: string;
+  agentName: string;
+  agentDisplayName: string;
+  agentDescription: string;
+  taskDescription?: string;
+  prompt?: string;
+  model?: string;
+  status: "running" | "idle" | "complete" | "error" | "cancelled";
+  messages: SubagentMessage[];
+  activities: ToolActivity[];
+  startedAt: number;
+  idleSince?: number;
+  endedAt?: number;
+  durationMs?: number;
+  totalTokens?: number;
+  totalToolCalls?: number;
+  error?: string;
+  live?: {
+    messageId?: string;
+    text: string;
+    reasoning: string;
+    startedAt: number;
+  };
+}
+
 export type ThreadEvent =
   | {
       kind: "snapshot";
       messages: ChatMessage[];
       activities: ToolActivity[];
+      subagents?: SubagentActivity[];
       running: boolean;
       contextUsage?: ContextUsage;
       live?: { text: string; reasoning: string; turnId: string; startedAt: number };
@@ -435,6 +473,20 @@ export type ThreadEvent =
   | { kind: "assistant.message"; message: ChatMessage }
   | { kind: "tool.start"; activity: ToolActivity }
   | { kind: "tool.complete"; activity: ToolActivity }
+  | { kind: "subagent.update"; subagent: SubagentActivity }
+  | {
+      kind: "subagent.message_delta";
+      subagentId: string;
+      messageId: string;
+      delta: string;
+      startedAt: number;
+    }
+  | {
+      kind: "subagent.reasoning_delta";
+      subagentId: string;
+      delta: string;
+      startedAt: number;
+    }
   | { kind: "context.usage"; usage?: ContextUsage }
   | { kind: "error"; message: string }
   | { kind: "title"; title: string };

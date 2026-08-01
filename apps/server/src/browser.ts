@@ -216,7 +216,7 @@ export class BrowserManager {
     await delay(500);
     this.launch(chrome!, [
       `--display=${display}`, `--remote-debugging-port=${cdpPort}`, "--remote-debugging-address=127.0.0.1",
-      `--user-data-dir=${profileDir}`, "--window-size=1280,900", "--no-sandbox", "--disable-dev-shm-usage",
+      `--user-data-dir=${profileDir}`, "--window-size=1280,900", "--window-position=0,0", "--no-sandbox", "--disable-dev-shm-usage",
       "--disable-gpu", "--no-first-run", "--no-default-browser-check", "about:blank",
     ], { ...process.env, DISPLAY: display });
     this.launch(x11vnc!, ["-display", display, "-nopw", "-shared", "-forever", "-localhost", "-rfbport", String(vncPort)]);
