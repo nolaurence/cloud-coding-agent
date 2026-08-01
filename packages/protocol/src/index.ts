@@ -184,6 +184,12 @@ export interface ContextUsage {
   maxTokens: number;
 }
 
+export interface ContextCompactionResult {
+  tokensRemoved: number;
+  messagesRemoved: number;
+  contextUsage?: ContextUsage;
+}
+
 export interface ThreadMeta {
   id: string;
   projectId: string;
@@ -449,6 +455,7 @@ export type ClientMessage =
   | { id: string; type: "thread.share.redeem"; token: string }
   | { id: string; type: "turn.start"; threadId: string; text: string; attachments?: TurnAttachment[] }
   | { id: string; type: "turn.interrupt"; threadId: string }
+  | { id: string; type: "thread.compact"; threadId: string }
   | { id: string; type: "settings.get" }
   | { id: string; type: "settings.update"; settings: AppSettings }
   | { id: string; type: "connectors.status" }

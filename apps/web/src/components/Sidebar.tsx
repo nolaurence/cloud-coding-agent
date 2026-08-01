@@ -89,7 +89,7 @@ export function Sidebar({
   };
 
   return (
-    <aside className="flex h-full w-full shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:w-[17rem] md:rounded-lg md:border dark:border-zinc-800 dark:bg-zinc-900">
+    <aside className="flex h-full w-full shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:w-[17rem] md:rounded-lg md:border md:shadow-md md:shadow-zinc-950/10 dark:border-zinc-800 dark:md:shadow-black/30 dark:bg-zinc-900">
       <div className="flex h-12 items-center gap-2 px-4">
         <BrandLogo className="h-6 w-6" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">kcloud-coding-agent</span>

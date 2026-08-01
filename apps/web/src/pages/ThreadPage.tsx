@@ -29,6 +29,7 @@ export function ThreadPage() {
   const settings = useApp((s) => s.settings);
   const sendMessage = useApp((s) => s.sendMessage);
   const interrupt = useApp((s) => s.interrupt);
+  const compactContext = useApp((s) => s.compactContext);
   const setThreadModel = useApp((s) => s.setThreadModel);
   const panelOpen = useApp((s) => s.workspacePanelOpen);
   const setPanelOpen = useApp((s) => s.setWorkspacePanelOpen);
@@ -190,6 +191,7 @@ export function ThreadPage() {
                     running={state.running}
                     onSend={(text, attachments) => sendMessage(threadId, text, attachments)}
                     onInterrupt={() => interrupt(threadId)}
+                    onCompact={() => compactContext(threadId)}
                     footerError={canManageThread ? modelError : undefined}
                     footerControls={canManageThread ? (
                       <>
@@ -226,7 +228,7 @@ export function ThreadPage() {
             id="thread-workspace-panel"
             aria-hidden={!panelOpen}
             className={panelOpen
-              ? `fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto lg:my-[10px] lg:mr-[10px] lg:w-[var(--right-panel-width)] lg:shrink-0 lg:rounded-lg lg:border lg:border-zinc-200 dark:bg-zinc-950 lg:dark:border-zinc-800 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`
+              ? `fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto lg:my-[10px] lg:mr-[10px] lg:w-[var(--right-panel-width)] lg:shrink-0 lg:rounded-lg lg:border lg:border-zinc-200 lg:shadow-md lg:shadow-zinc-950/10 dark:bg-zinc-950 lg:dark:border-zinc-800 lg:dark:shadow-black/30 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`
               : "hidden"}
             style={{ "--right-panel-width": `${panelWidth}px` } as CSSProperties}
           >

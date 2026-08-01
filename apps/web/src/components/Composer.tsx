@@ -5,17 +5,19 @@ import {
   FileText,
   ImagePlus,
   Loader2,
+  Minimize2,
   Sparkles,
   Square,
   X,
 } from "lucide-react";
 import { uploadImage } from "../lib/client";
-import type { ContextUsage, TurnAttachment } from "@cca/protocol";
+import type { ContextCompactionResult, ContextUsage, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 interface Trigger {
-  kind: "file" | "skill";
+  kind: "file" | "slash";
   start: number;
   query: string;
 }
@@ -24,7 +26,7 @@ interface CompletionItem {
   key: string;
   label: string;
   hint?: string;
-  kind: "file" | "skill";
+  kind: "file" | "skill" | "command";
 }
 
 const actionButtonClass =
@@ -37,6 +39,14 @@ let nextImageId = 0;
 const CONTEXT_RING_RADIUS = 7;
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
 const tokenFormatter = new Intl.NumberFormat("zh-CN");
+const SLASH_COMMANDS: CompletionItem[] = [
+  {
+    key: "compact",
+    label: "主动压缩",
+    hint: "/compact · 压缩当前对话上下文，释放 token 空间",
+    kind: "command",
+  },
+];
 
 function ContextUsageIndicator({ usage }: { usage: ContextUsage | null }) {
   const usedTokens = usage ? Math.max(0, usage.usedTokens) : 0;
@@ -48,39 +58,44 @@ function ContextUsageIndicator({ usage }: { usage: ContextUsage | null }) {
     : "上下文用量暂不可用";
 
   return (
-    <span
-      className="flex h-8 w-8 shrink-0 items-center justify-center"
-      role="img"
-      aria-label={label}
-      title={label}
-    >
-      <svg className="h-4 w-4" viewBox="0 0 20 20" aria-hidden="true">
-        <circle
-          cx="10"
-          cy="10"
-          r={CONTEXT_RING_RADIUS}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="3"
-          className="text-zinc-200 dark:text-zinc-700"
-        />
-        {ratio > 0 && (
-          <circle
-            cx="10"
-            cy="10"
-            r={CONTEXT_RING_RADIUS}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeDasharray={CONTEXT_RING_CIRCUMFERENCE}
-            strokeDashoffset={CONTEXT_RING_CIRCUMFERENCE * (1 - ratio)}
-            transform="rotate(-90 10 10)"
-            className="text-zinc-700 transition-[stroke-dashoffset] dark:text-zinc-300"
-          />
-        )}
-      </svg>
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="flex h-8 w-8 shrink-0 cursor-default items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500"
+          role="img"
+          aria-label={label}
+          tabIndex={0}
+        >
+          <svg className="h-4 w-4" viewBox="0 0 20 20" aria-hidden="true">
+            <circle
+              cx="10"
+              cy="10"
+              r={CONTEXT_RING_RADIUS}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+              className="text-zinc-200 dark:text-zinc-700"
+            />
+            {ratio > 0 && (
+              <circle
+                cx="10"
+                cy="10"
+                r={CONTEXT_RING_RADIUS}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeDasharray={CONTEXT_RING_CIRCUMFERENCE}
+                strokeDashoffset={CONTEXT_RING_CIRCUMFERENCE * (1 - ratio)}
+                transform="rotate(-90 10 10)"
+                className="text-zinc-700 transition-[stroke-dashoffset] dark:text-zinc-300"
+              />
+            )}
+          </svg>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6}>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -97,7 +112,7 @@ function detectTrigger(text: string, caret: number): Trigger | null {
   const symbol = match[2];
   const query = match[3] ?? "";
   const start = caret - query.length - 1;
-  return { kind: symbol === "@" ? "file" : "skill", start, query };
+  return { kind: symbol === "@" ? "file" : "slash", start, query };
 }
 
 function escapeRegExp(value: string): string {
@@ -112,6 +127,7 @@ export function Composer({
   running,
   onSend,
   onInterrupt,
+  onCompact,
   autoFocus,
   placeholder,
   footerControls,
@@ -127,6 +143,7 @@ export function Composer({
     attachments: TurnAttachment[],
   ) => void | Promise<void>;
   onInterrupt?: () => void | Promise<void>;
+  onCompact?: () => ContextCompactionResult | Promise<ContextCompactionResult>;
   autoFocus?: boolean;
   placeholder?: string;
   footerControls?: ReactNode;
@@ -144,14 +161,16 @@ export function Composer({
   const [activeIndex, setActiveIndex] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
+  const [compacting, setCompacting] = useState(false);
   const [submitError, setSubmitError] = useState("");
+  const [submitNotice, setSubmitNotice] = useState("");
   const [images, setImages] = useState<PendingImage[]>([]);
   const [draggingImage, setDraggingImage] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   const project = projects.find((candidate) => candidate.id === projectId);
-  const busy = running || submitting;
+  const busy = running || submitting || compacting;
 
   const resizeTextarea = useCallback(() => {
     const element = textareaRef.current;
@@ -202,7 +221,7 @@ export function Composer({
   }, [fileQuery, projectId, searchFiles]);
 
   const skillResults =
-    trigger?.kind === "skill"
+    trigger?.kind === "slash"
       ? skills
           .filter(
             (skill) =>
@@ -213,17 +232,28 @@ export function Composer({
           .slice(0, 30)
       : [];
 
+  const commandResults =
+    trigger?.kind === "slash" && threadId && onCompact
+      ? SLASH_COMMANDS.filter((command) => {
+          const query = trigger.query.toLowerCase();
+          return command.key.includes(query) || command.label.includes(trigger.query);
+        })
+      : [];
+
   const items: CompletionItem[] =
     trigger?.kind === "file"
       ? fileResults.slice(0, 30).map((file) => ({ key: file, label: file, kind: "file" }))
-      : skillResults.map((skill) => ({
-          key: skill.name,
-          label: skill.name,
-          hint: skill.description,
-          kind: "skill",
-        }));
+      : [
+          ...commandResults,
+          ...skillResults.map((skill) => ({
+            key: skill.name,
+            label: skill.name,
+            hint: skill.description,
+            kind: "skill" as const,
+          })),
+        ];
 
-  const popupVisible = trigger !== null && (trigger.kind === "skill" || Boolean(projectId));
+  const popupVisible = trigger !== null && (trigger.kind === "slash" || Boolean(projectId));
 
   const applyItem = (itemKey: string) => {
     const element = textareaRef.current;
@@ -261,6 +291,7 @@ export function Composer({
     const candidates = [...files].filter((file) => file.type.startsWith("image/"));
     if (candidates.length === 0) return;
     setSubmitError("");
+    setSubmitNotice("");
     const valid: File[] = [];
     for (const file of candidates) {
       if (!ACCEPTED_IMAGE_TYPES.has(file.type)) {
@@ -328,12 +359,51 @@ export function Composer({
     return { prompt: prompt.trim(), attachments };
   };
 
+  const compact = async () => {
+    if (!onCompact || compacting || running) return;
+    if (images.length > 0) {
+      setSubmitError("主动压缩命令不能与图片一起使用");
+      return;
+    }
+    setCompacting(true);
+    setSubmitError("");
+    setSubmitNotice("");
+    try {
+      const result = await onCompact();
+      clearComposerDraft(draftKey, text);
+      setTrigger(null);
+      setSubmitNotice(
+        result.tokensRemoved > 0
+          ? `上下文压缩完成，已释放 ${tokenFormatter.format(result.tokensRemoved)} 个 token`
+          : "上下文压缩完成",
+      );
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "上下文压缩失败");
+    } finally {
+      setCompacting(false);
+    }
+  };
+
   const submit = async () => {
     if (busy) return;
+    const commandText = text.trim();
+    if (/^\/compact(?:\s|$)/.test(commandText)) {
+      if (!onCompact) {
+        setSubmitError("请先创建会话，再主动压缩上下文");
+        return;
+      }
+      if (commandText !== "/compact") {
+        setSubmitError("/compact 命令不接受其他内容");
+        return;
+      }
+      await compact();
+      return;
+    }
     const { prompt, attachments } = buildPayload();
     if (!prompt && attachments.length === 0 && images.length === 0) return;
     setSubmitting(true);
     setSubmitError("");
+    setSubmitNotice("");
     try {
       const imageAttachments = await Promise.all(images.map((image) => uploadImage(image.file)));
       await onSend(prompt, [...attachments, ...imageAttachments]);
@@ -402,7 +472,7 @@ export function Composer({
               </>
             ) : (
               <>
-                <Sparkles className="h-3.5 w-3.5" /> 选择技能
+                <Sparkles className="h-3.5 w-3.5" /> 命令与技能
               </>
             )}
             {searchingFiles && <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin" />}
@@ -427,6 +497,8 @@ export function Composer({
             >
               {item.kind === "file" ? (
                 <FileText className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+              ) : item.kind === "command" ? (
+                <Minimize2 className="h-3.5 w-3.5 shrink-0 text-blue-500" />
               ) : (
                 <Sparkles className="h-3.5 w-3.5 shrink-0 text-violet-500" />
               )}
@@ -438,7 +510,7 @@ export function Composer({
           ))}
           {!searchingFiles && items.length === 0 && (
             <div className="px-2 py-4 text-center text-xs text-zinc-400">
-              {trigger.kind === "file" ? "未找到匹配文件" : "未找到匹配技能"}
+              {trigger.kind === "file" ? "未找到匹配文件" : "未找到匹配命令或技能"}
             </div>
           )}
         </div>
@@ -496,7 +568,7 @@ export function Composer({
           ref={textareaRef}
           autoFocus={autoFocus}
           aria-label="消息内容"
-          disabled={submitting}
+          disabled={submitting || compacting}
           rows={1}
           className="block min-h-20 w-full resize-none overflow-y-auto bg-transparent px-4 pt-3.5 pb-2 text-sm leading-6 outline-none placeholder:text-zinc-400 disabled:opacity-60"
           placeholder={placeholder ?? "输入消息"}
@@ -504,6 +576,7 @@ export function Composer({
           onChange={(event) => {
             setComposerDraft(draftKey, event.target.value);
             setSubmitError("");
+            setSubmitNotice("");
             requestAnimationFrame(updateTrigger);
           }}
           onKeyDown={onKeyDown}
@@ -525,6 +598,11 @@ export function Composer({
         {submitError && (
           <div className="px-4 pb-2 text-xs text-red-600 dark:text-red-400" role="alert">
             {submitError}
+          </div>
+        )}
+        {submitNotice && (
+          <div className="px-4 pb-2 text-xs text-emerald-600 dark:text-emerald-400" role="status">
+            {submitNotice}
           </div>
         )}
         {footerError && (
@@ -570,8 +648,8 @@ export function Composer({
             </button>
             <button
               type="button"
-              aria-label="选择技能"
-              title="选择技能"
+              aria-label="打开命令和技能菜单"
+              title="命令和技能"
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
               onClick={() => insertTrigger("/")}
             >
@@ -604,9 +682,9 @@ export function Composer({
               className={actionButtonClass}
               onClick={() => void submit()}
               disabled={(!text.trim() && images.length === 0) || busy}
-              aria-busy={submitting}
+              aria-busy={submitting || compacting}
             >
-              {submitting ? (
+              {submitting || compacting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <ArrowUp className="h-5 w-5 stroke-[2.5]" />

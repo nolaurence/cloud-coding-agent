@@ -628,7 +628,10 @@ function CommitRow({ row, selected, onSelect }: { row: GitGraphRow; selected: bo
   useLayoutEffect(() => {
     const element = rowRef.current;
     if (!element) return;
-    const updateHeight = () => setRowHeight(element.getBoundingClientRect().height);
+    const updateHeight = () => {
+      const nextHeight = Math.max(44, Math.round(element.getBoundingClientRect().height));
+      setRowHeight((currentHeight) => currentHeight === nextHeight ? currentHeight : nextHeight);
+    };
     updateHeight();
     const observer = new ResizeObserver(updateHeight);
     observer.observe(element);
@@ -637,7 +640,7 @@ function CommitRow({ row, selected, onSelect }: { row: GitGraphRow; selected: bo
 
   return (
     <div ref={rowRef} className={cn("relative flex w-full items-stretch px-2 py-2 text-left hover:bg-muted/60", selected && "bg-muted")}>
-      <svg width={graphWidth} height={rowHeight} className="-my-2 shrink-0 overflow-visible" aria-hidden="true">
+      <svg width={graphWidth} height={rowHeight} className="pointer-events-none absolute left-2 top-0 overflow-visible" aria-hidden="true">
         {row.passingLanes.map((lane) => (
           <line key={`passing-${lane}`} x1={laneX(lane)} y1="0" x2={laneX(lane)} y2={rowHeight} stroke={GRAPH_COLORS[lane % GRAPH_COLORS.length]} strokeWidth="1.5" opacity="0.65" />
         ))}
@@ -657,6 +660,7 @@ function CommitRow({ row, selected, onSelect }: { row: GitGraphRow; selected: bo
         ))}
         <circle cx={laneX(row.lane)} cy={nodeY} r="4" fill={GRAPH_COLORS[row.lane % GRAPH_COLORS.length]} stroke="var(--background)" strokeWidth="2" />
       </svg>
+      <div aria-hidden="true" className="shrink-0" style={{ width: graphWidth }} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
           <button type="button" className="shrink-0" aria-label={expanded ? "收起提交详情" : "展开提交详情"} onClick={() => setExpanded((value) => !value)}>

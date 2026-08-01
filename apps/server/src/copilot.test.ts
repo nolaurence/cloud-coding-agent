@@ -21,7 +21,27 @@ class FakeSession {
   readonly sent: unknown[] = [];
   readonly history: SessionEvent[];
   abortCalls = 0;
+  compactCalls = 0;
   disconnectCalls = 0;
+  compactResult = {
+    success: true,
+    tokensRemoved: 18_000,
+    messagesRemoved: 8,
+    summaryContent: "summary",
+    contextWindow: {
+      tokenLimit: 128_000,
+      currentTokens: 12_000,
+      messagesLength: 5,
+    },
+  };
+  readonly rpc = {
+    history: {
+      compact: async () => {
+        this.compactCalls += 1;
+        return this.compactResult;
+      },
+    },
+  };
 
   constructor(history: SessionEvent[] = []) {
     this.history = history;
@@ -214,6 +234,45 @@ test("tracks context usage in events, snapshots, and thread metadata", async (t)
   assert.equal(snapshot.kind, "snapshot");
   if (snapshot.kind !== "snapshot") return;
   assert.deepEqual(snapshot.contextUsage, usage);
+});
+
+test("manually compacts context and updates usage", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  t.after(() => manager.shutdown());
+
+  const result = await manager.compactContext(threadId, "admin");
+
+  assert.equal(session.compactCalls, 1);
+  assert.deepEqual(result, {
+    tokensRemoved: 18_000,
+    messagesRemoved: 8,
+    contextUsage: { usedTokens: 12_000, maxTokens: 128_000 },
+  });
+  assert.deepEqual(store.getThread(threadId)?.contextUsage, result.contextUsage);
+  assert.deepEqual(
+    emitted.find((event) => event.kind === "context.usage"),
+    { kind: "context.usage", usage: result.contextUsage },
+  );
+});
+
+test("rejects manual compaction while a turn is running", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "继续处理");
+  await assert.rejects(manager.compactContext(threadId, "admin"), /仍在运行/);
+  assert.equal(session.compactCalls, 0);
 });
 
 test("restores context usage from stored thread metadata", async (t) => {

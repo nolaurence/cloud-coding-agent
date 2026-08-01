@@ -8,6 +8,7 @@ import type {
   CreatedInvite,
   CreatedThreadShare,
   ConnectorStatus,
+  ContextCompactionResult,
   ContextUsage,
   InstalledPlugin,
   MarketplacePlugin,
@@ -203,6 +204,7 @@ interface AppState {
   closeThread: (threadId: string) => Promise<void>;
   sendMessage: (threadId: string, text: string, attachments?: TurnAttachment[]) => Promise<void>;
   interrupt: (threadId: string) => Promise<void>;
+  compactContext: (threadId: string) => Promise<ContextCompactionResult>;
   getThreadShare: (threadId: string) => Promise<ThreadShareSummary>;
   createThreadShare: (threadId: string, mode: ThreadShareMode) => Promise<CreatedThreadShare>;
   revokeThreadShare: (threadId: string) => Promise<void>;
@@ -647,6 +649,9 @@ export const useApp = create<AppState>((set, get) => {
         throw error;
       }
     },
+
+    compactContext: (threadId) =>
+      request<ContextCompactionResult>({ type: "thread.compact", threadId }),
 
     interrupt: async (threadId) => {
       await request({ type: "turn.interrupt", threadId });

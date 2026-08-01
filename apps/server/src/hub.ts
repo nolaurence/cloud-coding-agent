@@ -592,6 +592,12 @@ export class Hub {
           this.reply(conn, msg.id);
           break;
         }
+        case "thread.compact": {
+          if (!this.canInteract(conn, store.getThread(msg.threadId))) throw new Error("当前分享仅允许查看");
+          const result = await this.manager.compactContext(msg.threadId, conn.user.username);
+          this.reply(conn, msg.id, result);
+          break;
+        }
         case "settings.get": {
           this.reply(conn, msg.id, this.settingsFor(conn));
           break;

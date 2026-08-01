@@ -5,6 +5,7 @@ import { isReasoningEffort, normalizeReasoningEfforts } from "@cca/protocol";
 import type {
   AppSettings,
   ChatMessage,
+  ContextCompactionResult,
   ContextUsage,
   MessageAttachment,
   ModelRef,
@@ -27,6 +28,7 @@ interface ThreadRuntime {
   activities: ToolActivity[];
   contextUsage: ContextUsage | undefined;
   running: boolean;
+  compacting: boolean;
   currentTurnId: string | null;
   pendingAssistant: {
     messageId: string | null;
@@ -175,6 +177,7 @@ export class CopilotManager {
         activities: [],
         contextUsage: normalizeContextUsage(store.getThread(threadId)?.contextUsage),
         running: false,
+        compacting: false,
         currentTurnId: null,
         pendingAssistant: null,
         pendingUserAttachments: [],
@@ -848,6 +851,7 @@ export class CopilotManager {
   ): Promise<void> {
     const rt = this.runtime(threadId);
     if (rt.running) throw new Error("当前任务仍在运行,请等待完成或先停止任务");
+    if (rt.compacting) throw new Error("上下文正在压缩,请等待完成后再发送消息");
 
     const turnId = `turn-${randomUUID()}`;
     rt.running = true;
@@ -901,6 +905,34 @@ export class CopilotManager {
     }
   }
 
+  async compactContext(threadId: string, actorId = ""): Promise<ContextCompactionResult> {
+    const rt = this.runtime(threadId);
+    if (rt.running) throw new Error("当前任务仍在运行,请等待完成后再压缩上下文");
+    if (rt.compacting) throw new Error("上下文正在压缩,请稍候");
+
+    rt.compacting = true;
+    try {
+      const session = await this.attach(threadId, actorId);
+      const result = await session.rpc.history.compact();
+      if (!result.success) throw new Error("上下文压缩失败");
+
+      const usage = result.contextWindow
+        ? normalizeContextUsage({
+            usedTokens: result.contextWindow.currentTokens,
+            maxTokens: result.contextWindow.tokenLimit,
+          })
+        : undefined;
+      if (usage) this.updateContextUsage(rt, usage);
+      return {
+        tokensRemoved: Math.max(0, Math.round(result.tokensRemoved)),
+        messagesRemoved: Math.max(0, Math.round(result.messagesRemoved)),
+        ...(usage ? { contextUsage: usage } : {}),
+      };
+    } finally {
+      rt.compacting = false;
+    }
+  }
+
   async setThreadModel(
     threadId: string,
     currentModel: ModelRef | undefined,
@@ -909,6 +941,7 @@ export class CopilotManager {
     const rt = this.threads.get(threadId);
     if (!rt) return;
     if (rt.running) throw new Error("当前任务运行中,请等待完成后再切换模型或推理强度");
+    if (rt.compacting) throw new Error("上下文正在压缩,请等待完成后再切换模型或推理强度");
 
     const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
 
