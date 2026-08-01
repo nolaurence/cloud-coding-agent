@@ -4,7 +4,8 @@ export interface GitGraphRow {
   commit: GitLogCommit;
   lane: number;
   parentLanes: number[];
-  activeLanes: number[];
+  incomingLanes: number[];
+  passingLanes: number[];
 }
 
 export function layoutGitGraph(commits: readonly GitLogCommit[]): GitGraphRow[] {
@@ -22,9 +23,9 @@ export function layoutGitGraph(commits: readonly GitLogCommit[]): GitGraphRow[] 
   };
 
   for (const commit of commits) {
+    const activeBefore = lanes.flatMap((hash, index) => hash === null ? [] : [index]);
     const claims = lanes.flatMap((hash, lane) => hash === commit.hash ? [lane] : []);
     const lane = claims[0] ?? reserveLane(commit.hash);
-    const activeBefore = lanes.flatMap((hash, index) => hash === null ? [] : [index]);
 
     for (const claimedLane of claims) lanes[claimedLane] = null;
 
@@ -39,12 +40,12 @@ export function layoutGitGraph(commits: readonly GitLogCommit[]): GitGraphRow[] 
     if (commit.parents.length === 0) lanes[lane] = null;
 
     while (lanes.at(-1) === null) lanes.pop();
-    const activeAfter = lanes.flatMap((hash, index) => hash === null ? [] : [index]);
     rows.push({
       commit,
       lane,
       parentLanes,
-      activeLanes: [...new Set([...activeBefore, lane, ...activeAfter])].sort((a, b) => a - b),
+      incomingLanes: claims,
+      passingLanes: activeBefore.filter((activeLane) => !claims.includes(activeLane)),
     });
   }
 

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import test, { type TestContext } from "node:test";
 import type { CopilotClient, CopilotSession, SessionEvent } from "@github/copilot-sdk";
 import type { AppSettings, Project, ThreadEvent, ThreadMeta } from "@cca/protocol";
-import { CopilotManager } from "./copilot.js";
+import { CopilotManager, normalizeGeneratedCommitMessage } from "./copilot.js";
 import { store } from "./store.js";
 
 function sessionEvent(type: SessionEvent["type"], data: unknown): SessionEvent {
@@ -21,6 +21,7 @@ class FakeSession {
   readonly sent: unknown[] = [];
   readonly history: SessionEvent[];
   abortCalls = 0;
+  disconnectCalls = 0;
 
   constructor(history: SessionEvent[] = []) {
     this.history = history;
@@ -44,11 +45,21 @@ class FakeSession {
     return `message-${this.sent.length}`;
   }
 
+  async sendAndWait(options: unknown) {
+    this.sent.push(options);
+    return sessionEvent("assistant.message", {
+      messageId: `message-${this.sent.length}`,
+      content: "```text\nfeat(git): generate commit messages\n```",
+    }) as Extract<SessionEvent, { type: "assistant.message" }>;
+  }
+
   async abort() {
     this.abortCalls += 1;
   }
 
-  async disconnect() {}
+  async disconnect() {
+    this.disconnectCalls += 1;
+  }
 
   async setModel() {}
 }
@@ -58,6 +69,7 @@ class FakeClient {
   failFirstStart = false;
   readonly session: FakeSession;
   readonly createdConfigs: unknown[] = [];
+  readonly deletedSessionIds: string[] = [];
 
   constructor(session = new FakeSession()) {
     this.session = session;
@@ -77,7 +89,9 @@ class FakeClient {
     return this.session as unknown as CopilotSession;
   }
 
-  async deleteSession() {}
+  async deleteSession(sessionId: string) {
+    this.deletedSessionIds.push(sessionId);
+  }
 
   async listModels() {
     return [];
@@ -169,6 +183,31 @@ test("keeps a request running across assistant tool turns until session.idle", a
   assert.equal(emitted.filter((event) => event.kind === "turn.end").length, 1);
   const toolComplete = emitted.find((event) => event.kind === "tool.complete");
   assert.equal(toolComplete?.kind === "tool.complete" ? toolComplete.activity.result : undefined, "updated src/index.ts");
+});
+
+test("generates a commit message in an isolated tool-free session", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  const message = await manager.generateCommitMessage(threadId, "admin", "diff --git a/a b/a\n+change", false);
+  assert.equal(message, "feat(git): generate commit messages");
+  assert.equal(client.createdConfigs.length, 1);
+  const config = client.createdConfigs[0] as { sessionId: string; tools: unknown[]; availableTools: unknown[] };
+  assert.match(config.sessionId, /^commit-message-/);
+  assert.deepEqual(config.tools, []);
+  assert.deepEqual(config.availableTools, []);
+  assert.match(JSON.stringify(session.sent[0]), /<staged_diff>/);
+  assert.equal(session.disconnectCalls, 1);
+  assert.deepEqual(client.deletedSessionIds, [config.sessionId]);
+});
+
+test("normalizes generated commit message wrappers and rejects empty output", () => {
+  assert.equal(normalizeGeneratedCommitMessage('Commit message: "fix: handle empty input"'), "fix: handle empty input");
+  assert.throws(() => normalizeGeneratedCommitMessage("  "), /未生成有效/);
 });
 
 test("attaches uploaded images to the emitted and restored user message", async (t) => {

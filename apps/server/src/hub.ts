@@ -34,9 +34,11 @@ import { bindGitProvider, listGitBindings, unbindGitProvider } from "./gitBindin
 import { commitProjectChanges, runAuthenticatedGit } from "./gitOperations.js";
 import {
   assertProjectGitVersion,
+  projectGitCommitDiff,
   projectGitFileDiff,
   projectGitLog,
   projectGitPushTarget,
+  projectGitStagedDiff,
   projectGitStatus,
   stageProjectFiles,
   unstageProjectFiles,
@@ -785,6 +787,11 @@ export class Hub {
           );
           break;
         }
+        case "project.git.commitDiff": {
+          const project = this.requireOwnedProject(conn, msg.projectId);
+          this.reply(conn, msg.id, await projectGitCommitDiff(project.path, msg.hash));
+          break;
+        }
         case "project.git.fileDiff": {
           const project = this.requireOwnedProject(conn, msg.projectId);
           this.reply(
@@ -792,6 +799,26 @@ export class Hub {
             msg.id,
             await projectGitFileDiff(project.path, msg.path, msg.staged),
           );
+          break;
+        }
+        case "project.git.generateCommitMessage": {
+          const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
+          await assertProjectGitVersion(project.path, {
+            expectedHead: msg.expectedHead,
+            expectedIndexTree: msg.expectedIndexTree,
+          });
+          const diff = await projectGitStagedDiff(project.path);
+          const message = await this.manager.generateCommitMessage(
+            msg.threadId,
+            conn.user.username,
+            diff.patch,
+            diff.truncated,
+          );
+          await assertProjectGitVersion(project.path, {
+            expectedHead: msg.expectedHead,
+            expectedIndexTree: msg.expectedIndexTree,
+          });
+          this.reply(conn, msg.id, { message, truncated: diff.truncated });
           break;
         }
         case "project.git.stage": {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
-import type { ModelProviderConfig, ProviderType, WireApi } from "@cca/protocol";
+import type { ModelEntry, ModelProviderConfig, ProviderType, WireApi } from "@cca/protocol";
 import { useApp } from "../../lib/store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 
 const emptyProvider = (): ModelProviderConfig => ({
   id: "",
@@ -32,7 +31,6 @@ export function ProvidersSettings() {
   const updateSettings = useApp((s) => s.updateSettings);
   const discoverProviderModels = useApp((s) => s.discoverProviderModels);
   const [editing, setEditing] = useState<ModelProviderConfig | null>(null);
-  const [modelsText, setModelsText] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [discovering, setDiscovering] = useState(false);
@@ -50,9 +48,10 @@ export function ProvidersSettings() {
       ...target,
       id: target.id || `p-${Date.now()}`,
       wireApi: target.wireApi ?? "completions",
-      models: target.models.map((model) => ({ ...model })),
+      models: target.models.length
+        ? target.models.map((model) => ({ ...model }))
+        : [{ id: "", name: "" }],
     });
-    setModelsText(target.models.map((m) => (m.name ? `${m.id} | ${m.name}` : m.id)).join("\n"));
     setError("");
     setNotice("");
   };
@@ -74,7 +73,6 @@ export function ProvidersSettings() {
         apiKey: editing.apiKey,
         azureApiVersion: editing.azureApiVersion,
       });
-      setModelsText(models.map((m) => (m.name ? `${m.id} | ${m.name}` : m.id)).join("\n"));
       setEditing((current) =>
         current?.id === editing.id ? { ...current, models } : current,
       );
@@ -86,23 +84,53 @@ export function ProvidersSettings() {
     }
   };
 
+  const updateModel = (index: number, field: "id" | "name", value: string) => {
+    setEditing((current) => current ? {
+      ...current,
+      models: current.models.map((model, modelIndex) =>
+        modelIndex === index ? { ...model, [field]: value } : model,
+      ),
+    } : current);
+  };
+
+  const addModel = () => {
+    setEditing((current) => current ? {
+      ...current,
+      models: [...current.models, { id: "", name: "" }],
+    } : current);
+  };
+
+  const removeModel = (index: number) => {
+    setEditing((current) => current ? {
+      ...current,
+      models: current.models.filter((_, modelIndex) => modelIndex !== index),
+    } : current);
+  };
+
   const submit = () => {
     if (!editing) return;
     if (!editing.name.trim() || !editing.baseUrl.trim()) {
       setError("名称和 Base URL 必填");
       return;
     }
-    const models = modelsText
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        const [id, name] = line.split("|").map((s) => s.trim());
-        const existing = editing.models.find((model) => model.id === id);
-        return { ...existing, id: id!, name: name || undefined };
-      });
+    const populatedModels = editing.models.filter(
+      (model) => model.id.trim() || model.name?.trim(),
+    );
+    if (populatedModels.some((model) => !model.id.trim())) {
+      setError("请填写每个模型的模型 ID");
+      return;
+    }
+    const models: ModelEntry[] = populatedModels.map((model) => ({
+      ...model,
+      id: model.id.trim(),
+      name: model.name?.trim() || undefined,
+    }));
     if (models.length === 0) {
       setError("至少填写一个模型");
+      return;
+    }
+    if (new Set(models.map((model) => model.id)).size !== models.length) {
+      setError("模型 ID 不能重复");
       return;
     }
     const next = { ...editing, models, apiKey: editing.apiKey || undefined };
@@ -225,31 +253,67 @@ export function ProvidersSettings() {
               </LabeledField>
             )}
             <div className="mb-3">
-              <div className="mb-1 flex min-h-7 flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                  模型列表(每行一个,格式:模型id 或 模型id | 显示名)
-                </div>
-                {editing.type === "openai" && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0 self-end whitespace-nowrap"
-                    disabled={discovering || !editing.baseUrl.trim()}
-                    onClick={() => void discoverModels()}
-                  >
-                    {discovering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                    {discovering ? "获取中" : "自动获取"}
+              <div className="mb-2 flex min-h-7 flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">模型列表</div>
+                <div className="flex shrink-0 justify-end gap-1.5">
+                  {editing.type === "openai" && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="whitespace-nowrap"
+                      disabled={discovering || !editing.baseUrl.trim()}
+                      onClick={() => void discoverModels()}
+                    >
+                      {discovering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                      {discovering ? "获取中" : "自动获取"}
+                    </Button>
+                  )}
+                  <Button type="button" variant="outline" size="sm" onClick={addModel}>
+                    <Plus className="h-3.5 w-3.5" />添加模型
                   </Button>
+                </div>
+              </div>
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.75rem] gap-2 px-0.5 pb-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span>模型 ID</span>
+                <span>显示名称</span>
+                <span className="sr-only">操作</span>
+              </div>
+              <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+                {editing.models.map((model, index) => (
+                  <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.75rem] items-center gap-2">
+                    <Input
+                      className="font-mono"
+                      value={model.id}
+                      onChange={(event) => updateModel(index, "id", event.target.value)}
+                      placeholder="gpt-4o"
+                      aria-label={`第 ${index + 1} 个模型 ID`}
+                    />
+                    <Input
+                      value={model.name ?? ""}
+                      onChange={(event) => updateModel(index, "name", event.target.value)}
+                      placeholder="可选"
+                      aria-label={`第 ${index + 1} 个模型显示名称`}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="text-zinc-500 hover:text-red-500"
+                      title="删除模型"
+                      aria-label={`删除第 ${index + 1} 个模型`}
+                      onClick={() => removeModel(index)}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                ))}
+                {editing.models.length === 0 && (
+                  <div className="rounded-lg border border-dashed px-3 py-4 text-center text-xs text-zinc-500">
+                    暂无模型，请点击“添加模型”
+                  </div>
                 )}
               </div>
-              <Textarea
-                rows={5}
-                className="mono"
-                value={modelsText}
-                onChange={(e) => setModelsText(e.target.value)}
-                placeholder={"gpt-4o | GPT-4o\ndeepseek-chat"}
-              />
             </div>
             <div aria-live="polite">
               {error && <div className="mb-2 text-xs text-red-500">{error}</div>}

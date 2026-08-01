@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type {
+  GitCommitDiffResult,
   GitFileChange,
   GitFileDiffResult,
   GitFileStatus,
@@ -13,12 +14,14 @@ import type {
 
 const GIT_TIMEOUT_MS = 60_000;
 const MAX_GIT_OUTPUT = 2 * 1024 * 1024;
+const MAX_COMMIT_MESSAGE_DIFF = 256 * 1024;
 const MAX_PATHS = 200;
 const MAX_PATH_LENGTH = 4096;
 const MAX_PATH_ARGUMENT_LENGTH = 24_000;
 const MAX_QUERY_LENGTH = 200;
 const DEFAULT_LOG_LIMIT = 100;
 const MAX_LOG_LIMIT = 200;
+const COMMIT_HASH = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const projectMutationTails = new Map<string, Promise<unknown>>();
 
 interface GitResult {
@@ -373,6 +376,63 @@ export async function projectGitLog(
     }
     if (error instanceof Error && error.message === "Git 日志输出超过 2 MB") throw error;
     throw gitError(error, "读取 Git 日志");
+  }
+}
+
+export async function projectGitCommitDiff(root: string, hash: string): Promise<GitCommitDiffResult> {
+  if (typeof hash !== "string" || !COMMIT_HASH.test(hash)) {
+    throw new Error("Git 提交哈希无效");
+  }
+
+  try {
+    const revision = await runGit(root, ["rev-parse", "--verify", `${hash}^{commit}`]);
+    const commitHash = revision.stdout.trim();
+    const result = await runGit(
+      root,
+      [
+        "diff-tree",
+        "--root",
+        "--first-parent",
+        "--no-commit-id",
+        "-r",
+        "-p",
+        "--find-renames",
+        "--find-copies",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        commitHash,
+        "--",
+      ],
+      { allowTruncatedStdout: true },
+    );
+    return { hash: commitHash, patch: result.stdout, truncated: result.truncated };
+  } catch (error) {
+    throw gitError(error, "读取 Git 提交差异");
+  }
+}
+
+export async function projectGitStagedDiff(root: string): Promise<{ patch: string; truncated: boolean }> {
+  try {
+    const result = await runGit(
+      root,
+      [
+        "diff",
+        "--cached",
+        "--find-renames",
+        "--find-copies",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--",
+      ],
+      { allowTruncatedStdout: true, maxOutput: MAX_COMMIT_MESSAGE_DIFF },
+    );
+    if (!result.stdout.trim()) throw new Error("没有已暂存的更改可用于生成提交信息");
+    return { patch: result.stdout, truncated: result.truncated };
+  } catch (error) {
+    if (error instanceof Error && error.message === "没有已暂存的更改可用于生成提交信息") throw error;
+    throw gitError(error, "读取已暂存差异");
   }
 }
 

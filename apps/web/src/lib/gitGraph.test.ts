@@ -25,6 +25,8 @@ test("lays out a linear history in one lane", () => {
 
   assert.deepEqual(rows.map((row) => row.lane), [0, 0, 0]);
   assert.deepEqual(rows.map((row) => row.parentLanes), [[0], [0], []]);
+  assert.deepEqual(rows.map((row) => row.incomingLanes), [[], [0], [0]]);
+  assert.deepEqual(rows.map((row) => row.passingLanes), [[], [], []]);
 });
 
 test("reserves and collapses lanes for a merge", () => {
@@ -37,5 +39,18 @@ test("reserves and collapses lanes for a merge", () => {
 
   assert.deepEqual(rows.map((row) => row.lane), [0, 0, 1, 0]);
   assert.deepEqual(rows[0]?.parentLanes, [0, 1]);
-  assert.ok(rows[2]?.activeLanes.includes(1));
+  assert.deepEqual(rows.map((row) => row.incomingLanes), [[], [0], [1], [0, 1]]);
+  assert.deepEqual(rows.map((row) => row.passingLanes), [[], [1], [0], []]);
+});
+
+test("keeps a disconnected history from inheriting an unrelated lane", () => {
+  const rows = layoutGitGraph([
+    commit("tip0000", ["base000"]),
+    commit("other00", []),
+    commit("base000", []),
+  ]);
+
+  assert.deepEqual(rows.map((row) => row.lane), [0, 1, 0]);
+  assert.deepEqual(rows[1]?.incomingLanes, []);
+  assert.deepEqual(rows[1]?.passingLanes, [0]);
 });

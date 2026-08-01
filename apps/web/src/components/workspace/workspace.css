@@ -84,6 +84,14 @@
   border-bottom: 1px solid var(--border);
 }
 
+.git-history-layout {
+  grid-template-rows: minmax(180px, 38%) minmax(0, 1fr);
+}
+
+.git-history-list {
+  border-bottom: 1px solid var(--border);
+}
+
 @container (min-width: 720px) {
   .git-workspace-layout {
     grid-template-columns: minmax(240px, 34%) minmax(0, 1fr);
@@ -91,6 +99,16 @@
   }
 
   .git-workspace-sidebar {
+    border-right: 1px solid var(--border);
+    border-bottom: 0;
+  }
+
+  .git-history-layout {
+    grid-template-columns: minmax(280px, 38%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .git-history-list {
     border-right: 1px solid var(--border);
     border-bottom: 0;
   }

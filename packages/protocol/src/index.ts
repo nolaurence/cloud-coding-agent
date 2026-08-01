@@ -360,6 +360,17 @@ export interface GitFileDiffResult {
   truncated: boolean;
 }
 
+export interface GitCommitDiffResult {
+  hash: string;
+  patch: string;
+  truncated: boolean;
+}
+
+export interface GitCommitMessageResult {
+  message: string;
+  truncated: boolean;
+}
+
 export type GitProvider = "github" | "gitee";
 
 export interface GitBinding {
@@ -462,7 +473,16 @@ export type ClientMessage =
   | { id: string; type: "project.diff"; projectId: string }
   | { id: string; type: "project.git.status"; projectId: string }
   | { id: string; type: "project.git.log"; projectId: string; limit?: number; query?: string }
+  | { id: string; type: "project.git.commitDiff"; projectId: string; hash: string }
   | { id: string; type: "project.git.fileDiff"; projectId: string; path: string; staged: boolean }
+  | {
+      id: string;
+      type: "project.git.generateCommitMessage";
+      threadId: string;
+      projectId: string;
+      expectedHead: string | null;
+      expectedIndexTree: string;
+    }
   | {
       id: string;
       type: "project.git.stage" | "project.git.unstage";

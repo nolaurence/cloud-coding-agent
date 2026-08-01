@@ -7,9 +7,11 @@ import { promisify } from "node:util";
 import test, { type TestContext } from "node:test";
 import {
   parseProjectGitStatus,
+  projectGitCommitDiff,
   projectGitFileDiff,
   projectGitLog,
   projectGitPushTarget,
+  projectGitStagedDiff,
   projectGitStatus,
   stageProjectFiles,
   unstageProjectFiles,
@@ -122,6 +124,31 @@ test("returns an empty log for an unborn repository", async (t) => {
   assert.ok(status.indexTree);
 });
 
+test("renders normal and root commit diffs and validates commit hashes", async (t) => {
+  const root = await createRepository(t);
+  await fs.writeFile(path.join(root, "first.txt"), "first\n");
+  await commitAll(root, "initial");
+  const rootHash = (await git(root, ["rev-parse", "HEAD"])).trim();
+
+  await fs.appendFile(path.join(root, "first.txt"), "second\n");
+  await fs.writeFile(path.join(root, "added.txt"), "added\n");
+  await commitAll(root, "next");
+  const nextHash = (await git(root, ["rev-parse", "HEAD"])).trim();
+
+  const initial = await projectGitCommitDiff(root, rootHash);
+  assert.equal(initial.hash, rootHash);
+  assert.match(initial.patch, /new file mode/);
+  assert.match(initial.patch, /^\+first$/m);
+
+  const next = await projectGitCommitDiff(root, nextHash);
+  assert.match(next.patch, /diff --git a\/added\.txt b\/added\.txt/);
+  assert.match(next.patch, /^\+second$/m);
+  assert.equal(next.truncated, false);
+
+  await assert.rejects(projectGitCommitDiff(root, "HEAD"), /提交哈希无效/);
+  await assert.rejects(projectGitCommitDiff(root, `${nextHash}^`), /提交哈希无效/);
+});
+
 test("renders tracked and untracked file diffs with staged selection", async (t) => {
   const root = await createRepository(t);
   await fs.writeFile(path.join(root, "tracked.txt"), "one\n");
@@ -138,6 +165,7 @@ test("renders tracked and untracked file diffs with staged selection", async (t)
     expectedHead: beforeStage.head,
     expectedIndexTree: beforeStage.indexTree,
   });
+
   const staged = await projectGitFileDiff(root, "tracked.txt", true);
   assert.match(staged.patch, /^\+two$/m);
 
@@ -146,6 +174,35 @@ test("renders tracked and untracked file diffs with staged selection", async (t)
   assert.match(untracked.patch, /new file mode/);
   assert.match(untracked.patch, /^\+alpha$/m);
   assert.match(untracked.patch, /^\+beta$/m);
+});
+
+test("reads only staged changes for commit message generation", async (t) => {
+  const root = await createRepository(t);
+  await fs.writeFile(path.join(root, "tracked.txt"), "one\n");
+  await commitAll(root, "initial");
+  await fs.writeFile(path.join(root, "tracked.txt"), "one\nstaged\n");
+  await git(root, ["add", "tracked.txt"]);
+  await fs.appendFile(path.join(root, "tracked.txt"), "unstaged\n");
+
+  const result = await projectGitStagedDiff(root);
+  assert.match(result.patch, /^\+staged$/m);
+  assert.doesNotMatch(result.patch, /^\+unstaged$/m);
+  assert.equal(result.truncated, false);
+
+  await git(root, ["reset", "--quiet", "HEAD", "--", "tracked.txt"]);
+  await assert.rejects(projectGitStagedDiff(root), /没有已暂存/);
+});
+
+test("caps staged diffs used for commit message generation", async (t) => {
+  const root = await createRepository(t);
+  await fs.writeFile(path.join(root, "large.txt"), "small\n");
+  await commitAll(root, "initial");
+  await fs.writeFile(path.join(root, "large.txt"), `${"x".repeat(512 * 1024)}\n`);
+  await git(root, ["add", "large.txt"]);
+
+  const result = await projectGitStagedDiff(root);
+  assert.equal(result.truncated, true);
+  assert.ok(Buffer.byteLength(result.patch, "utf8") <= 256 * 1024);
 });
 
 test("caps oversized file diffs at two megabytes", async (t) => {

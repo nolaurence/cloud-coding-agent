@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   GitFileChange,
   GitFileDiffResult,
   GitFileStatus,
+  GitCommitDiffResult,
+  GitCommitMessageResult,
+  GitLogCommit,
   GitLogResult,
   GitWorkspaceStatus,
   GitCommitResult,
@@ -20,6 +23,7 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  Sparkles,
 } from "lucide-react";
 import { request } from "../../lib/client";
 import { layoutGitGraph, type GitGraphRow } from "../../lib/gitGraph";
@@ -88,6 +92,10 @@ export function GitPanel({
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<FileSelection | null>(null);
   const [fileDiff, setFileDiff] = useState<GitFileDiffResult | null>(null);
+  const [selectedCommit, setSelectedCommit] = useState<GitLogCommit | null>(null);
+  const [commitDiff, setCommitDiff] = useState<GitCommitDiffResult | null>(null);
+  const [commitDiffLoading, setCommitDiffLoading] = useState(false);
+  const commitDiffRequest = useRef(0);
   const [commitMessage, setCommitMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -130,6 +138,28 @@ export function GitPanel({
     }
   }, [projectId]);
 
+  const loadCommitDiff = useCallback(async (commit: GitLogCommit) => {
+    const requestId = ++commitDiffRequest.current;
+    setSelectedCommit(commit);
+    setCommitDiff(null);
+    setCommitDiffLoading(true);
+    setError("");
+    try {
+      const next = await request<GitCommitDiffResult>({
+        type: "project.git.commitDiff",
+        projectId,
+        hash: commit.hash,
+      });
+      if (commitDiffRequest.current === requestId) setCommitDiff(next);
+    } catch (reason) {
+      if (commitDiffRequest.current === requestId) {
+        setError(errorMessage(reason, "读取提交差异失败"));
+      }
+    } finally {
+      if (commitDiffRequest.current === requestId) setCommitDiffLoading(false);
+    }
+  }, [projectId]);
+
   const refresh = useCallback(async (includeLog = true) => {
     setLoading(true);
     setError("");
@@ -147,6 +177,10 @@ export function GitPanel({
     setLog(null);
     setSelection(null);
     setFileDiff(null);
+    commitDiffRequest.current += 1;
+    setSelectedCommit(null);
+    setCommitDiff(null);
+    setCommitDiffLoading(false);
     setError("");
     setNotice("");
     void refresh();
@@ -251,6 +285,28 @@ export function GitPanel({
     );
   };
 
+  const generateCommitMessage = async () => {
+    if (!status || stagedCount === 0) return;
+    setOperation("generate-commit-message");
+    setError("");
+    setNotice("");
+    try {
+      const result = await request<GitCommitMessageResult>({
+        type: "project.git.generateCommitMessage",
+        threadId,
+        projectId,
+        expectedHead: status.head,
+        expectedIndexTree: status.indexTree,
+      }, 70_000);
+      setCommitMessage(result.message);
+      if (result.truncated) setNotice("提交信息已根据部分暂存差异生成，请确认内容是否完整");
+    } catch (reason) {
+      setError(errorMessage(reason, "生成提交信息失败"));
+    } finally {
+      setOperation(null);
+    }
+  };
+
   const sync = async (direction: "pull" | "push") => {
     await mutate(
       direction,
@@ -346,15 +402,29 @@ export function GitPanel({
             </div>
             {editable && (
               <form className="shrink-0 space-y-2 border-t p-2" onSubmit={(event) => { event.preventDefault(); void commit(); }}>
-                <Textarea
-                  value={commitMessage}
-                  onChange={(event) => setCommitMessage(event.target.value)}
-                  placeholder="提交说明"
-                  aria-label="提交说明"
-                  maxLength={2000}
-                  disabled={operation !== null}
-                  className="min-h-14 resize-none text-xs"
-                />
+                <div className="relative">
+                  <Textarea
+                    value={commitMessage}
+                    onChange={(event) => setCommitMessage(event.target.value)}
+                    placeholder="提交说明"
+                    aria-label="提交说明"
+                    maxLength={2000}
+                    disabled={operation !== null}
+                    className="min-h-14 resize-none pr-9 text-xs"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="absolute right-1 top-1"
+                    title="根据已暂存更改生成提交信息"
+                    aria-label="生成提交信息"
+                    disabled={operation !== null || stagedCount === 0}
+                    onClick={() => void generateCommitMessage()}
+                  >
+                    {operation === "generate-commit-message" ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                  </Button>
+                </div>
                 <Button type="submit" size="sm" className="w-full" disabled={operation !== null || stagedCount === 0 || !commitMessage.trim()}>
                   {operation === "commit" ? <Loader2 className="animate-spin" /> : <GitCommitHorizontal />}
                   提交已暂存更改 ({stagedCount})
@@ -380,6 +450,10 @@ export function GitPanel({
         <HistoryView
           rows={graphRows}
           loading={loading && !log}
+          selectedCommit={selectedCommit}
+          commitDiff={commitDiff}
+          commitDiffLoading={commitDiffLoading}
+          onSelectCommit={(commit) => void loadCommitDiff(commit)}
           queryDraft={queryDraft}
           onQueryDraft={setQueryDraft}
           onSearch={() => {
@@ -467,6 +541,10 @@ function GitFileRow({
 function HistoryView({
   rows,
   loading,
+  selectedCommit,
+  commitDiff,
+  commitDiffLoading,
+  onSelectCommit,
   queryDraft,
   onQueryDraft,
   onSearch,
@@ -475,6 +553,10 @@ function HistoryView({
 }: {
   rows: GitGraphRow[];
   loading: boolean;
+  selectedCommit: GitLogCommit | null;
+  commitDiff: GitCommitDiffResult | null;
+  commitDiffLoading: boolean;
+  onSelectCommit: (commit: GitLogCommit) => void;
   queryDraft: string;
   onQueryDraft: (value: string) => void;
   onSearch: () => void;
@@ -487,45 +569,100 @@ function HistoryView({
         <Input value={queryDraft} onChange={(event) => onQueryDraft(event.target.value)} placeholder="搜索提交说明" aria-label="搜索提交说明" className="h-7 min-w-0 flex-1 text-xs" />
         <Button type="submit" variant="ghost" size="icon-sm" aria-label="搜索历史" title="搜索历史"><Search /></Button>
       </form>
-      <div className="min-h-0 flex-1 overflow-auto">
-        {loading ? (
-          <div className="flex h-full items-center justify-center text-xs text-muted-foreground"><Loader2 className="mr-2 size-4 animate-spin" />读取提交历史…</div>
-        ) : rows.length ? (
-          <div className="divide-y">
-            {rows.map((row) => <CommitRow key={row.commit.hash} row={row} />)}
-            {hasMore && (
-              <div className="p-2 text-center"><Button type="button" variant="ghost" size="sm" onClick={onMore}>加载更多</Button></div>
-            )}
-          </div>
-        ) : (
-          <div className="flex h-full items-center justify-center p-6 text-xs text-muted-foreground">没有匹配的提交</div>
-        )}
+      <div className="git-history-layout grid min-h-0 flex-1 overflow-hidden">
+        <div className="git-history-list min-h-0 overflow-auto">
+          {loading ? (
+            <div className="flex h-full items-center justify-center text-xs text-muted-foreground"><Loader2 className="mr-2 size-4 animate-spin" />读取提交历史…</div>
+          ) : rows.length ? (
+            <div className="divide-y">
+              {rows.map((row) => (
+                <CommitRow
+                  key={row.commit.hash}
+                  row={row}
+                  selected={selectedCommit?.hash === row.commit.hash}
+                  onSelect={() => onSelectCommit(row.commit)}
+                />
+              ))}
+              {hasMore && (
+                <div className="p-2 text-center"><Button type="button" variant="ghost" size="sm" onClick={onMore}>加载更多</Button></div>
+              )}
+            </div>
+          ) : (
+            <div className="flex h-full items-center justify-center p-6 text-xs text-muted-foreground">没有匹配的提交</div>
+          )}
+        </div>
+        <div className="min-h-0 overflow-hidden">
+          {selectedCommit ? (
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="shrink-0 border-b px-3 py-2">
+                <div className="truncate text-xs font-medium">{selectedCommit.subject || "无提交说明"}</div>
+                <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{selectedCommit.hash}</div>
+              </div>
+              <DiffViewer
+                patch={commitDiff?.patch}
+                loading={commitDiffLoading}
+                truncated={commitDiff?.truncated ?? false}
+                untrackedFiles={[]}
+                untrackedTotal={0}
+              />
+            </div>
+          ) : (
+            <div className="flex h-full items-center justify-center p-6 text-xs text-muted-foreground">选择提交查看差异</div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function CommitRow({ row }: { row: GitGraphRow }) {
+function CommitRow({ row, selected, onSelect }: { row: GitGraphRow; selected: boolean; onSelect: () => void }) {
   const [expanded, setExpanded] = useState(false);
-  const maxLane = Math.max(row.lane, ...row.activeLanes, ...row.parentLanes, 0);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [rowHeight, setRowHeight] = useState(44);
+  const maxLane = Math.max(row.lane, ...row.incomingLanes, ...row.passingLanes, ...row.parentLanes, 0);
   const graphWidth = (maxLane + 1) * 12 + 8;
   const laneX = (lane: number) => lane * 12 + 8;
+  const nodeY = 13;
+  const outgoingMidpoint = (nodeY + rowHeight) / 2;
+
+  useLayoutEffect(() => {
+    const element = rowRef.current;
+    if (!element) return;
+    const updateHeight = () => setRowHeight(element.getBoundingClientRect().height);
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   return (
-    <button type="button" className="flex w-full items-stretch px-2 py-2 text-left hover:bg-muted/60" onClick={() => setExpanded((value) => !value)}>
-      <svg width={graphWidth} height={expanded ? 64 : 44} className="shrink-0 overflow-visible" aria-hidden="true">
-        {row.activeLanes.map((lane) => (
-          <line key={`active-${lane}`} x1={laneX(lane)} y1="0" x2={laneX(lane)} y2="44" stroke={GRAPH_COLORS[lane % GRAPH_COLORS.length]} strokeWidth="1.5" opacity="0.65" />
+    <div ref={rowRef} className={cn("relative flex w-full items-stretch px-2 py-2 text-left hover:bg-muted/60", selected && "bg-muted")}>
+      <svg width={graphWidth} height={rowHeight} className="-my-2 shrink-0 overflow-visible" aria-hidden="true">
+        {row.passingLanes.map((lane) => (
+          <line key={`passing-${lane}`} x1={laneX(lane)} y1="0" x2={laneX(lane)} y2={rowHeight} stroke={GRAPH_COLORS[lane % GRAPH_COLORS.length]} strokeWidth="1.5" opacity="0.65" />
+        ))}
+        {row.incomingLanes.map((incomingLane) => (
+          incomingLane === row.lane ? (
+            <line key={`incoming-${incomingLane}`} x1={laneX(incomingLane)} y1="0" x2={laneX(row.lane)} y2={nodeY} stroke={GRAPH_COLORS[incomingLane % GRAPH_COLORS.length]} strokeWidth="1.5" />
+          ) : (
+            <path key={`incoming-${incomingLane}`} d={`M ${laneX(incomingLane)} 0 C ${laneX(incomingLane)} ${nodeY / 2} ${laneX(row.lane)} ${nodeY / 2} ${laneX(row.lane)} ${nodeY}`} stroke={GRAPH_COLORS[incomingLane % GRAPH_COLORS.length]} strokeWidth="1.5" fill="none" />
+          )
         ))}
         {row.parentLanes.map((parentLane, index) => (
-          <line key={`parent-${index}-${parentLane}`} x1={laneX(row.lane)} y1="13" x2={laneX(parentLane)} y2="44" stroke={GRAPH_COLORS[parentLane % GRAPH_COLORS.length]} strokeWidth="1.5" />
+          parentLane === row.lane ? (
+            <line key={`parent-${index}-${parentLane}`} x1={laneX(row.lane)} y1={nodeY} x2={laneX(parentLane)} y2={rowHeight} stroke={GRAPH_COLORS[parentLane % GRAPH_COLORS.length]} strokeWidth="1.5" />
+          ) : (
+            <path key={`parent-${index}-${parentLane}`} d={`M ${laneX(row.lane)} ${nodeY} C ${laneX(row.lane)} ${outgoingMidpoint} ${laneX(parentLane)} ${outgoingMidpoint} ${laneX(parentLane)} ${rowHeight}`} stroke={GRAPH_COLORS[parentLane % GRAPH_COLORS.length]} strokeWidth="1.5" fill="none" />
+          )
         ))}
-        <circle cx={laneX(row.lane)} cy="13" r="4" fill={GRAPH_COLORS[row.lane % GRAPH_COLORS.length]} stroke="var(--background)" strokeWidth="2" />
+        <circle cx={laneX(row.lane)} cy={nodeY} r="4" fill={GRAPH_COLORS[row.lane % GRAPH_COLORS.length]} stroke="var(--background)" strokeWidth="2" />
       </svg>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          {expanded ? <ChevronDown className="size-3 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3 shrink-0 text-muted-foreground" />}
-          <span className="truncate text-xs font-medium">{row.commit.subject || "无提交说明"}</span>
+          <button type="button" className="shrink-0" aria-label={expanded ? "收起提交详情" : "展开提交详情"} onClick={() => setExpanded((value) => !value)}>
+            {expanded ? <ChevronDown className="size-3 text-muted-foreground" /> : <ChevronRight className="size-3 text-muted-foreground" />}
+          </button>
+          <button type="button" className="min-w-0 flex-1 truncate text-left text-xs font-medium" onClick={onSelect}>{row.commit.subject || "无提交说明"}</button>
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground">
           <span className="font-mono">{row.commit.shortHash}</span>
@@ -545,6 +682,6 @@ function CommitRow({ row }: { row: GitGraphRow }) {
           </div>
         )}
       </div>
-    </button>
+    </div>
   );
 }
