@@ -186,6 +186,7 @@ export function ThreadPage() {
                     draftKey={threadComposerDraftKey(threadId)}
                     threadId={threadId}
                     projectId={thread?.projectId}
+                    contextUsage={state.contextUsage}
                     running={state.running}
                     onSend={(text, attachments) => sendMessage(threadId, text, attachments)}
                     onInterrupt={() => interrupt(threadId)}

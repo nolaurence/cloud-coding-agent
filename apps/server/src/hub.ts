@@ -469,12 +469,16 @@ export class Hub {
           if (!thread) throw new Error("会话不存在");
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
           await this.validateReasoningEffort(msg.model);
-          await this.manager.setThreadModel(
-            msg.threadId,
-            thread.model ?? store.settings.defaultModel,
-            msg.model,
-          );
-          store.upsertThread({ ...thread, model: msg.model });
+          const currentModel = thread.model ?? store.settings.defaultModel;
+          await this.manager.setThreadModel(msg.threadId, currentModel, msg.model);
+          const modelChanged =
+            currentModel?.providerId !== msg.model.providerId ||
+            currentModel?.modelId !== msg.model.modelId;
+          store.upsertThread({
+            ...thread,
+            model: msg.model,
+            contextUsage: modelChanged ? undefined : thread.contextUsage,
+          });
           this.broadcastShell();
           this.reply(conn, msg.id);
           break;

@@ -10,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { uploadImage } from "../lib/client";
-import type { TurnAttachment } from "@cca/protocol";
+import type { ContextUsage, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
 
@@ -34,6 +34,55 @@ const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "i
 const MAX_IMAGES = 4;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 let nextImageId = 0;
+const CONTEXT_RING_RADIUS = 7;
+const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
+const tokenFormatter = new Intl.NumberFormat("zh-CN");
+
+function ContextUsageIndicator({ usage }: { usage: ContextUsage | null }) {
+  const usedTokens = usage ? Math.max(0, usage.usedTokens) : 0;
+  const maxTokens = usage && usage.maxTokens > 0 ? usage.maxTokens : 0;
+  const ratio = maxTokens > 0 ? Math.min(usedTokens / maxTokens, 1) : 0;
+  const percentage = ratio > 0 && ratio < 0.01 ? "<1" : String(Math.round(ratio * 100));
+  const label = usage
+    ? `上下文已使用 ${tokenFormatter.format(usedTokens)} / ${tokenFormatter.format(maxTokens)} 个 token（${percentage}%）`
+    : "上下文用量暂不可用";
+
+  return (
+    <span
+      className="flex h-8 w-8 shrink-0 items-center justify-center"
+      role="img"
+      aria-label={label}
+      title={label}
+    >
+      <svg className="h-4 w-4" viewBox="0 0 20 20" aria-hidden="true">
+        <circle
+          cx="10"
+          cy="10"
+          r={CONTEXT_RING_RADIUS}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+          className="text-zinc-200 dark:text-zinc-700"
+        />
+        {ratio > 0 && (
+          <circle
+            cx="10"
+            cy="10"
+            r={CONTEXT_RING_RADIUS}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeDasharray={CONTEXT_RING_CIRCUMFERENCE}
+            strokeDashoffset={CONTEXT_RING_CIRCUMFERENCE * (1 - ratio)}
+            transform="rotate(-90 10 10)"
+            className="text-zinc-700 transition-[stroke-dashoffset] dark:text-zinc-300"
+          />
+        )}
+      </svg>
+    </span>
+  );
+}
 
 interface PendingImage {
   id: string;
@@ -59,6 +108,7 @@ export function Composer({
   draftKey,
   threadId,
   projectId,
+  contextUsage,
   running,
   onSend,
   onInterrupt,
@@ -70,6 +120,7 @@ export function Composer({
   draftKey: string;
   threadId?: string;
   projectId?: string;
+  contextUsage?: ContextUsage | null;
   running: boolean;
   onSend: (
     text: string,
@@ -526,6 +577,7 @@ export function Composer({
             >
               <Sparkles className="h-4 w-4" />
             </button>
+            {threadId && <ContextUsageIndicator usage={contextUsage ?? null} />}
           </div>
 
           {running && onInterrupt ? (

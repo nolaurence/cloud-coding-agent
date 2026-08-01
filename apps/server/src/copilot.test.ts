@@ -185,6 +185,52 @@ test("keeps a request running across assistant tool turns until session.idle", a
   assert.equal(toolComplete?.kind === "tool.complete" ? toolComplete.activity.result : undefined, "updated src/index.ts");
 });
 
+test("tracks context usage in events, snapshots, and thread metadata", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(threadId);
+  session.emit(
+    sessionEvent("session.usage_info", {
+      currentTokens: 24_576,
+      tokenLimit: 128_000,
+      messagesLength: 12,
+    }),
+  );
+
+  const usage = { usedTokens: 24_576, maxTokens: 128_000 };
+  assert.deepEqual(
+    emitted.find((event) => event.kind === "context.usage"),
+    { kind: "context.usage", usage },
+  );
+  assert.deepEqual(store.getThread(threadId)?.contextUsage, usage);
+  const snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  assert.deepEqual(snapshot.contextUsage, usage);
+});
+
+test("restores context usage from stored thread metadata", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.contextUsage = { usedTokens: 8_192, maxTokens: 64_000 };
+  const manager = new CopilotManager(
+    () => new FakeClient(new FakeSession()) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  const snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  assert.deepEqual(snapshot.contextUsage, { usedTokens: 8_192, maxTokens: 64_000 });
+});
+
 test("generates a commit message in an isolated tool-free session", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);

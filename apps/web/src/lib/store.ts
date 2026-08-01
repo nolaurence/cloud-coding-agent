@@ -8,6 +8,7 @@ import type {
   CreatedInvite,
   CreatedThreadShare,
   ConnectorStatus,
+  ContextUsage,
   InstalledPlugin,
   MarketplacePlugin,
   ModelRef,
@@ -106,6 +107,7 @@ function rememberShareToken(username: string, token: string) {
 interface ThreadState {
   messages: ChatMessage[];
   activities: ToolActivity[];
+  contextUsage: ContextUsage | null;
   running: boolean;
   loaded: boolean;
   activeTurnId: string | null;
@@ -117,6 +119,7 @@ interface ThreadState {
 const emptyThread: ThreadState = {
   messages: [],
   activities: [],
+  contextUsage: null,
   running: false,
   loaded: false,
   activeTurnId: null,
@@ -239,6 +242,7 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         ...state,
         messages: event.messages,
         activities: event.activities,
+        contextUsage: event.contextUsage ?? null,
         running: event.running,
         loaded: true,
         activeTurnId: activeTurn.turnId,
@@ -329,6 +333,11 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         activities: state.activities.some((a) => a.id === event.activity.id)
           ? state.activities.map((a) => (a.id === event.activity.id ? event.activity : a))
           : [...state.activities, event.activity],
+      };
+    case "context.usage":
+      return {
+        ...state,
+        contextUsage: event.usage ?? null,
       };
     case "error":
       return {

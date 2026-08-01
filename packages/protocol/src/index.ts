@@ -179,6 +179,11 @@ export interface ThreadSharePreview {
   mode: ThreadShareMode;
 }
 
+export interface ContextUsage {
+  usedTokens: number;
+  maxTokens: number;
+}
+
 export interface ThreadMeta {
   id: string;
   projectId: string;
@@ -188,6 +193,7 @@ export interface ThreadMeta {
   createdAt: number;
   updatedAt: number;
   archived: boolean;
+  contextUsage?: ContextUsage;
   access?: ThreadAccess;
   shared?: boolean;
   messageAttachments?: Record<string, MessageAttachment[]>;
@@ -412,6 +418,7 @@ export type ThreadEvent =
       messages: ChatMessage[];
       activities: ToolActivity[];
       running: boolean;
+      contextUsage?: ContextUsage;
       live?: { text: string; reasoning: string; turnId: string; startedAt: number };
     }
   | { kind: "turn.start"; turnId: string }
@@ -422,6 +429,7 @@ export type ThreadEvent =
   | { kind: "assistant.message"; message: ChatMessage }
   | { kind: "tool.start"; activity: ToolActivity }
   | { kind: "tool.complete"; activity: ToolActivity }
+  | { kind: "context.usage"; usage?: ContextUsage }
   | { kind: "error"; message: string }
   | { kind: "title"; title: string };
 

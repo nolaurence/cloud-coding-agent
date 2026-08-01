@@ -5,6 +5,7 @@ import { isReasoningEffort, normalizeReasoningEfforts } from "@cca/protocol";
 import type {
   AppSettings,
   ChatMessage,
+  ContextUsage,
   MessageAttachment,
   ModelRef,
   ThreadEvent,
@@ -24,6 +25,7 @@ interface ThreadRuntime {
   attaching: Promise<CopilotSession> | null;
   messages: ChatMessage[];
   activities: ToolActivity[];
+  contextUsage: ContextUsage | undefined;
   running: boolean;
   currentTurnId: string | null;
   pendingAssistant: {
@@ -51,6 +53,7 @@ const MAX_GENERATED_COMMIT_MESSAGE_LENGTH = 2_000;
 
 type ToolStartData = Extract<SessionEvent, { type: "tool.execution_start" }>["data"];
 type ToolCompleteData = Extract<SessionEvent, { type: "tool.execution_complete" }>["data"];
+type UsageInfoData = Extract<SessionEvent, { type: "session.usage_info" }>["data"];
 type CopilotSetModelOptions = NonNullable<Parameters<CopilotSession["setModel"]>[1]>;
 type CopilotReasoningEffort = NonNullable<CopilotSetModelOptions["reasoningEffort"]>;
 
@@ -73,6 +76,29 @@ function toolResult(data: ToolCompleteData): string | undefined {
 function activityName(data: ToolStartData): string {
   const toolName = data.mcpToolName ?? data.toolName;
   return data.mcpServerName ? `${data.mcpServerName}/${toolName}` : toolName;
+}
+
+function normalizeContextUsage(value: ContextUsage | undefined): ContextUsage | undefined {
+  if (
+    !value ||
+    !Number.isFinite(value.usedTokens) ||
+    !Number.isFinite(value.maxTokens) ||
+    value.maxTokens <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    usedTokens: Math.max(0, Math.round(value.usedTokens)),
+    maxTokens: Math.round(value.maxTokens),
+  };
+}
+
+function contextUsageFromData(data: UsageInfoData): ContextUsage | undefined {
+  return normalizeContextUsage({ usedTokens: data.currentTokens, maxTokens: data.tokenLimit });
+}
+
+function sameContextUsage(left: ContextUsage | undefined, right: ContextUsage | undefined) {
+  return left?.usedTokens === right?.usedTokens && left?.maxTokens === right?.maxTokens;
 }
 
 export function normalizeGeneratedCommitMessage(value: string): string {
@@ -147,6 +173,7 @@ export class CopilotManager {
         attaching: null,
         messages: [],
         activities: [],
+        contextUsage: normalizeContextUsage(store.getThread(threadId)?.contextUsage),
         running: false,
         currentTurnId: null,
         pendingAssistant: null,
@@ -163,6 +190,18 @@ export class CopilotManager {
 
   private emit(threadId: string, event: ThreadEvent) {
     for (const sink of this.sinks) sink(threadId, event);
+  }
+
+  private updateContextUsage(
+    rt: ThreadRuntime,
+    usage: ContextUsage | undefined,
+    emitEvent = true,
+  ) {
+    if (sameContextUsage(rt.contextUsage, usage)) return;
+    rt.contextUsage = usage;
+    const thread = store.getThread(rt.threadId);
+    if (thread) store.upsertThread({ ...thread, contextUsage: usage });
+    if (emitEvent) this.emit(rt.threadId, { kind: "context.usage", usage });
   }
 
   private ensurePendingAssistant(
@@ -546,6 +585,12 @@ export class CopilotManager {
         this.emit(threadId, { kind: "tool.complete", activity });
         break;
       }
+      case "session.usage_info": {
+        if (event.agentId) break;
+        const usage = contextUsageFromData(event.data);
+        if (usage) this.updateContextUsage(rt, usage);
+        break;
+      }
       case "session.idle": {
         if (event.agentId) break;
         this.failRunningTools(rt, event.data.aborted ? "工具执行已中止" : "工具执行未正常结束", ts);
@@ -718,6 +763,12 @@ export class CopilotManager {
             if (!existing) rt.activities.push(activity);
             break;
           }
+          case "session.usage_info": {
+            if (event.agentId) break;
+            const usage = contextUsageFromData(event.data);
+            if (usage) this.updateContextUsage(rt, usage, false);
+            break;
+          }
           default:
             break;
         }
@@ -755,6 +806,7 @@ export class CopilotManager {
       messages: rt.messages,
       activities: rt.activities,
       running: rt.running,
+      contextUsage: rt.contextUsage,
       live: rt.pendingAssistant
         ? {
             text: rt.pendingAssistant.text,
@@ -861,8 +913,13 @@ export class CopilotManager {
     const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
 
     const currentProviderId = currentModel?.providerId ?? "copilot";
+    const modelChanged =
+      currentProviderId !== nextModel.providerId || currentModel?.modelId !== nextModel.modelId;
     if (currentProviderId === nextModel.providerId) {
-      if (!session) return;
+      if (!session) {
+        if (modelChanged) this.updateContextUsage(rt, undefined);
+        return;
+      }
       await session.setModel(
         nextModel.modelId,
         nextModel.reasoningEffort
@@ -872,6 +929,7 @@ export class CopilotManager {
             }
           : undefined,
       );
+      if (modelChanged) this.updateContextUsage(rt, undefined);
       return;
     }
 
