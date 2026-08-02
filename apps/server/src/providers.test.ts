@@ -105,6 +105,34 @@ test("discoverProviderModels preserves model reasoning capabilities", async () =
   ]);
 });
 
+test("discoverProviderModels preserves context window metadata", async () => {
+  const models = await discoverProviderModels(
+    { type: "openai", baseUrl: "https://example.com/v1" },
+    async () =>
+      new Response(
+        JSON.stringify({
+          data: [
+            { id: "direct", context_window: 258_000 },
+            { id: "camel", maxContextWindowTokens: 64_000 },
+            {
+              id: "nested",
+              capabilities: { limits: { max_context_window_tokens: "131072" } },
+            },
+            { id: "invalid", context_length: -1 },
+          ],
+        }),
+        { status: 200 },
+      ),
+  );
+
+  assert.deepEqual(models, [
+    { id: "camel", contextWindowTokens: 64_000 },
+    { id: "direct", contextWindowTokens: 258_000 },
+    { id: "invalid" },
+    { id: "nested", contextWindowTokens: 131_072 },
+  ]);
+});
+
 test("discoverProviderModels reports service errors without leaking the API key", async () => {
   const apiKey = "top-secret-key";
   await assert.rejects(

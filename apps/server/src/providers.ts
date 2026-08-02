@@ -1,4 +1,8 @@
-import { isReasoningEffort, normalizeReasoningEfforts } from "@cca/protocol";
+import {
+  isReasoningEffort,
+  normalizeContextWindowTokens,
+  normalizeReasoningEfforts,
+} from "@cca/protocol";
 import type { ModelEntry, ProviderModelDiscoveryConfig, ReasoningEffort } from "@cca/protocol";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -100,9 +104,20 @@ function firstReasoningEffort(...values: unknown[]): ReasoningEffort | undefined
   return values.find(isReasoningEffort) as ReasoningEffort | undefined;
 }
 
-function parseReasoningMetadata(candidate: Record<string, unknown>): Partial<ModelEntry> {
+function firstContextWindowTokens(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const candidate =
+      typeof value === "string" && value.trim() ? Number(value) : value;
+    const tokens = normalizeContextWindowTokens(candidate);
+    if (tokens !== undefined) return tokens;
+  }
+  return undefined;
+}
+
+function parseModelMetadata(candidate: Record<string, unknown>): Partial<ModelEntry> {
   const capabilities = isRecord(candidate.capabilities) ? candidate.capabilities : undefined;
   const supports = capabilities && isRecord(capabilities.supports) ? capabilities.supports : undefined;
+  const limits = capabilities && isRecord(capabilities.limits) ? capabilities.limits : undefined;
   const rawEfforts = firstArray(
     candidate.supportedReasoningEfforts,
     candidate.supported_reasoning_efforts,
@@ -138,8 +153,32 @@ function parseReasoningMetadata(candidate: Record<string, unknown>): Partial<Mod
     (!hasUsableEffortMetadata || normalizedEfforts.includes(defaultReasoningEffort))
       ? defaultReasoningEffort
       : undefined;
+  const contextWindowTokens = firstContextWindowTokens(
+    candidate.contextWindowTokens,
+    candidate.context_window,
+    candidate.contextWindow,
+    candidate.context_length,
+    candidate.contextLength,
+    candidate.max_context_window_tokens,
+    candidate.maxContextWindowTokens,
+    capabilities?.contextWindowTokens,
+    capabilities?.context_window,
+    capabilities?.contextWindow,
+    capabilities?.context_length,
+    capabilities?.contextLength,
+    capabilities?.max_context_window_tokens,
+    capabilities?.maxContextWindowTokens,
+    limits?.contextWindowTokens,
+    limits?.context_window,
+    limits?.contextWindow,
+    limits?.context_length,
+    limits?.contextLength,
+    limits?.max_context_window_tokens,
+    limits?.maxContextWindowTokens,
+  );
 
   return {
+    ...(contextWindowTokens ? { contextWindowTokens } : {}),
     // A discovered `true` only confirms reasoning exists; it does not identify valid levels.
     ...(reasoningEffort === false ? { reasoningEffort: false } : {}),
     ...(hasUsableEffortMetadata ? { supportedReasoningEfforts: normalizedEfforts } : {}),
@@ -179,7 +218,7 @@ function parseModels(payload: unknown): ModelEntry[] {
     models.set(id, {
       id,
       ...(name ? { name } : {}),
-      ...(isRecord(candidate) ? parseReasoningMetadata(candidate) : {}),
+      ...(isRecord(candidate) ? parseModelMetadata(candidate) : {}),
     });
   }
 

@@ -93,6 +93,17 @@ export function ProvidersSettings() {
     } : current);
   };
 
+  const updateModelContextWindow = (index: number, value: string) => {
+    setEditing((current) => current ? {
+      ...current,
+      models: current.models.map((model, modelIndex) =>
+        modelIndex === index
+          ? { ...model, contextWindowTokens: value === "" ? undefined : Number(value) }
+          : model,
+      ),
+    } : current);
+  };
+
   const addModel = () => {
     setEditing((current) => current ? {
       ...current,
@@ -114,10 +125,21 @@ export function ProvidersSettings() {
       return;
     }
     const populatedModels = editing.models.filter(
-      (model) => model.id.trim() || model.name?.trim(),
+      (model) =>
+        model.id.trim() || model.name?.trim() || model.contextWindowTokens !== undefined,
     );
     if (populatedModels.some((model) => !model.id.trim())) {
       setError("请填写每个模型的模型 ID");
+      return;
+    }
+    if (
+      populatedModels.some(
+        (model) =>
+          model.contextWindowTokens !== undefined &&
+          (!Number.isSafeInteger(model.contextWindowTokens) || model.contextWindowTokens <= 0),
+      )
+    ) {
+      setError("上下文 Token 必须是正整数");
       return;
     }
     const models: ModelEntry[] = populatedModels.map((model) => ({
@@ -192,7 +214,12 @@ export function ProvidersSettings() {
         ))}
       </div>
 
-      <FormDialog open={editing !== null} onClose={() => setEditing(null)} title={editing?.name ? "编辑模型服务" : "添加模型服务"}>
+      <FormDialog
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        title={editing?.name ? "编辑模型服务" : "添加模型服务"}
+        wide
+      >
         {editing && (
           <>
             <LabeledField label="名称">
@@ -274,14 +301,15 @@ export function ProvidersSettings() {
                   </Button>
                 </div>
               </div>
-              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.75rem] gap-2 px-0.5 pb-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(7rem,0.65fr)_1.75rem] gap-2 px-0.5 pb-1 text-[11px] text-zinc-500 dark:text-zinc-400">
                 <span>模型 ID</span>
                 <span>显示名称</span>
+                <span>上下文 Token</span>
                 <span className="sr-only">操作</span>
               </div>
               <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
                 {editing.models.map((model, index) => (
-                  <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.75rem] items-center gap-2">
+                  <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(7rem,0.65fr)_1.75rem] items-center gap-2">
                     <Input
                       className="font-mono"
                       value={model.id}
@@ -294,6 +322,16 @@ export function ProvidersSettings() {
                       onChange={(event) => updateModel(index, "name", event.target.value)}
                       placeholder="可选"
                       aria-label={`第 ${index + 1} 个模型显示名称`}
+                    />
+                    <Input
+                      type="number"
+                      min={1}
+                      step={1}
+                      inputMode="numeric"
+                      value={model.contextWindowTokens ?? ""}
+                      onChange={(event) => updateModelContextWindow(index, event.target.value)}
+                      placeholder="258000"
+                      aria-label={`第 ${index + 1} 个模型上下文 Token`}
                     />
                     <Button
                       type="button"
@@ -314,6 +352,9 @@ export function ProvidersSettings() {
                   </div>
                 )}
               </div>
+              <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                留空时优先使用模型服务返回的上限或内置默认值。
+              </p>
             </div>
             <div aria-live="polite">
               {error && <div className="mb-2 text-xs text-red-500">{error}</div>}

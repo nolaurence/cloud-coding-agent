@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { CopilotClient } from "@github/copilot-sdk";
-import type { CopilotSession, SessionEvent } from "@github/copilot-sdk";
-import { isReasoningEffort, normalizeReasoningEfforts } from "@cca/protocol";
+import type {
+  CopilotSession,
+  ModelCapabilitiesOverride,
+  SessionEvent,
+} from "@github/copilot-sdk";
+import {
+  isReasoningEffort,
+  normalizeReasoningEfforts,
+  resolveModelContextWindowTokens,
+} from "@cca/protocol";
 import type {
   AppSettings,
   ChatMessage,
@@ -55,6 +63,7 @@ const DETACH_IDLE_MS = 10 * 60 * 1000;
 const MAX_TOOL_RESULT_CHARS = 16_000;
 const COMMIT_MESSAGE_TIMEOUT_MS = 60_000;
 const MAX_GENERATED_COMMIT_MESSAGE_LENGTH = 2_000;
+const MAX_CONTEXT_OUTPUT_RESERVE_TOKENS = 16_000;
 
 type ToolStartData = Extract<SessionEvent, { type: "tool.execution_start" }>["data"];
 type ToolCompleteData = Extract<SessionEvent, { type: "tool.execution_complete" }>["data"];
@@ -117,23 +126,69 @@ function copySubagent(subagent: SubagentActivity): SubagentActivity {
   };
 }
 
-function normalizeContextUsage(value: ContextUsage | undefined): ContextUsage | undefined {
+function normalizeContextUsage(
+  value: ContextUsage | undefined,
+  maxTokensOverride?: number,
+): ContextUsage | undefined {
+  const maxTokens = maxTokensOverride ?? value?.maxTokens;
   if (
     !value ||
     !Number.isFinite(value.usedTokens) ||
-    !Number.isFinite(value.maxTokens) ||
-    value.maxTokens <= 0
+    !Number.isFinite(maxTokens) ||
+    !maxTokens ||
+    maxTokens <= 0
   ) {
     return undefined;
   }
   return {
     usedTokens: Math.max(0, Math.round(value.usedTokens)),
-    maxTokens: Math.round(value.maxTokens),
+    maxTokens: Math.round(maxTokens),
   };
 }
 
 function contextUsageFromData(data: UsageInfoData): ContextUsage | undefined {
   return normalizeContextUsage({ usedTokens: data.currentTokens, maxTokens: data.tokenLimit });
+}
+
+function activeModel(thread: ThreadMeta | undefined, settings: AppSettings): ModelRef | undefined {
+  return thread?.model ?? settings.defaultModel;
+}
+
+function contextWindowTokensForThread(
+  thread: ThreadMeta | undefined,
+  settings: AppSettings,
+): number | undefined {
+  return resolveModelContextWindowTokens(settings, activeModel(thread, settings));
+}
+
+function modelContextLimits(
+  settings: AppSettings,
+  model: ModelRef | undefined,
+): { contextWindowTokens: number; promptTokens: number } | undefined {
+  const contextWindowTokens = resolveModelContextWindowTokens(settings, model);
+  if (!contextWindowTokens) return undefined;
+  const outputReserve = Math.min(
+    MAX_CONTEXT_OUTPUT_RESERVE_TOKENS,
+    Math.max(1, Math.floor(contextWindowTokens * 0.1)),
+  );
+  return {
+    contextWindowTokens,
+    promptTokens: Math.max(1, contextWindowTokens - outputReserve),
+  };
+}
+
+function modelCapabilitiesFor(
+  settings: AppSettings,
+  model: ModelRef | undefined,
+): ModelCapabilitiesOverride | undefined {
+  const limits = modelContextLimits(settings, model);
+  if (!limits) return undefined;
+  return {
+    limits: {
+      max_context_window_tokens: limits.contextWindowTokens,
+      max_prompt_tokens: limits.promptTokens,
+    },
+  };
 }
 
 function sameContextUsage(left: ContextUsage | undefined, right: ContextUsage | undefined) {
@@ -206,6 +261,7 @@ export class CopilotManager {
   private runtime(threadId: string): ThreadRuntime {
     let rt = this.threads.get(threadId);
     if (!rt) {
+      const thread = store.getThread(threadId);
       rt = {
         threadId,
         session: null,
@@ -213,7 +269,10 @@ export class CopilotManager {
         messages: [],
         activities: [],
         subagents: [],
-        contextUsage: normalizeContextUsage(store.getThread(threadId)?.contextUsage),
+        contextUsage: normalizeContextUsage(
+          thread?.contextUsage,
+          contextWindowTokensForThread(thread, store.settings),
+        ),
         running: false,
         compacting: false,
         currentTurnId: null,
@@ -237,12 +296,18 @@ export class CopilotManager {
     rt: ThreadRuntime,
     usage: ContextUsage | undefined,
     emitEvent = true,
-  ) {
-    if (sameContextUsage(rt.contextUsage, usage)) return;
-    rt.contextUsage = usage;
+    settings: AppSettings = store.settings,
+  ): ContextUsage | undefined {
     const thread = store.getThread(rt.threadId);
-    if (thread) store.upsertThread({ ...thread, contextUsage: usage });
-    if (emitEvent) this.emit(rt.threadId, { kind: "context.usage", usage });
+    const normalized = normalizeContextUsage(
+      usage,
+      contextWindowTokensForThread(thread, settings),
+    );
+    if (sameContextUsage(rt.contextUsage, normalized)) return normalized;
+    rt.contextUsage = normalized;
+    if (thread) store.upsertThread({ ...thread, contextUsage: normalized });
+    if (emitEvent) this.emit(rt.threadId, { kind: "context.usage", usage: normalized });
+    return normalized;
   }
 
   private ensurePendingAssistant(
@@ -460,6 +525,7 @@ export class CopilotManager {
     const providerConfig = modelRef
       ? settings.providers.find((p) => p.id === modelRef.providerId)
       : undefined;
+    const contextLimits = modelContextLimits(settings, modelRef);
 
     const project = store.projects.find((candidate) => candidate.id === thread.projectId);
     if (!project) throw new Error("会话关联的工作区不存在");
@@ -522,11 +588,15 @@ export class CopilotManager {
       if (modelRef.reasoningEffort) {
         config.reasoningEffort = modelRef.reasoningEffort;
       }
+      if (contextLimits) {
+        config.modelCapabilities = modelCapabilitiesFor(settings, modelRef);
+      }
       if (providerConfig) {
         config.provider = {
           type: providerConfig.type,
           baseUrl: providerConfig.baseUrl.trim(),
           apiKey: providerConfig.apiKey?.trim() || undefined,
+          ...(contextLimits ? { maxPromptTokens: contextLimits.promptTokens } : {}),
           ...(providerConfig.type !== "anthropic"
             ? { wireApi: providerConfig.wireApi ?? "completions" }
             : {}),
@@ -1454,13 +1524,13 @@ export class CopilotManager {
       const result = await session.rpc.history.compact();
       if (!result.success) throw new Error("上下文压缩失败");
 
-      const usage = result.contextWindow
+      const rawUsage = result.contextWindow
         ? normalizeContextUsage({
             usedTokens: result.contextWindow.currentTokens,
             maxTokens: result.contextWindow.tokenLimit,
           })
         : undefined;
-      if (usage) this.updateContextUsage(rt, usage);
+      const usage = rawUsage ? this.updateContextUsage(rt, rawUsage) : undefined;
       return {
         tokensRemoved: Math.max(0, Math.round(result.tokensRemoved)),
         messagesRemoved: Math.max(0, Math.round(result.messagesRemoved)),
@@ -1491,14 +1561,19 @@ export class CopilotManager {
         if (modelChanged) this.updateContextUsage(rt, undefined);
         return;
       }
-      await session.setModel(
-        nextModel.modelId,
-        nextModel.reasoningEffort
+      const modelCapabilities = modelCapabilitiesFor(store.settings, nextModel);
+      const options: CopilotSetModelOptions = {
+        ...(nextModel.reasoningEffort
           ? {
               // SDK 1.0.8 omits "none" and "max", but the bundled CLI RPC accepts both.
               reasoningEffort: nextModel.reasoningEffort as CopilotReasoningEffort,
             }
-          : undefined,
+          : {}),
+        ...(modelCapabilities ? { modelCapabilities } : {}),
+      };
+      await session.setModel(
+        nextModel.modelId,
+        Object.keys(options).length > 0 ? options : undefined,
       );
       if (modelChanged) this.updateContextUsage(rt, undefined);
       return;
@@ -1643,10 +1718,31 @@ export class CopilotManager {
     return [...this.threads.values()].filter((t) => t.running).map((t) => t.threadId);
   }
 
-  async reconfigureOpenSessions() {
+  async reconfigureOpenSessions(
+    settings: AppSettings = store.settings,
+    previousSettings: AppSettings = store.settings,
+  ) {
     if ([...this.threads.values()].some((rt) => rt.running)) {
       throw new Error("当前仍有任务运行,请停止或等待完成后再修改模型、MCP 或技能配置");
     }
+
+    for (const thread of [...store.threads]) {
+      if (!thread.contextUsage) continue;
+      const nextLimit = contextWindowTokensForThread(thread, settings);
+      const previousLimit = contextWindowTokensForThread(thread, previousSettings);
+      const usage = nextLimit
+        ? normalizeContextUsage(thread.contextUsage, nextLimit)
+        : previousLimit
+          ? undefined
+          : normalizeContextUsage(thread.contextUsage);
+      const rt = this.threads.get(thread.id);
+      if (rt) {
+        this.updateContextUsage(rt, usage, true, settings);
+      } else if (!sameContextUsage(thread.contextUsage, usage)) {
+        store.upsertThread({ ...thread, contextUsage: usage });
+      }
+    }
+
     for (const rt of this.threads.values()) {
       const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
       rt.session = null;

@@ -17,7 +17,12 @@ import { store } from "./store.js";
 import { CopilotManager } from "./copilot.js";
 import { searchFiles } from "./files.js";
 import { deleteSkill, listSkills, saveSkill } from "./skills.js";
-import { flattenModels, isReasoningEffort, normalizeModelRefReasoning } from "@cca/protocol";
+import {
+  flattenModels,
+  isReasoningEffort,
+  normalizeContextWindowTokens,
+  normalizeModelRefReasoning,
+} from "@cca/protocol";
 import { verifyToken, type TokenPayload } from "./auth.js";
 import { getThreadAccess } from "./threadAccess.js";
 import { discoverProviderModels } from "./providers.js";
@@ -315,6 +320,17 @@ export class Hub {
     return [...configuredModels, ...copilotModels];
   }
 
+  private validateModelContextWindows(settings: AppSettings): void {
+    for (const provider of settings.providers) {
+      for (const model of provider.models) {
+        const value: unknown = model.contextWindowTokens;
+        if (value !== undefined && normalizeContextWindowTokens(value) === undefined) {
+          throw new Error(`${model.name ?? (model.id || "未命名模型")} 的上下文 Token 必须是正整数`);
+        }
+      }
+    }
+  }
+
   private async validateReasoningEffort(
     model: ModelRef,
     settings: AppSettings = store.settings,
@@ -608,6 +624,7 @@ export class Hub {
           const modelProvidersChanged =
             JSON.stringify(prev.providers) !== JSON.stringify(msg.settings.providers);
           let nextSettings = msg.settings;
+          this.validateModelContextWindows(nextSettings);
           let modelOptions: ModelOption[] | undefined;
           if (nextSettings.defaultModel) {
             modelOptions = await this.listModelOptions(nextSettings);
@@ -648,13 +665,14 @@ export class Hub {
             JSON.stringify(prev.disabledSkills) !== JSON.stringify(nextSettings.disabledSkills) ||
             JSON.stringify(prev.skillDirectories) !== JSON.stringify(nextSettings.skillDirectories);
           if (providerChanged) {
-            await this.manager.reconfigureOpenSessions();
+            await this.manager.reconfigureOpenSessions(nextSettings, prev);
           }
           store.saveSettings(nextSettings);
           await this.connectors.applySettings(nextSettings.connectors);
           if (modelProvidersChanged) {
             modelOptions ??= await this.listModelOptions(nextSettings);
-            if (store.normalizeStoredReasoningEfforts(modelOptions)) this.broadcastShell();
+            store.normalizeStoredReasoningEfforts(modelOptions);
+            this.broadcastShell();
           }
           this.broadcastSettings();
           this.broadcastSkills();

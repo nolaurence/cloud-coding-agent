@@ -3,10 +3,13 @@ import test from "node:test";
 import {
   flattenModels,
   normalizeConfiguredModelRef,
+  normalizeContextWindowTokens,
   normalizeModelRefReasoning,
+  resolveModelContextWindowTokens,
 } from "@cca/protocol";
 import type { AppSettings, ModelOption } from "@cca/protocol";
 import { CopilotManager } from "./copilot.js";
+import { store } from "./store.js";
 
 test("flattenModels exposes configured reasoning capabilities", () => {
   const models = flattenModels({
@@ -129,6 +132,53 @@ test("flattenModels uses model-specific fallbacks for existing ID-only provider 
   assert.equal(models[2]?.supportedReasoningEfforts, undefined);
 });
 
+test("resolves configured context windows before known model defaults", () => {
+  const settings: AppSettings = {
+    providers: [
+      {
+        id: "custom",
+        name: "Custom",
+        type: "openai",
+        baseUrl: "https://example.com/v1",
+        models: [
+          { id: "gpt-5.6-sol", contextWindowTokens: 300_000 },
+          { id: "unknown" },
+        ],
+      },
+    ],
+    connectors: [],
+    mcpServers: [],
+    skillDirectories: [],
+    disabledSkills: [],
+  };
+
+  assert.equal(
+    resolveModelContextWindowTokens(settings, {
+      providerId: "custom",
+      modelId: "gpt-5.6-sol",
+    }),
+    300_000,
+  );
+  assert.equal(
+    resolveModelContextWindowTokens(
+      { ...settings, providers: [] },
+      { providerId: "copilot", modelId: "GPT-5.6-SOL" },
+    ),
+    258_000,
+  );
+  assert.equal(
+    resolveModelContextWindowTokens(settings, {
+      providerId: "custom",
+      modelId: "unknown",
+    }),
+    undefined,
+  );
+  assert.equal(normalizeContextWindowTokens(258_000), 258_000);
+  assert.equal(normalizeContextWindowTokens("258000"), undefined);
+  assert.equal(normalizeContextWindowTokens(258_000.5), undefined);
+  assert.equal(normalizeContextWindowTokens(0), undefined);
+});
+
 test("persisted efforts are only removed when exact capabilities exclude them", () => {
   const settings: AppSettings = {
     providers: [
@@ -214,7 +264,10 @@ test("persisted efforts are only removed when exact capabilities exclude them", 
 function seedRuntime(
   manager: CopilotManager,
   session: {
-    setModel: (model: string, options?: { reasoningEffort?: string }) => Promise<void>;
+    setModel: (
+      model: string,
+      options?: { reasoningEffort?: string; modelCapabilities?: unknown },
+    ) => Promise<void>;
     disconnect: () => Promise<void>;
   },
   running = false,
@@ -256,6 +309,57 @@ test("setThreadModel hot-switches within a provider without disconnecting", asyn
 
   assert.deepEqual(calls, [["new", { reasoningEffort: "max" }]]);
   assert.equal(disconnects, 0);
+});
+
+test("setThreadModel applies configured context limits during a hot switch", async () => {
+  const previousSettings = store.settings;
+  store.settings = {
+    providers: [
+      {
+        id: "provider",
+        name: "Provider",
+        type: "openai",
+        baseUrl: "https://example.com/v1",
+        models: [{ id: "new", contextWindowTokens: 300_000 }],
+      },
+    ],
+    connectors: [],
+    mcpServers: [],
+    skillDirectories: [],
+    disabledSkills: [],
+  };
+  try {
+    const calls: unknown[] = [];
+    const manager = new CopilotManager();
+    seedRuntime(manager, {
+      setModel: async (...args) => {
+        calls.push(args);
+      },
+      disconnect: async () => {},
+    });
+
+    await manager.setThreadModel(
+      "thread",
+      { providerId: "provider", modelId: "old" },
+      { providerId: "provider", modelId: "new" },
+    );
+
+    assert.deepEqual(calls, [
+      [
+        "new",
+        {
+          modelCapabilities: {
+            limits: {
+              max_context_window_tokens: 300_000,
+              max_prompt_tokens: 284_000,
+            },
+          },
+        },
+      ],
+    ]);
+  } finally {
+    store.settings = previousSettings;
+  }
 });
 
 test("setThreadModel rejects cross-provider switch on an attached session", async () => {

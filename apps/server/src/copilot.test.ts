@@ -450,9 +450,107 @@ test("tracks context usage in events, snapshots, and thread metadata", async (t)
   assert.deepEqual(snapshot.contextUsage, usage);
 });
 
+test("uses configured context limits for the session and usage display", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.model = { providerId: "provider-1", modelId: "gpt-5.6-sol" };
+  store.settings.providers = [
+    {
+      id: "provider-1",
+      name: "OpenAI compatible",
+      type: "openai",
+      baseUrl: "https://example.com/v1",
+      models: [{ id: "gpt-5.6-sol", contextWindowTokens: 300_000 }],
+    },
+  ];
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(threadId);
+  const config = client.createdConfigs[0] as {
+    modelCapabilities?: { limits?: Record<string, number> };
+    provider?: { maxPromptTokens?: number };
+  };
+  assert.deepEqual(config.modelCapabilities, {
+    limits: {
+      max_context_window_tokens: 300_000,
+      max_prompt_tokens: 284_000,
+    },
+  });
+  assert.equal(config.provider?.maxPromptTokens, 284_000);
+
+  session.emit(
+    sessionEvent("session.usage_info", {
+      currentTokens: 24_576,
+      tokenLimit: 128_000,
+      messagesLength: 12,
+    }),
+  );
+  assert.deepEqual(store.getThread(threadId)?.contextUsage, {
+    usedTokens: 24_576,
+    maxTokens: 300_000,
+  });
+});
+
+test("defaults gpt-5.6-sol to 258K when the runtime reports 128K", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.model = { providerId: "provider-1", modelId: "gpt-5.6-sol" };
+  store.settings.providers = [
+    {
+      id: "provider-1",
+      name: "OpenAI compatible",
+      type: "openai",
+      baseUrl: "https://example.com/v1",
+      models: [{ id: "gpt-5.6-sol" }],
+    },
+  ];
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(threadId);
+  const config = client.createdConfigs[0] as {
+    modelCapabilities?: { limits?: Record<string, number> };
+    provider?: { maxPromptTokens?: number };
+  };
+  assert.deepEqual(config.modelCapabilities, {
+    limits: {
+      max_context_window_tokens: 258_000,
+      max_prompt_tokens: 242_000,
+    },
+  });
+  assert.equal(config.provider?.maxPromptTokens, 242_000);
+
+  session.emit(
+    sessionEvent("session.usage_info", {
+      currentTokens: 24_576,
+      tokenLimit: 128_000,
+      messagesLength: 12,
+    }),
+  );
+  assert.deepEqual(store.getThread(threadId)?.contextUsage, {
+    usedTokens: 24_576,
+    maxTokens: 258_000,
+  });
+});
+
 test("manually compacts context and updates usage", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
+  store.threads[0]!.model = { providerId: "provider-1", modelId: "gpt-5.6-sol" };
+  store.settings.providers = [
+    {
+      id: "provider-1",
+      name: "OpenAI compatible",
+      type: "openai",
+      baseUrl: "https://example.com/v1",
+      models: [{ id: "gpt-5.6-sol" }],
+    },
+  ];
   const session = new FakeSession();
   const client = new FakeClient(session);
   const manager = new CopilotManager(() => client as unknown as CopilotClient);
@@ -466,7 +564,7 @@ test("manually compacts context and updates usage", async (t) => {
   assert.deepEqual(result, {
     tokensRemoved: 18_000,
     messagesRemoved: 8,
-    contextUsage: { usedTokens: 12_000, maxTokens: 128_000 },
+    contextUsage: { usedTokens: 12_000, maxTokens: 258_000 },
   });
   assert.deepEqual(store.getThread(threadId)?.contextUsage, result.contextUsage);
   assert.deepEqual(
@@ -502,6 +600,86 @@ test("restores context usage from stored thread metadata", async (t) => {
   assert.equal(snapshot.kind, "snapshot");
   if (snapshot.kind !== "snapshot") return;
   assert.deepEqual(snapshot.contextUsage, { usedTokens: 8_192, maxTokens: 64_000 });
+});
+
+test("normalizes restored 128K metadata and history for gpt-5.6-sol", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId, Date.now() - 10_000);
+  store.threads[0]!.model = { providerId: "provider-1", modelId: "gpt-5.6-sol" };
+  store.threads[0]!.contextUsage = { usedTokens: 8_192, maxTokens: 128_000 };
+  store.settings.providers = [
+    {
+      id: "provider-1",
+      name: "OpenAI compatible",
+      type: "openai",
+      baseUrl: "https://example.com/v1",
+      models: [{ id: "gpt-5.6-sol" }],
+    },
+  ];
+  const history = [
+    sessionEvent("session.usage_info", {
+      currentTokens: 12_345,
+      tokenLimit: 128_000,
+      messagesLength: 6,
+    }),
+  ];
+  const manager = new CopilotManager(
+    () => new FakeClient(new FakeSession(history)) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  const snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  assert.deepEqual(snapshot.contextUsage, { usedTokens: 12_345, maxTokens: 258_000 });
+  assert.deepEqual(store.getThread(threadId)?.contextUsage, snapshot.contextUsage);
+});
+
+test("updates open and stored usage when context settings change", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.model = { providerId: "provider-1", modelId: "custom-model" };
+  store.threads[0]!.contextUsage = { usedTokens: 8_192, maxTokens: 128_000 };
+  const previousSettings: AppSettings = {
+    ...store.settings,
+    providers: [
+      {
+        id: "provider-1",
+        name: "OpenAI compatible",
+        type: "openai",
+        baseUrl: "https://example.com/v1",
+        models: [{ id: "custom-model" }],
+      },
+    ],
+  };
+  store.settings = previousSettings;
+  const nextSettings: AppSettings = {
+    ...previousSettings,
+    providers: [
+      {
+        ...previousSettings.providers[0]!,
+        models: [{ id: "custom-model", contextWindowTokens: 300_000 }],
+      },
+    ],
+  };
+  const session = new FakeSession();
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(threadId);
+  await manager.reconfigureOpenSessions(nextSettings, previousSettings);
+
+  const usage = { usedTokens: 8_192, maxTokens: 300_000 };
+  assert.deepEqual(store.getThread(threadId)?.contextUsage, usage);
+  assert.deepEqual(
+    emitted.find((event) => event.kind === "context.usage"),
+    { kind: "context.usage", usage },
+  );
+  assert.equal(session.disconnectCalls, 1);
 });
 
 test("generates a commit message in an isolated tool-free session", async (t) => {

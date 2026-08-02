@@ -35,9 +35,20 @@ const KNOWN_MODEL_REASONING_EFFORTS: Readonly<Record<string, readonly ReasoningE
   "k3-256k": ["low", "high", "max"],
 };
 
+const KNOWN_MODEL_CONTEXT_WINDOW_TOKENS: Readonly<Record<string, number>> = {
+  "gpt-5.6-sol": 258_000,
+};
+
+export function normalizeContextWindowTokens(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
 export interface ModelEntry {
   id: string;
   name?: string;
+  contextWindowTokens?: number;
   reasoningEffort?: boolean;
   supportedReasoningEfforts?: ReasoningEffort[];
   defaultReasoningEffort?: ReasoningEffort;
@@ -115,6 +126,20 @@ export interface ModelRef {
   providerId: string;
   modelId: string;
   reasoningEffort?: ReasoningEffort;
+}
+
+export function resolveModelContextWindowTokens(
+  settings: AppSettings,
+  model: ModelRef | undefined,
+): number | undefined {
+  if (!model) return undefined;
+  const configured = settings.providers
+    .find((provider) => provider.id === model.providerId)
+    ?.models.find((entry) => entry.id === model.modelId)?.contextWindowTokens;
+  return (
+    normalizeContextWindowTokens(configured) ??
+    KNOWN_MODEL_CONTEXT_WINDOW_TOKENS[model.modelId.trim().toLowerCase()]
+  );
 }
 
 export interface ModelOption {
