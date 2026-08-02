@@ -1103,6 +1103,66 @@ test("records the current collaborator as the message and attachment author", as
   assert.equal(store.getThread(threadId)?.messageAttachments?.[event.id]?.[0]?.ownerId, "collaborator");
 });
 
+test("does not detach an active turn when all subscribers disconnect", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(() => new FakeClient(session) as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(threadId, "admin");
+  await manager.sendMessage(threadId, "继续执行长任务", undefined, "admin");
+  manager.unsubscribe(threadId);
+  const runtime = (
+    manager as unknown as {
+      threads: Map<string, { detachTimer: NodeJS.Timeout | null }>;
+      detach: (id: string) => Promise<void>;
+    }
+  ).threads.get(threadId);
+  await (
+    manager as unknown as { detach: (id: string) => Promise<void> }
+  ).detach(threadId);
+
+  assert.equal(session.disconnectCalls, 0);
+  assert.equal(manager.isRunning(threadId), true);
+  assert.equal(runtime?.detachTimer, null);
+
+  const snapshot = await manager.subscribe(threadId, "admin");
+  assert.equal(snapshot.kind === "snapshot" ? snapshot.running : false, true);
+  manager.unsubscribe(threadId);
+
+  session.emit(sessionEvent("session.idle", { aborted: false }));
+  await (manager as unknown as { detach: (id: string) => Promise<void> }).detach(threadId);
+  assert.equal(session.disconnectCalls, 1);
+  assert.equal(manager.isRunning(threadId), false);
+});
+
+test("surfaces an unexpected SDK session shutdown instead of ending silently", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(() => new FakeClient(session) as unknown as CopilotClient);
+  const emitted: ThreadEvent[] = [];
+  const previousWarn = console.warn;
+  console.warn = () => {};
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  t.after(() => {
+    console.warn = previousWarn;
+    return manager.shutdown();
+  });
+
+  await manager.subscribe(threadId, "admin");
+  await manager.sendMessage(threadId, "执行长任务", undefined, "admin");
+  session.emit(sessionEvent("session.shutdown", {}));
+
+  assert.equal(manager.isRunning(threadId), false);
+  assert.deepEqual(
+    emitted.find((event) => event.kind === "error"),
+    { kind: "error", message: "模型会话意外断开，请重试" },
+  );
+  assert.ok(emitted.some((event) => event.kind === "turn.end"));
+});
+
 test("a new subscriber does not replace the actor session during a running turn", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);

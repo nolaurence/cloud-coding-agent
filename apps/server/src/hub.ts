@@ -109,12 +109,31 @@ export class Hub {
     }
     const conn: ClientConn = { socket, user, shellSubscribed: false, threadSubs: new Map() };
     this.clients.add(conn);
+    const heartbeat = setInterval(() => {
+      if (socket.readyState === socket.OPEN) socket.ping();
+    }, 30_000);
+    heartbeat.unref();
     socket.on("message", (raw) => {
       void this.onMessage(conn, raw.toString()).catch((err) => {
         console.error("message error", err);
       });
     });
-    socket.on("close", () => {
+    socket.on("error", (error) => {
+      console.warn(`[cca] WebSocket error user=${user.username}`, error);
+    });
+    socket.on("close", (code, rawReason) => {
+      clearInterval(heartbeat);
+      const runningThreadIds = [...conn.threadSubs.keys()].filter((threadId) =>
+        this.manager.isRunning(threadId),
+      );
+      if (runningThreadIds.length > 0 || (code !== 1000 && code !== 1001)) {
+        const reason = rawReason.toString().replace(/\s+/g, " ").trim().slice(0, 160);
+        console.warn(
+          `[cca] WebSocket closed user=${user.username} code=${code}` +
+            ` runningThreads=${runningThreadIds.join(",") || "none"}` +
+            (reason ? ` reason=${reason}` : ""),
+        );
+      }
       for (const threadId of conn.threadSubs.keys()) {
         this.manager.unsubscribe(threadId);
       }

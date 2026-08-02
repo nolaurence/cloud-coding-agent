@@ -696,6 +696,7 @@ export class CopilotManager {
     rt.currentTurnId = null;
     this.emit(rt.threadId, { kind: "turn.end", turnId });
     this.shellChanged();
+    this.scheduleDetach(rt, true);
   }
 
   private failRunningTools(rt: ThreadRuntime, message: string, endedAt: number) {
@@ -1083,8 +1084,15 @@ export class CopilotManager {
       }
       case "session.shutdown": {
         if (event.agentId) break;
-        this.failRunningTools(rt, "会话已断开", ts);
-        this.failRunningSubagents(rt, "会话已断开", ts, "cancelled", true);
+        const wasRunning = rt.running;
+        rt.session = null;
+        rt.sessionActorId = "";
+        console.warn(`[cca] Copilot session shutdown thread=${threadId} running=${wasRunning}`);
+        this.failRunningTools(rt, "模型会话已断开", ts);
+        this.failRunningSubagents(rt, "模型会话已断开", ts, "cancelled", true);
+        if (wasRunning) {
+          this.emit(threadId, { kind: "error", message: "模型会话意外断开，请重试" });
+        }
         this.finishTurn(rt);
         break;
       }
@@ -1395,13 +1403,26 @@ export class CopilotManager {
     }
   }
 
+  private clearDetachTimer(rt: ThreadRuntime) {
+    if (!rt.detachTimer) return;
+    clearTimeout(rt.detachTimer);
+    rt.detachTimer = null;
+  }
+
+  private scheduleDetach(rt: ThreadRuntime, reset = false) {
+    if (reset) this.clearDetachTimer(rt);
+    if (rt.subscribers > 0 || rt.running || rt.compacting || rt.detachTimer) return;
+    rt.detachTimer = setTimeout(() => {
+      rt.detachTimer = null;
+      void this.detach(rt.threadId);
+    }, DETACH_IDLE_MS);
+    rt.detachTimer.unref();
+  }
+
   async subscribe(threadId: string, actorId?: string): Promise<ThreadEvent> {
     const rt = this.runtime(threadId);
     rt.subscribers += 1;
-    if (rt.detachTimer) {
-      clearTimeout(rt.detachTimer);
-      rt.detachTimer = null;
-    }
+    this.clearDetachTimer(rt);
     try {
       if (!rt.session && rt.attaching) await rt.attaching;
       if (!rt.session) await this.attach(threadId, actorId);
@@ -1432,22 +1453,32 @@ export class CopilotManager {
     const rt = this.threads.get(threadId);
     if (!rt) return;
     rt.subscribers = Math.max(0, rt.subscribers - 1);
-    if (rt.subscribers === 0 && !rt.detachTimer) {
-      rt.detachTimer = setTimeout(() => {
-        void this.detach(threadId);
-      }, DETACH_IDLE_MS);
-    }
+    this.scheduleDetach(rt);
   }
 
   private async detach(threadId: string) {
     const rt = this.threads.get(threadId);
-    if (!rt || rt.subscribers > 0) return;
+    if (!rt) return;
+    this.clearDetachTimer(rt);
+    if (rt.subscribers > 0 || rt.running || rt.compacting) return;
+
+    const session = rt.session;
+    rt.session = null;
+    rt.sessionActorId = "";
     try {
-      await rt.session?.disconnect();
-    } catch {
-      // ignore
+      await session?.disconnect();
+    } catch (error) {
+      console.warn(`[cca] detach session failed thread=${threadId}`, error);
     }
-    this.threads.delete(threadId);
+    if (
+      this.threads.get(threadId) === rt &&
+      rt.subscribers === 0 &&
+      !rt.running &&
+      !rt.compacting &&
+      !rt.session
+    ) {
+      this.threads.delete(threadId);
+    }
   }
 
   async sendMessage(
@@ -1461,6 +1492,7 @@ export class CopilotManager {
     if (rt.compacting) throw new Error("上下文正在压缩,请等待完成后再发送消息");
 
     const turnId = `turn-${randomUUID()}`;
+    this.clearDetachTimer(rt);
     rt.running = true;
     rt.currentTurnId = turnId;
     rt.pendingAssistant = null;
@@ -1518,6 +1550,7 @@ export class CopilotManager {
     if (rt.running) throw new Error("当前任务仍在运行,请等待完成后再压缩上下文");
     if (rt.compacting) throw new Error("上下文正在压缩,请稍候");
 
+    this.clearDetachTimer(rt);
     rt.compacting = true;
     try {
       const session = await this.attach(threadId, actorId);
@@ -1538,6 +1571,7 @@ export class CopilotManager {
       };
     } finally {
       rt.compacting = false;
+      this.scheduleDetach(rt, true);
     }
   }
 
@@ -1592,9 +1626,13 @@ export class CopilotManager {
 
   async deleteThread(threadId: string): Promise<void> {
     const rt = this.threads.get(threadId);
-    if (rt?.session) {
+    if (rt) {
+      this.clearDetachTimer(rt);
+      const session = rt.session;
+      rt.session = null;
+      rt.sessionActorId = "";
       try {
-        await rt.session.disconnect();
+        await session?.disconnect();
       } catch {
         // ignore
       }
@@ -1758,12 +1796,17 @@ export class CopilotManager {
 
   async shutdown() {
     for (const rt of this.threads.values()) {
+      this.clearDetachTimer(rt);
+      const session = rt.session;
+      rt.session = null;
+      rt.sessionActorId = "";
       try {
-        await rt.session?.disconnect();
+        await session?.disconnect();
       } catch {
         // ignore
       }
     }
+    this.threads.clear();
     if (this.client) {
       await this.client.stop();
       this.client = null;
