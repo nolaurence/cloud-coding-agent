@@ -1,13 +1,14 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
-import type { ModelRef } from "@cca/protocol";
+import type { AgentMode, ModelRef } from "@cca/protocol";
 import { useApp, useThreadState } from "../lib/store";
 import { threadComposerDraftKey } from "../lib/composerDrafts";
 import { ChatView } from "../components/ChatView";
 import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
 import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
+import { UltraModeToggle } from "../components/UltraModeToggle";
 import { RightPanel } from "../components/RightPanel";
 import { RightPanelResizeHandle } from "../components/RightPanelResizeHandle";
 import { ThreadShareDialog } from "../components/ThreadShareDialog";
@@ -31,6 +32,7 @@ export function ThreadPage() {
   const interrupt = useApp((s) => s.interrupt);
   const compactContext = useApp((s) => s.compactContext);
   const setThreadModel = useApp((s) => s.setThreadModel);
+  const setThreadAgentMode = useApp((s) => s.setThreadAgentMode);
   const panelOpen = useApp((s) => s.workspacePanelOpen);
   const setPanelOpen = useApp((s) => s.setWorkspacePanelOpen);
   const shareDialogOpen = useApp((s) => s.shareDialogOpen);
@@ -41,6 +43,7 @@ export function ThreadPage() {
   const canManageThread = thread?.access === "owner";
   const canInteract = canManageThread || thread?.access === "collaborate";
   const [switchingModel, setSwitchingModel] = useState(false);
+  const [switchingMode, setSwitchingMode] = useState(false);
   const [modelError, setModelError] = useState("");
   const [viewingSubagentId, setViewingSubagentId] = useState<string | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
@@ -49,6 +52,7 @@ export function ThreadPage() {
   const composerOverlayRef = useRef<HTMLDivElement>(null);
   const modelRequestRef = useRef(0);
   const effectiveModel = thread?.model ?? settings?.defaultModel;
+  const agentMode = thread?.agentMode ?? "standard";
   const panelMaxWidth = useMemo(() => {
     if (layoutWidth === 0) return RIGHT_PANEL_DEFAULT_WIDTH;
     return Math.max(
@@ -69,7 +73,7 @@ export function ThreadPage() {
   });
 
   const onModelChange = async (ref: ModelRef) => {
-    if (!threadId || switchingModel || state.running) return;
+    if (!threadId || switchingModel || switchingMode || state.running) return;
     const requestId = ++modelRequestRef.current;
     setSwitchingModel(true);
     setModelError("");
@@ -84,9 +88,23 @@ export function ThreadPage() {
     }
   };
 
+  const onAgentModeChange = async (mode: AgentMode) => {
+    if (!threadId || switchingMode || switchingModel || state.running || mode === agentMode) return;
+    setSwitchingMode(true);
+    setModelError("");
+    try {
+      await setThreadAgentMode(threadId, mode);
+    } catch (error) {
+      setModelError(error instanceof Error ? error.message : "切换会话模式失败");
+    } finally {
+      setSwitchingMode(false);
+    }
+  };
+
   useEffect(() => {
     modelRequestRef.current += 1;
     setSwitchingModel(false);
+    setSwitchingMode(false);
     setModelError("");
     setViewingSubagentId(null);
   }, [threadId]);
@@ -203,15 +221,27 @@ export function ThreadPage() {
                       footerError={canManageThread ? modelError : undefined}
                       footerControls={canManageThread ? (
                         <>
-                          <ModelPicker value={effectiveModel} onChange={(ref) => void onModelChange(ref)} disabled={state.running || switchingModel} />
-                          <ReasoningEffortPicker
-                            compact
-                            model={effectiveModel}
-                            disabled={state.running || switchingModel}
-                            onChange={(reasoningEffort) => {
-                              if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
-                            }}
+                          <ModelPicker
+                            value={effectiveModel}
+                            onChange={(ref) => void onModelChange(ref)}
+                            disabled={state.running || switchingModel || switchingMode}
                           />
+                          <UltraModeToggle
+                            mode={agentMode}
+                            loading={switchingMode}
+                            disabled={state.running || switchingModel}
+                            onChange={(mode) => void onAgentModeChange(mode)}
+                          />
+                          {agentMode !== "ultra" && (
+                            <ReasoningEffortPicker
+                              compact
+                              model={effectiveModel}
+                              disabled={state.running || switchingModel || switchingMode}
+                              onChange={(reasoningEffort) => {
+                                if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
+                              }}
+                            />
+                          )}
                         </>
                       ) : undefined}
                     />

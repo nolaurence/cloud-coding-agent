@@ -28,6 +28,7 @@ class FakeSession {
   abortCalls = 0;
   compactCalls = 0;
   disconnectCalls = 0;
+  readonly setModelCalls: unknown[][] = [];
   compactResult = {
     success: true,
     tokensRemoved: 18_000,
@@ -86,7 +87,9 @@ class FakeSession {
     this.disconnectCalls += 1;
   }
 
-  async setModel() {}
+  async setModel(...args: unknown[]) {
+    this.setModelCalls.push(args);
+  }
 }
 
 class FakeClient {
@@ -94,7 +97,15 @@ class FakeClient {
   failFirstStart = false;
   readonly session: FakeSession;
   readonly createdConfigs: unknown[] = [];
+  readonly resumedConfigs: unknown[] = [];
   readonly deletedSessionIds: string[] = [];
+  models: Array<{
+    id: string;
+    name?: string;
+    capabilities: { supports: { reasoningEffort: boolean } };
+    supportedReasoningEfforts?: string[];
+    defaultReasoningEffort?: string;
+  }> = [];
 
   constructor(session = new FakeSession()) {
     this.session = session;
@@ -110,7 +121,8 @@ class FakeClient {
     return this.session as unknown as CopilotSession;
   }
 
-  async resumeSession() {
+  async resumeSession(_sessionId: string, config?: unknown) {
+    this.resumedConfigs.push(config);
     return this.session as unknown as CopilotSession;
   }
 
@@ -119,7 +131,7 @@ class FakeClient {
   }
 
   async listModels() {
-    return [];
+    return this.models;
   }
 
   async stop() {
@@ -806,6 +818,148 @@ test("keeps streamed assistant text in snapshots and after an interrupt", async 
   );
 });
 
+test("configures Ultra mode with highest supported reasoning and subagent orchestration", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.agentMode = "ultra";
+  store.threads[0]!.model = {
+    providerId: "provider-1",
+    modelId: "reasoning-model",
+    reasoningEffort: "low",
+  };
+  store.settings.providers = [
+    {
+      id: "provider-1",
+      name: "OpenAI compatible",
+      type: "openai",
+      baseUrl: "https://example.com/v1",
+      models: [
+        {
+          id: "reasoning-model",
+          supportedReasoningEfforts: ["low", "high", "xhigh"],
+        },
+      ],
+    },
+  ];
+  const client = new FakeClient();
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "深度检查实现");
+  const config = client.createdConfigs[0] as {
+    reasoningEffort?: string;
+    customAgents?: unknown[];
+    systemMessage?: { content?: string };
+  };
+  assert.equal(config.reasoningEffort, "xhigh");
+  assert.deepEqual(config.customAgents, []);
+  assert.match(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
+  assert.match(config.systemMessage?.content ?? "", /built-in Task tool/);
+  await manager.interrupt(threadId);
+});
+
+test("resolves Ultra reasoning from the Copilot model catalog", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.agentMode = "ultra";
+  store.threads[0]!.model = { providerId: "copilot", modelId: "catalog-model" };
+  const client = new FakeClient();
+  client.models = [
+    {
+      id: "catalog-model",
+      name: "Catalog model",
+      capabilities: { supports: { reasoningEffort: true } },
+      supportedReasoningEfforts: ["low", "high"],
+      defaultReasoningEffort: "low",
+    },
+  ];
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "深度检查实现");
+  const config = client.createdConfigs[0] as { reasoningEffort?: string };
+  assert.equal(config.reasoningEffort, "high");
+  await manager.interrupt(threadId);
+});
+
+test("resumes an established SDK session with Ultra configuration after switching modes", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.model = { providerId: "provider-1", modelId: "gpt-5.6-sol" };
+  store.settings.providers = [
+    {
+      id: "provider-1",
+      name: "OpenAI compatible",
+      type: "openai",
+      baseUrl: "https://example.com/v1",
+      models: [{ id: "gpt-5.6-sol" }],
+    },
+  ];
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(threadId, "admin");
+  assert.equal(client.createdConfigs.length, 1);
+  await manager.setThreadAgentMode(threadId, "ultra");
+  assert.equal(store.getThread(threadId)?.agentMode, "ultra");
+  assert.equal(session.disconnectCalls, 1);
+
+  await manager.subscribe(threadId, "admin");
+  assert.equal(client.resumedConfigs.length, 1);
+  const config = client.resumedConfigs[0] as {
+    reasoningEffort?: string;
+    systemMessage?: { content?: string };
+  };
+  assert.equal(config.reasoningEffort, "max");
+  assert.match(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
+});
+
+test("keeps highest Ultra reasoning when hot-switching Copilot models", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.agentMode = "ultra";
+  store.threads[0]!.model = { providerId: "copilot", modelId: "first-model" };
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  client.models = [
+    {
+      id: "first-model",
+      capabilities: { supports: { reasoningEffort: true } },
+      supportedReasoningEfforts: ["low", "high"],
+    },
+    {
+      id: "second-model",
+      capabilities: { supports: { reasoningEffort: true } },
+      supportedReasoningEfforts: ["low", "xhigh", "max"],
+    },
+  ];
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(threadId, "admin");
+  await manager.setThreadModel(
+    threadId,
+    store.threads[0]!.model,
+    { providerId: "copilot", modelId: "second-model" },
+  );
+  assert.deepEqual(session.setModelCalls, [["second-model", { reasoningEffort: "max" }]]);
+});
+
+test("rejects Ultra mode changes while a turn is running", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(() => new FakeClient(session) as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "继续执行");
+  await assert.rejects(manager.setThreadAgentMode(threadId, "ultra"), /当前任务运行中/);
+  assert.equal(session.disconnectCalls, 0);
+  await manager.interrupt(threadId);
+});
+
 test("configures Responses gateways without the free-form apply_patch tool", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
@@ -1232,6 +1386,7 @@ test("creates an isolated session with only the authenticated Git extension", as
   assert.ok(config.tools?.[0]?.handler);
   assert.ok(config.tools?.[1]?.handler);
   assert.match(config.systemMessage?.content ?? "", /authenticated_git/);
+  assert.doesNotMatch(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
   await manager.interrupt(threadId);
 });
 

@@ -128,6 +128,13 @@ export interface ModelRef {
   reasoningEffort?: ReasoningEffort;
 }
 
+export const AGENT_MODES = ["standard", "ultra"] as const;
+export type AgentMode = (typeof AGENT_MODES)[number];
+
+export function isAgentMode(value: unknown): value is AgentMode {
+  return typeof value === "string" && AGENT_MODES.includes(value as AgentMode);
+}
+
 export function resolveModelContextWindowTokens(
   settings: AppSettings,
   model: ModelRef | undefined,
@@ -220,6 +227,7 @@ export interface ThreadMeta {
   projectId: string;
   title: string;
   model?: ModelRef;
+  agentMode?: AgentMode;
   userId?: string;
   createdAt: number;
   updatedAt: number;
@@ -520,9 +528,16 @@ export type ClientMessage =
   | { id: string; type: "shell.subscribe" }
   | { id: string; type: "workspace.create"; name: string }
   | { id: string; type: "workspace.remove"; projectId: string }
-  | { id: string; type: "thread.create"; projectId: string; model?: ModelRef }
+  | {
+      id: string;
+      type: "thread.create";
+      projectId: string;
+      model?: ModelRef;
+      agentMode?: AgentMode;
+    }
   | { id: string; type: "thread.delete"; threadId: string }
   | { id: string; type: "thread.setModel"; threadId: string; model: ModelRef }
+  | { id: string; type: "thread.setAgentMode"; threadId: string; agentMode: AgentMode }
   | { id: string; type: "thread.subscribe"; threadId: string }
   | { id: string; type: "thread.unsubscribe"; threadId: string }
   | { id: string; type: "thread.share.get"; threadId: string }

@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { FolderPlus, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import type { ModelRef, TurnAttachment } from "@cca/protocol";
+import type { AgentMode, ModelRef, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { NEW_CHAT_DRAFT_KEY } from "../lib/composerDrafts";
 import { BrandLogo } from "../components/BrandLogo";
 import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
 import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
+import { UltraModeToggle } from "../components/UltraModeToggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -27,6 +28,7 @@ export function NewChatPage() {
   const navigate = useNavigate();
   const [projectId, setProjectId] = useState<string>("");
   const [model, setModel] = useState<ModelRef | undefined>(undefined);
+  const [agentMode, setAgentMode] = useState<AgentMode>("standard");
   const [creating, setCreating] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
   const [workspaceError, setWorkspaceError] = useState("");
@@ -38,7 +40,7 @@ export function NewChatPage() {
     if (!effectiveProjectId || creating) return;
     setCreating(true);
     try {
-      const thread = await createThread(effectiveProjectId, effectiveModel);
+      const thread = await createThread(effectiveProjectId, effectiveModel, agentMode);
       navigate(`/thread/${thread.id}`);
       await sendMessage(thread.id, text, attachments);
     } finally {
@@ -126,14 +128,21 @@ export function NewChatPage() {
               footerControls={
                 <>
                   <ModelPicker value={effectiveModel} onChange={setModel} disabled={creating} />
-                  <ReasoningEffortPicker
-                    compact
-                    model={effectiveModel}
+                  <UltraModeToggle
+                    mode={agentMode}
                     disabled={creating}
-                    onChange={(reasoningEffort) => {
-                      if (effectiveModel) setModel({ ...effectiveModel, reasoningEffort });
-                    }}
+                    onChange={setAgentMode}
                   />
+                  {agentMode !== "ultra" && (
+                    <ReasoningEffortPicker
+                      compact
+                      model={effectiveModel}
+                      disabled={creating}
+                      onChange={(reasoningEffort) => {
+                        if (effectiveModel) setModel({ ...effectiveModel, reasoningEffort });
+                      }}
+                    />
+                  )}
                 </>
               }
             />

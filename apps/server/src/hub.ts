@@ -19,6 +19,7 @@ import { searchFiles } from "./files.js";
 import { deleteSkill, listSkills, saveSkill } from "./skills.js";
 import {
   flattenModels,
+  isAgentMode,
   isReasoningEffort,
   normalizeContextWindowTokens,
   normalizeModelRefReasoning,
@@ -461,6 +462,9 @@ export class Hub {
         }
         case "thread.create": {
           this.requireOwnedProject(conn, msg.projectId);
+          if (msg.agentMode !== undefined && !isAgentMode(msg.agentMode)) {
+            throw new Error("会话模式无效");
+          }
           const requestedModel = msg.model ?? store.settings.defaultModel;
           let model = requestedModel;
           if (requestedModel) {
@@ -477,6 +481,7 @@ export class Hub {
             projectId: msg.projectId,
             title: "新会话",
             model,
+            agentMode: msg.agentMode ?? "standard",
             userId: conn.user.username,
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -496,6 +501,16 @@ export class Hub {
           await deleteThreadShare(msg.threadId);
           store.deleteThread(msg.threadId);
           this.reconcileThreadClients(msg.threadId);
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "thread.setAgentMode": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          if (!isAgentMode(msg.agentMode)) throw new Error("会话模式无效");
+          await this.manager.setThreadAgentMode(msg.threadId, msg.agentMode);
+          this.broadcastShell();
           this.reply(conn, msg.id);
           break;
         }

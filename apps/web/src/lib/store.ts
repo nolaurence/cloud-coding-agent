@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   AdminRegistrationState,
   AdminUser,
+  AgentMode,
   AppSettings,
   AuthUser,
   ChatMessage,
@@ -218,9 +219,14 @@ interface AppState {
   discoverProviderModels: (provider: ProviderModelDiscoveryConfig) => Promise<ModelEntry[]>;
   createWorkspace: (name: string) => Promise<Workspace>;
   removeWorkspace: (projectId: string) => Promise<void>;
-  createThread: (projectId: string, model?: ModelRef) => Promise<ThreadMeta>;
+  createThread: (
+    projectId: string,
+    model?: ModelRef,
+    agentMode?: AgentMode,
+  ) => Promise<ThreadMeta>;
   deleteThread: (threadId: string) => Promise<void>;
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
+  setThreadAgentMode: (threadId: string, agentMode: AgentMode) => Promise<void>;
   openThread: (threadId: string) => Promise<void>;
   closeThread: (threadId: string) => Promise<void>;
   sendMessage: (threadId: string, text: string, attachments?: TurnAttachment[]) => Promise<void>;
@@ -700,8 +706,8 @@ export const useApp = create<AppState>((set, get) => {
       await request({ type: "workspace.remove", projectId });
     },
 
-    createThread: async (projectId, model) => {
-      return request<ThreadMeta>({ type: "thread.create", projectId, model });
+    createThread: async (projectId, model, agentMode) => {
+      return request<ThreadMeta>({ type: "thread.create", projectId, model, agentMode });
     },
 
     deleteThread: async (threadId) => {
@@ -724,6 +730,15 @@ export const useApp = create<AppState>((set, get) => {
       await request({ type: "thread.setModel", threadId, model });
       set((s) => ({
         threads: s.threads.map((t) => (t.id === threadId ? { ...t, model } : t)),
+      }));
+    },
+
+    setThreadAgentMode: async (threadId, agentMode) => {
+      await request({ type: "thread.setAgentMode", threadId, agentMode });
+      set((state) => ({
+        threads: state.threads.map((thread) =>
+          thread.id === threadId ? { ...thread, agentMode } : thread,
+        ),
       }));
     },
 

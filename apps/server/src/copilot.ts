@@ -6,17 +6,21 @@ import type {
   SessionEvent,
 } from "@github/copilot-sdk";
 import {
+  flattenModels,
   isReasoningEffort,
   normalizeReasoningEfforts,
   resolveModelContextWindowTokens,
 } from "@cca/protocol";
 import type {
+  AgentMode,
   AppSettings,
   ChatMessage,
   ContextCompactionResult,
   ContextUsage,
   MessageAttachment,
+  ModelOption,
   ModelRef,
+  ReasoningEffort,
   SubagentActivity,
   SubagentMessage,
   ThreadEvent,
@@ -40,6 +44,8 @@ interface ThreadRuntime {
   contextUsage: ContextUsage | undefined;
   running: boolean;
   compacting: boolean;
+  reconfiguring: Promise<void> | null;
+  sdkSessionEstablished: boolean;
   currentTurnId: string | null;
   pendingAssistant: {
     messageId: string | null;
@@ -64,6 +70,21 @@ const MAX_TOOL_RESULT_CHARS = 16_000;
 const COMMIT_MESSAGE_TIMEOUT_MS = 60_000;
 const MAX_GENERATED_COMMIT_MESSAGE_LENGTH = 2_000;
 const MAX_CONTEXT_OUTPUT_RESERVE_TOKENS = 16_000;
+const ULTRA_REASONING_PRIORITY: readonly ReasoningEffort[] = [
+  "max",
+  "xhigh",
+  "high",
+  "medium",
+  "low",
+  "minimal",
+  "none",
+];
+const ULTRA_SYSTEM_INSTRUCTIONS = [
+  "Ultra mode is enabled. Optimize for correctness, depth, and independent verification rather than speed or token economy.",
+  "For non-trivial work, proactively use the built-in Task tool to delegate independent research, implementation, or review work to specialized subagents. Run independent delegations in parallel when useful, but do not delegate trivial work or duplicate the same investigation.",
+  "Keep the main agent responsible for synthesis and final decisions. Verify important subagent findings against the workspace before acting on them.",
+  "Before finishing, validate the requested outcome with the most relevant existing tests, checks, or direct inspection, and resolve discovered issues instead of reporting a plausible but unverified result.",
+] as const;
 
 type ToolStartData = Extract<SessionEvent, { type: "tool.execution_start" }>["data"];
 type ToolCompleteData = Extract<SessionEvent, { type: "tool.execution_complete" }>["data"];
@@ -152,6 +173,36 @@ function contextUsageFromData(data: UsageInfoData): ContextUsage | undefined {
 
 function activeModel(thread: ThreadMeta | undefined, settings: AppSettings): ModelRef | undefined {
   return thread?.model ?? settings.defaultModel;
+}
+
+function highestSupportedReasoningEffort(
+  settings: AppSettings,
+  model: ModelRef | undefined,
+  capabilityModels: readonly ModelOption[] = [],
+): ReasoningEffort | undefined {
+  if (!model) return undefined;
+  const option = [...flattenModels(settings, capabilityModels), ...capabilityModels].find(
+    (candidate) =>
+      candidate.ref.providerId === model.providerId && candidate.ref.modelId === model.modelId,
+  );
+  return ULTRA_REASONING_PRIORITY.find((effort) =>
+    option?.supportedReasoningEfforts?.includes(effort),
+  );
+}
+
+function sessionReasoningEffort(
+  thread: ThreadMeta | undefined,
+  settings: AppSettings,
+  model: ModelRef | undefined,
+  capabilityModels: readonly ModelOption[] = [],
+): ReasoningEffort | undefined {
+  if (thread?.agentMode === "ultra") {
+    return (
+      highestSupportedReasoningEffort(settings, model, capabilityModels) ??
+      model?.reasoningEffort
+    );
+  }
+  return model?.reasoningEffort;
 }
 
 function contextWindowTokensForThread(
@@ -275,6 +326,8 @@ export class CopilotManager {
         ),
         running: false,
         compacting: false,
+        reconfiguring: null,
+        sdkSessionEstablished: false,
         currentTurnId: null,
         pendingAssistant: null,
         pendingUserAttachments: [],
@@ -520,7 +573,12 @@ export class CopilotManager {
     return subagent;
   }
 
-  private buildSessionConfig(thread: ThreadMeta, settings: AppSettings, actorId: string) {
+  private buildSessionConfig(
+    thread: ThreadMeta,
+    settings: AppSettings,
+    actorId: string,
+    capabilityModels: readonly ModelOption[] = [],
+  ) {
     const modelRef = thread.model ?? settings.defaultModel;
     const providerConfig = modelRef
       ? settings.providers.find((p) => p.id === modelRef.providerId)
@@ -543,6 +601,9 @@ export class CopilotManager {
       systemInstructions.push(
         "The apply_patch tool is unavailable. Use another available file editing tool.",
       );
+    }
+    if (thread.agentMode === "ultra") {
+      systemInstructions.push(...ULTRA_SYSTEM_INSTRUCTIONS);
     }
 
     const config: Record<string, unknown> = {
@@ -585,8 +646,14 @@ export class CopilotManager {
     }
     if (modelRef) {
       config.model = modelRef.modelId;
-      if (modelRef.reasoningEffort) {
-        config.reasoningEffort = modelRef.reasoningEffort;
+      const reasoningEffort = sessionReasoningEffort(
+        thread,
+        settings,
+        modelRef,
+        capabilityModels,
+      );
+      if (reasoningEffort) {
+        config.reasoningEffort = reasoningEffort;
       }
       if (contextLimits) {
         config.modelCapabilities = modelCapabilitiesFor(settings, modelRef);
@@ -1106,6 +1173,7 @@ export class CopilotManager {
     const thread = store.getThread(threadId);
     if (!thread) throw new Error("会话不存在");
     const requestedActorId = actorId || thread.userId || "";
+    if (rt.reconfiguring) await rt.reconfiguring;
     if (rt.session && rt.sessionActorId === requestedActorId) return rt.session;
     if (rt.attaching) {
       await rt.attaching;
@@ -1121,10 +1189,32 @@ export class CopilotManager {
     const attaching = (async () => {
       const client = await this.ensureClient();
       const settings = store.settings;
-      const config = this.buildSessionConfig(thread, settings, requestedActorId);
+      const modelRef = activeModel(thread, settings);
+      let capabilityModels: ModelOption[] = [];
+      if (
+        thread.agentMode === "ultra" &&
+        modelRef?.providerId === "copilot" &&
+        !highestSupportedReasoningEffort(settings, modelRef)
+      ) {
+        capabilityModels = (await this.listModels()).map((model) => ({
+          ref: { providerId: "copilot", modelId: model.id },
+          label: "GitHub Copilot / " + (model.name ?? model.id),
+          supportedReasoningEfforts: model.supportedReasoningEfforts,
+          defaultReasoningEffort: model.defaultReasoningEffort,
+        }));
+      }
+      const config = this.buildSessionConfig(
+        thread,
+        settings,
+        requestedActorId,
+        capabilityModels,
+      );
 
       let session: CopilotSession;
-      const hasHistory = thread.createdAt < Date.now() - 1000 || rt.messages.length > 0;
+      const hasHistory =
+        rt.sdkSessionEstablished ||
+        thread.createdAt < Date.now() - 1000 ||
+        rt.messages.length > 0;
       try {
         if (hasHistory) {
           session = await client.resumeSession(threadId, config as never);
@@ -1136,6 +1226,7 @@ export class CopilotManager {
       }
 
       rt.session = session;
+      rt.sdkSessionEstablished = true;
       rt.sessionActorId = requestedActorId;
       this.attachEventHandlers(rt, session);
       if (rt.messages.length === 0) {
@@ -1411,7 +1502,13 @@ export class CopilotManager {
 
   private scheduleDetach(rt: ThreadRuntime, reset = false) {
     if (reset) this.clearDetachTimer(rt);
-    if (rt.subscribers > 0 || rt.running || rt.compacting || rt.detachTimer) return;
+    if (
+      rt.subscribers > 0 ||
+      rt.running ||
+      rt.compacting ||
+      rt.reconfiguring ||
+      rt.detachTimer
+    ) return;
     rt.detachTimer = setTimeout(() => {
       rt.detachTimer = null;
       void this.detach(rt.threadId);
@@ -1460,7 +1557,7 @@ export class CopilotManager {
     const rt = this.threads.get(threadId);
     if (!rt) return;
     this.clearDetachTimer(rt);
-    if (rt.subscribers > 0 || rt.running || rt.compacting) return;
+    if (rt.subscribers > 0 || rt.running || rt.compacting || rt.reconfiguring) return;
 
     const session = rt.session;
     rt.session = null;
@@ -1475,6 +1572,7 @@ export class CopilotManager {
       rt.subscribers === 0 &&
       !rt.running &&
       !rt.compacting &&
+      !rt.reconfiguring &&
       !rt.session
     ) {
       this.threads.delete(threadId);
@@ -1490,6 +1588,7 @@ export class CopilotManager {
     const rt = this.runtime(threadId);
     if (rt.running) throw new Error("当前任务仍在运行,请等待完成或先停止任务");
     if (rt.compacting) throw new Error("上下文正在压缩,请等待完成后再发送消息");
+    if (rt.reconfiguring) throw new Error("会话模式正在切换,请稍候");
 
     const turnId = `turn-${randomUUID()}`;
     this.clearDetachTimer(rt);
@@ -1549,6 +1648,7 @@ export class CopilotManager {
     const rt = this.runtime(threadId);
     if (rt.running) throw new Error("当前任务仍在运行,请等待完成后再压缩上下文");
     if (rt.compacting) throw new Error("上下文正在压缩,请稍候");
+    if (rt.reconfiguring) throw new Error("会话模式正在切换,请稍候");
 
     this.clearDetachTimer(rt);
     rt.compacting = true;
@@ -1584,8 +1684,29 @@ export class CopilotManager {
     if (!rt) return;
     if (rt.running) throw new Error("当前任务运行中,请等待完成后再切换模型或推理强度");
     if (rt.compacting) throw new Error("上下文正在压缩,请等待完成后再切换模型或推理强度");
+    if (rt.reconfiguring) throw new Error("会话模式正在切换,请稍候");
 
     const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
+    const thread = store.getThread(threadId);
+    let capabilityModels: ModelOption[] = [];
+    if (
+      thread?.agentMode === "ultra" &&
+      nextModel.providerId === "copilot" &&
+      !highestSupportedReasoningEffort(store.settings, nextModel)
+    ) {
+      capabilityModels = (await this.listModels()).map((model) => ({
+        ref: { providerId: "copilot", modelId: model.id },
+        label: "GitHub Copilot / " + (model.name ?? model.id),
+        supportedReasoningEfforts: model.supportedReasoningEfforts,
+        defaultReasoningEffort: model.defaultReasoningEffort,
+      }));
+    }
+    const reasoningEffort = sessionReasoningEffort(
+      thread,
+      store.settings,
+      nextModel,
+      capabilityModels,
+    );
 
     const currentProviderId = currentModel?.providerId ?? "copilot";
     const modelChanged =
@@ -1597,10 +1718,10 @@ export class CopilotManager {
       }
       const modelCapabilities = modelCapabilitiesFor(store.settings, nextModel);
       const options: CopilotSetModelOptions = {
-        ...(nextModel.reasoningEffort
+        ...(reasoningEffort
           ? {
               // SDK 1.0.8 omits "none" and "max", but the bundled CLI RPC accepts both.
-              reasoningEffort: nextModel.reasoningEffort as CopilotReasoningEffort,
+              reasoningEffort: reasoningEffort as CopilotReasoningEffort,
             }
           : {}),
         ...(modelCapabilities ? { modelCapabilities } : {}),
@@ -1616,11 +1737,43 @@ export class CopilotManager {
     // 跨 provider 热切换不可靠:CLI resume 已有 session 时不保证应用新的 provider,
     // 因此只要会话已有历史或已附加 session 就直接拒绝,提示用户新建会话。
     // 全新空会话除外:下次发送时会按新 provider 直接创建会话。
-    const thread = store.getThread(threadId);
     const hasHistory =
       rt.messages.length > 0 || (!!thread && thread.createdAt < Date.now() - 1000);
     if (session || hasHistory) {
       throw new Error("会话内不支持切换模型提供方,请新建会话使用该模型");
+    }
+  }
+
+  async setThreadAgentMode(threadId: string, nextMode: AgentMode): Promise<void> {
+    const thread = store.getThread(threadId);
+    if (!thread) throw new Error("会话不存在");
+    if ((thread.agentMode ?? "standard") === nextMode) return;
+
+    const rt = this.threads.get(threadId);
+    if (rt?.running) throw new Error("当前任务运行中,请等待完成后再切换模式");
+    if (rt?.compacting) throw new Error("上下文正在压缩,请等待完成后再切换模式");
+    if (rt?.reconfiguring) throw new Error("会话模式正在切换,请稍候");
+
+    store.upsertThread({ ...thread, agentMode: nextMode });
+    if (!rt) return;
+
+    this.clearDetachTimer(rt);
+    const reconfiguring = (async () => {
+      const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
+      rt.session = null;
+      rt.sessionActorId = "";
+      await session?.disconnect();
+    })();
+    rt.reconfiguring = reconfiguring;
+    try {
+      await reconfiguring;
+    } catch (error) {
+      store.upsertThread(thread);
+      console.warn("[cca] switch agent mode failed thread=" + threadId + " mode=" + nextMode, error);
+      throw new Error("切换会话模式失败,请重试");
+    } finally {
+      if (rt.reconfiguring === reconfiguring) rt.reconfiguring = null;
+      this.scheduleDetach(rt, true);
     }
   }
 
