@@ -41,7 +41,7 @@ export function AppLayout() {
     ? decodeURIComponent(threadPathMatch[1])
     : undefined;
   const routeThread = threads.find((thread) => thread.id === routeThreadId);
-  const mobileTitle = routeThread?.title ?? "云端编码助手";
+  const mobileTitle = routeThread?.title ?? "Kloud Coding Agent";
   const canManageThread = routeThread?.access === "owner";
 
   useEffect(() => {

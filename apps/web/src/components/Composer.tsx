@@ -639,9 +639,9 @@ export function Composer({
         )}
 
         <div className="flex min-h-11 flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2.5 pb-2.5">
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-visible max-[359px]:basis-full">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 max-[359px]:basis-full">
             {footerControls && (
-              <div className="flex min-w-0 items-center gap-1">{footerControls}</div>
+              <div className="flex min-w-0 flex-wrap items-center gap-1">{footerControls}</div>
             )}
             <input
               ref={imageInputRef}
