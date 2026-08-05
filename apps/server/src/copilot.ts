@@ -28,10 +28,11 @@ import type {
   ToolActivity,
   TurnAttachment,
 } from "@cca/protocol";
-import { COPILOT_HOME } from "./env.js";
+import { COPILOT_HOME, DATA_DIR } from "./env.js";
 import { store } from "./store.js";
 import { createAuthenticatedGitTool } from "./gitOperations.js";
 import { createWorkspacePermissionHandler } from "./permissions.js";
+import { installWorkspaceSandbox } from "./sandbox.js";
 import { browserPool, createBrowserUseTool } from "./browser.js";
 
 interface ThreadRuntime {
@@ -262,6 +263,16 @@ export function normalizeGeneratedCommitMessage(value: string): string {
   return message;
 }
 
+// Deny sandboxed tools access to server data (accounts, secrets, session
+// state) and to every other workspace, so each session can only touch its own.
+function workspaceSandboxDeniedPaths(workspacePath: string): string[] {
+  const denied = [DATA_DIR];
+  for (const project of store.projects) {
+    if (project.path !== workspacePath) denied.push(project.path);
+  }
+  return denied;
+}
+
 export class CopilotManager {
   private client: CopilotClient | null = null;
   private starting: Promise<void> | null = null;
@@ -292,6 +303,7 @@ export class CopilotManager {
       const starting = (async () => {
         const client = this.createClient();
         await client.start();
+        installWorkspaceSandbox(client, workspaceSandboxDeniedPaths);
         this.client = client;
       })();
       this.starting = starting;
@@ -624,13 +636,6 @@ export class CopilotManager {
       enableSessionStore: false,
       skipEmbeddingRetrieval: true,
       embeddingCacheStorage: "in-memory",
-      sandbox: {
-        enabled: true,
-        allowBypass: false,
-        addCurrentWorkingDirectory: true,
-        sandboxMcpServers: true,
-        sandboxLspServers: true,
-      },
       tools: [
         createAuthenticatedGitTool(actorId || thread.userId, project.path),
         createBrowserUseTool(browserPool.forThread(thread.id)),

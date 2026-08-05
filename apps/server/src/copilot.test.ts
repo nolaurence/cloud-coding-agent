@@ -4,6 +4,7 @@ import test, { type TestContext } from "node:test";
 import type { CopilotClient, CopilotSession, SessionEvent } from "@github/copilot-sdk";
 import type { AppSettings, Project, ThreadEvent, ThreadMeta } from "@cca/protocol";
 import { CopilotManager, normalizeGeneratedCommitMessage } from "./copilot.js";
+import { DATA_DIR } from "./env.js";
 import { store } from "./store.js";
 
 function sessionEvent(
@@ -99,6 +100,13 @@ class FakeClient {
   readonly createdConfigs: unknown[] = [];
   readonly resumedConfigs: unknown[] = [];
   readonly deletedSessionIds: string[] = [];
+  readonly rpcRequests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  readonly connection = {
+    sendRequest: async (method: string, params?: unknown) => {
+      this.rpcRequests.push({ method, params: (params ?? {}) as Record<string, unknown> });
+      return {};
+    },
+  };
   models: Array<{
     id: string;
     name?: string;
@@ -118,11 +126,16 @@ class FakeClient {
 
   async createSession(config?: unknown) {
     this.createdConfigs.push(config);
+    await this.connection.sendRequest("session.create", config as Record<string, unknown>);
     return this.session as unknown as CopilotSession;
   }
 
-  async resumeSession(_sessionId: string, config?: unknown) {
+  async resumeSession(sessionId: string, config?: unknown) {
     this.resumedConfigs.push(config);
+    await this.connection.sendRequest("session.resume", {
+      ...(config as Record<string, unknown>),
+      sessionId,
+    });
     return this.session as unknown as CopilotSession;
   }
 
@@ -1357,7 +1370,6 @@ test("creates an isolated session with only the authenticated Git extension", as
     enableSessionStore?: boolean;
     skipEmbeddingRetrieval?: boolean;
     embeddingCacheStorage?: string;
-    sandbox?: Record<string, boolean>;
     tools?: Array<{ name: string; handler?: (args: unknown) => Promise<unknown> }>;
     systemMessage?: { content?: string };
   };
@@ -1375,18 +1387,48 @@ test("creates an isolated session with only the authenticated Git extension", as
   assert.equal(config.enableSessionStore, false);
   assert.equal(config.skipEmbeddingRetrieval, true);
   assert.equal(config.embeddingCacheStorage, "in-memory");
-  assert.deepEqual(config.sandbox, {
+  const createRequest = client.rpcRequests.find((request) => request.method === "session.create");
+  assert.ok(createRequest);
+  assert.equal(createRequest.params.workingDirectory, process.cwd());
+  assert.deepEqual(createRequest.params.sandboxConfig, {
     enabled: true,
-    allowBypass: false,
     addCurrentWorkingDirectory: true,
-    sandboxMcpServers: true,
-    sandboxLspServers: true,
+    userPolicy: {
+      filesystem: {
+        readwritePaths: [process.cwd()],
+        deniedPaths: [DATA_DIR],
+      },
+    },
   });
   assert.deepEqual(config.tools?.map((tool) => tool.name), ["authenticated_git", "browser_use"]);
   assert.ok(config.tools?.[0]?.handler);
   assert.ok(config.tools?.[1]?.handler);
   assert.match(config.systemMessage?.content ?? "", /authenticated_git/);
   assert.doesNotMatch(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
+  await manager.interrupt(threadId);
+});
+
+test("sandbox denies sibling workspaces and server data", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.projects.push(
+    { id: "project-2", name: "Other", path: "/workspace/other", ownerId: "admin" },
+    { id: "project-3", name: "Someone else", path: "/workspace/theirs", ownerId: "other-user" },
+  );
+  const client = new FakeClient();
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "test");
+  const createRequest = client.rpcRequests.find((request) => request.method === "session.create");
+  const sandboxConfig = createRequest?.params.sandboxConfig as {
+    userPolicy: { filesystem: { deniedPaths: string[] } };
+  };
+  assert.deepEqual(sandboxConfig.userPolicy.filesystem.deniedPaths, [
+    DATA_DIR,
+    "/workspace/other",
+    "/workspace/theirs",
+  ]);
   await manager.interrupt(threadId);
 });
 
