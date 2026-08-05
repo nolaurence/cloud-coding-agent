@@ -8,7 +8,6 @@ import { ChatView } from "../components/ChatView";
 import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
 import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
-import { UltraModeToggle } from "../components/UltraModeToggle";
 import { RightPanel } from "../components/RightPanel";
 import { RightPanelResizeHandle } from "../components/RightPanelResizeHandle";
 import { ThreadShareDialog } from "../components/ThreadShareDialog";
@@ -226,22 +225,16 @@ export function ThreadPage() {
                             onChange={(ref) => void onModelChange(ref)}
                             disabled={state.running || switchingModel || switchingMode}
                           />
-                          <UltraModeToggle
-                            mode={agentMode}
-                            loading={switchingMode}
-                            disabled={state.running || switchingModel}
-                            onChange={(mode) => void onAgentModeChange(mode)}
+                          <ReasoningEffortPicker
+                            compact
+                            model={effectiveModel}
+                            disabled={state.running || switchingModel || switchingMode}
+                            agentMode={agentMode}
+                            onAgentModeChange={(mode) => void onAgentModeChange(mode)}
+                            onChange={(reasoningEffort) => {
+                              if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
+                            }}
                           />
-                          {agentMode !== "ultra" && (
-                            <ReasoningEffortPicker
-                              compact
-                              model={effectiveModel}
-                              disabled={state.running || switchingModel || switchingMode}
-                              onChange={(reasoningEffort) => {
-                                if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
-                              }}
-                            />
-                          )}
                         </>
                       ) : undefined}
                     />

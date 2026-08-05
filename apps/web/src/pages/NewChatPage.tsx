@@ -8,7 +8,6 @@ import { BrandLogo } from "../components/BrandLogo";
 import { Composer } from "../components/Composer";
 import { ModelPicker } from "../components/ModelPicker";
 import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
-import { UltraModeToggle } from "../components/UltraModeToggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -128,21 +127,16 @@ export function NewChatPage() {
               footerControls={
                 <>
                   <ModelPicker value={effectiveModel} onChange={setModel} disabled={creating} />
-                  <UltraModeToggle
-                    mode={agentMode}
+                  <ReasoningEffortPicker
+                    compact
+                    model={effectiveModel}
                     disabled={creating}
-                    onChange={setAgentMode}
+                    agentMode={agentMode}
+                    onAgentModeChange={setAgentMode}
+                    onChange={(reasoningEffort) => {
+                      if (effectiveModel) setModel({ ...effectiveModel, reasoningEffort });
+                    }}
                   />
-                  {agentMode !== "ultra" && (
-                    <ReasoningEffortPicker
-                      compact
-                      model={effectiveModel}
-                      disabled={creating}
-                      onChange={(reasoningEffort) => {
-                        if (effectiveModel) setModel({ ...effectiveModel, reasoningEffort });
-                      }}
-                    />
-                  )}
                 </>
               }
             />

@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { Check, ChevronDown } from "lucide-react";
-import type { ModelRef, ReasoningEffort } from "@cca/protocol";
+import { Check, ChevronDown, Sparkles } from "lucide-react";
+import type { AgentMode, ModelRef, ReasoningEffort } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
 
@@ -19,12 +19,16 @@ export function ReasoningEffortPicker({
   disabled = false,
   direction = "up",
   compact = false,
+  agentMode,
+  onAgentModeChange,
   onChange,
 }: {
   model: ModelRef | undefined;
   disabled?: boolean;
   direction?: "up" | "down";
   compact?: boolean;
+  agentMode?: AgentMode;
+  onAgentModeChange?: (mode: AgentMode) => void;
   onChange: (effort: ReasoningEffort | undefined) => void;
 }) {
   const models = useApp((state) => state.models);
@@ -40,16 +44,43 @@ export function ReasoningEffortPicker({
   const defaultLabel = option?.defaultReasoningEffort
     ? `模型默认 (${labels[option.defaultReasoningEffort]})`
     : "模型默认";
-  const buttonLabel = selected
-    ? `推理强度：${labels[selected]}`
-    : `推理强度：${option?.defaultReasoningEffort ? `默认 (${labels[option.defaultReasoningEffort]})` : "默认"}`;
-  const compactButtonLabel = selected ? labels[selected] : "默认";
-  const available = Boolean(model && option?.supportedReasoningEfforts?.length);
-  const items: { value: ReasoningEffort | undefined; label: string }[] = [
-    { value: undefined, label: defaultLabel },
-    ...choices.map((effort) => ({ value: effort, label: labels[effort] })),
+  const ultraSelected = agentMode === "ultra";
+  const reasoningAvailable = Boolean(model && option?.supportedReasoningEfforts?.length);
+  const buttonLabel = ultraSelected
+    ? "Ultra"
+    : !reasoningAvailable
+      ? "标准"
+      : selected
+        ? `推理强度：${labels[selected]}`
+        : `推理强度：${option?.defaultReasoningEffort ? `默认 (${labels[option.defaultReasoningEffort]})` : "默认"}`;
+  const compactButtonLabel = ultraSelected
+    ? "Ultra"
+    : !reasoningAvailable
+      ? "标准"
+      : selected
+        ? labels[selected]
+        : "默认";
+  const available = reasoningAvailable || Boolean(onAgentModeChange);
+  type MenuItem =
+    | { kind: "effort"; value: ReasoningEffort | undefined; label: string }
+    | { kind: "ultra" };
+  const items: MenuItem[] = [
+    ...(reasoningAvailable
+      ? [
+          { kind: "effort", value: undefined, label: defaultLabel } satisfies MenuItem,
+          ...choices.map(
+            (effort): MenuItem => ({ kind: "effort", value: effort, label: labels[effort] }),
+          ),
+        ]
+      : []),
+    ...(onAgentModeChange ? [{ kind: "ultra" } satisfies MenuItem] : []),
   ];
-  const selectedIndex = selected ? choices.indexOf(selected) + 1 : 0;
+  const ultraIndex = items.findIndex((item) => item.kind === "ultra");
+  const selectedIndex = ultraSelected
+    ? ultraIndex
+    : selected
+      ? choices.indexOf(selected) + 1
+      : 0;
   const menuId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -147,11 +178,16 @@ export function ReasoningEffortPicker({
     if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus());
   };
 
-  const choose = (value: ReasoningEffort | undefined) => {
+  const choose = (item: MenuItem) => {
     setOpen(false);
     restoreFocusRef.current = true;
     triggerRef.current?.focus();
-    onChange(value);
+    if (item.kind === "ultra") {
+      onAgentModeChange?.("ultra");
+    } else {
+      if (ultraSelected) onAgentModeChange?.("standard");
+      onChange(item.value);
+    }
     requestAnimationFrame(() => {
       if (!triggerRef.current?.disabled) {
         restoreFocusRef.current = false;
@@ -194,6 +230,8 @@ export function ReasoningEffortPicker({
         className={cn(
           "flex h-8 items-center justify-between gap-1 rounded-md text-xs transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800",
           compact ? "w-16 px-2 sm:w-32 sm:px-2.5" : "w-28 px-2.5 sm:w-32",
+          ultraSelected &&
+            "bg-violet-100 font-medium text-violet-700 hover:bg-violet-200 dark:bg-violet-950/60 dark:text-violet-300 dark:hover:bg-violet-900/70",
         )}
         onClick={() => setOpen((value) => !value)}
         onKeyDown={(event) => {
@@ -206,6 +244,7 @@ export function ReasoningEffortPicker({
           }
         }}
       >
+        {ultraSelected && <Sparkles className="h-3.5 w-3.5 shrink-0" />}
         {compact ? (
           <>
             <span className="min-w-0 truncate sm:hidden">{compactButtonLabel}</span>
@@ -259,25 +298,44 @@ export function ReasoningEffortPicker({
           }}
         >
           {items.map((item, index) => {
-            const isSelected = item.value === selected;
+            const isSelected =
+              item.kind === "ultra" ? ultraSelected : !ultraSelected && item.value === selected;
             return (
-              <button
-                ref={(element) => {
-                  itemRefs.current[index] = element;
-                }}
-                key={item.value ?? "default"}
-                type="button"
-                role="menuitemradio"
-                aria-checked={isSelected}
-                className={cn(
-                  "flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none hover:bg-zinc-100 focus-visible:bg-zinc-100 dark:hover:bg-zinc-800 dark:focus-visible:bg-zinc-800",
-                  isSelected && "bg-zinc-100 font-medium dark:bg-zinc-800",
+              <div key={item.kind === "ultra" ? "ultra" : (item.value ?? "default")}>
+                {item.kind === "ultra" && items.length > 1 && (
+                  <div className="mx-1 mb-1 h-px bg-zinc-200 dark:bg-zinc-700" role="separator" />
                 )}
-                onClick={() => choose(item.value)}
-              >
-                <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-blue-500" />}
-              </button>
+                <button
+                  ref={(element) => {
+                    itemRefs.current[index] = element;
+                  }}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={isSelected}
+                  className={cn(
+                    "flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none hover:bg-zinc-100 focus-visible:bg-zinc-100 dark:hover:bg-zinc-800 dark:focus-visible:bg-zinc-800",
+                    isSelected && "bg-zinc-100 font-medium dark:bg-zinc-800",
+                  )}
+                  onClick={() => choose(item)}
+                >
+                  {item.kind === "ultra" ? (
+                    <>
+                      <Sparkles className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium text-violet-700 dark:text-violet-300">
+                          Ultra
+                        </span>
+                        <span className="block truncate text-[10px] leading-4 text-zinc-400">
+                          最高推理强度 + 子代理并行探索复核
+                        </span>
+                      </span>
+                    </>
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                  )}
+                  {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-blue-500" />}
+                </button>
+              </div>
             );
           })}
         </div>
