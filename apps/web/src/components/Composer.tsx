@@ -545,7 +545,7 @@ export function Composer({
 
       <div
         className={cn(
-          "rounded-2xl border border-zinc-300 bg-white shadow-[0_12px_32px_-20px_rgba(0,0,0,0.28),0_3px_10px_-7px_rgba(0,0,0,0.2)] transition-colors focus-within:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:shadow-[0_12px_32px_-20px_rgba(0,0,0,0.65),0_3px_10px_-7px_rgba(0,0,0,0.4)] dark:focus-within:border-zinc-500",
+          "rounded-2xl border border-zinc-300 bg-white shadow-[0_12px_32px_-20px_rgba(0,0,0,0.28),0_3px_10px_-7px_rgba(0,0,0,0.2)] transition-colors focus-within:border-zinc-500 dark:border-border dark:bg-card dark:shadow-[0_12px_32px_-20px_rgba(0,0,0,0.65),0_3px_10px_-7px_rgba(0,0,0,0.4)] dark:focus-within:border-zinc-500",
           draggingImage && "border-blue-500 bg-blue-50/50 dark:border-blue-400 dark:bg-blue-950/20",
         )}
         onDragEnter={(event) => {

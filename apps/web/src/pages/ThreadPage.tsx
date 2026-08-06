@@ -146,7 +146,7 @@ export function ThreadPage() {
   return (
     <div ref={layoutRef} className="flex h-full min-h-0 min-w-0 overflow-hidden">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="hidden shrink-0 bg-white md:block dark:bg-zinc-950">
+        <header className="hidden shrink-0 bg-background md:block">
           <div className="flex min-h-13 items-center gap-2 px-3 py-2 sm:px-4">
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{thread?.title ?? "会话"}</div>
@@ -190,7 +190,7 @@ export function ThreadPage() {
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b from-white to-transparent dark:from-zinc-950"
+            className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b from-background to-transparent"
           />
           <ChatView
             threadId={threadId}
@@ -202,7 +202,7 @@ export function ThreadPage() {
             <div ref={composerOverlayRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-2">
               <div
                 aria-hidden="true"
-                className="absolute inset-y-0 left-0 right-[var(--app-scrollbar-width)] bg-white dark:bg-zinc-950"
+                className="absolute inset-y-0 left-0 right-[var(--app-scrollbar-width)] bg-background"
               />
               <div className="relative mx-auto max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
                 <div className="pointer-events-auto">

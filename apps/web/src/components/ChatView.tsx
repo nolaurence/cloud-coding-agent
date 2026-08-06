@@ -238,7 +238,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
           {message.authorId === currentUsername ? "你" : message.authorId}
         </div>
       )}
-      <div className="relative max-w-[80%] rounded-xl bg-muted px-3 py-2 text-foreground">
+      <div className="relative max-w-[80%] rounded-xl bg-card px-3 py-2 text-card-foreground">
         <CopyAction
           text={message.text}
           label="复制消息"
@@ -609,7 +609,7 @@ function SubagentDetail({
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 -mx-3 mb-5 border-b border-zinc-200 bg-white/95 px-3 pb-3 pt-1 backdrop-blur sm:-mx-5 sm:px-5 dark:border-zinc-800 dark:bg-zinc-950/95">
+      <header className="sticky top-0 z-10 -mx-3 mb-5 border-b border-zinc-200 bg-white/95 px-3 pb-3 pt-1 backdrop-blur sm:-mx-5 sm:px-5 dark:border-border dark:bg-background/95">
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
           <button
             type="button"
