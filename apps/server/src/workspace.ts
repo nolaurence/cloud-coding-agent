@@ -91,6 +91,32 @@ function sortedEntries(directory: string): fs.Dirent[] {
     });
 }
 
+export function resolveProjectGitRoot(root: string, relativePath = ""): string {
+  const canonical = canonicalRoot(root);
+  if (!relativePath) return canonical;
+  if (
+    path.isAbsolute(relativePath) ||
+    relativePath.includes("\0") ||
+    relativePath.includes("/") ||
+    relativePath.includes("\\") ||
+    relativePath === "." ||
+    relativePath === ".."
+  ) {
+    throw new Error("Git 目录必须是工作区下的一级目录");
+  }
+
+  const target = path.join(canonical, relativePath);
+  const stat = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error("Git 目录必须是工作区下的一级目录");
+  }
+  const resolved = fs.realpathSync(target);
+  if (path.dirname(resolved) !== canonical) {
+    throw new Error("Git 目录必须是工作区下的一级目录");
+  }
+  return resolved;
+}
+
 export function listProjectDirectory(root: string, relativePath = ""): ProjectDirectoryListing {
   const canonical = canonicalRoot(root);
   const directory = relativePath ? resolveInside(canonical, relativePath) : canonical;

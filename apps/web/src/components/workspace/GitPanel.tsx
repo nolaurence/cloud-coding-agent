@@ -8,6 +8,7 @@ import type {
   GitLogCommit,
   GitLogResult,
   GitWorkspaceStatus,
+  ProjectDirectoryListing,
   GitCommitResult,
 } from "@cca/protocol";
 import {
@@ -18,6 +19,7 @@ import {
   ChevronRight,
   GitBranch,
   GitCommitHorizontal,
+  FolderGit2,
   History,
   ListChecks,
   Loader2,
@@ -30,12 +32,14 @@ import { layoutGitGraph, type GitGraphRow } from "../../lib/gitGraph";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { DiffViewer } from "./DiffViewer";
 
 type GitView = "changes" | "history";
 type FileSelection = { path: string; staged: boolean };
 
+const WORKSPACE_ROOT_VALUE = "__workspace_root__";
 const GRAPH_COLORS = ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#7c3aed", "#0891b2"];
 
 const STATUS_LABELS: Record<GitFileStatus, string> = {
@@ -85,6 +89,9 @@ export function GitPanel({
   editable: boolean;
 }) {
   const [view, setView] = useState<GitView>("changes");
+  const [directory, setDirectory] = useState("");
+  const [directories, setDirectories] = useState<string[]>([]);
+  const [directoriesLoading, setDirectoriesLoading] = useState(true);
   const [status, setStatus] = useState<GitWorkspaceStatus | null>(null);
   const [log, setLog] = useState<GitLogResult | null>(null);
   const [logLimit, setLogLimit] = useState(100);
@@ -103,22 +110,47 @@ export function GitPanel({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  useEffect(() => {
+    let cancelled = false;
+    setDirectory("");
+    setDirectories([]);
+    setDirectoriesLoading(true);
+    void request<ProjectDirectoryListing>({ type: "project.directory.list", projectId })
+      .then((listing) => {
+        if (!cancelled) {
+          setDirectories(listing.entries
+            .filter((entry) => entry.kind === "directory")
+            .map((entry) => entry.path));
+        }
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(errorMessage(reason, "读取工作区目录失败"));
+      })
+      .finally(() => {
+        if (!cancelled) setDirectoriesLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  const gitTarget = directory ? { directory } : {};
+
   const loadStatus = useCallback(async () => {
-    const next = await request<GitWorkspaceStatus>({ type: "project.git.status", projectId });
+    const next = await request<GitWorkspaceStatus>({ type: "project.git.status", projectId, ...gitTarget });
     setStatus(next);
     return next;
-  }, [projectId]);
+  }, [directory, projectId]);
 
   const loadLog = useCallback(async () => {
     const next = await request<GitLogResult>({
       type: "project.git.log",
       projectId,
+      ...gitTarget,
       limit: logLimit,
       ...(query ? { query } : {}),
     });
     setLog(next);
     return next;
-  }, [logLimit, projectId, query]);
+  }, [directory, logLimit, projectId, query]);
 
   const loadFileDiff = useCallback(async (nextSelection: FileSelection) => {
     setSelection(nextSelection);
@@ -128,6 +160,7 @@ export function GitPanel({
       setFileDiff(await request<GitFileDiffResult>({
         type: "project.git.fileDiff",
         projectId,
+        ...gitTarget,
         path: nextSelection.path,
         staged: nextSelection.staged,
       }));
@@ -136,7 +169,7 @@ export function GitPanel({
     } finally {
       setDiffLoading(false);
     }
-  }, [projectId]);
+  }, [directory, projectId]);
 
   const loadCommitDiff = useCallback(async (commit: GitLogCommit) => {
     const requestId = ++commitDiffRequest.current;
@@ -148,6 +181,7 @@ export function GitPanel({
       const next = await request<GitCommitDiffResult>({
         type: "project.git.commitDiff",
         projectId,
+        ...gitTarget,
         hash: commit.hash,
       });
       if (commitDiffRequest.current === requestId) setCommitDiff(next);
@@ -158,7 +192,7 @@ export function GitPanel({
     } finally {
       if (commitDiffRequest.current === requestId) setCommitDiffLoading(false);
     }
-  }, [projectId]);
+  }, [directory, projectId]);
 
   const refresh = useCallback(async (includeLog = true) => {
     setLoading(true);
@@ -226,6 +260,7 @@ export function GitPanel({
         type: include ? "project.git.stage" : "project.git.unstage",
         threadId,
         projectId,
+        ...gitTarget,
         paths: [file.path],
         expectedHead: status.head,
         expectedIndexTree: status.indexTree,
@@ -253,6 +288,7 @@ export function GitPanel({
         type: include ? "project.git.stage" : "project.git.unstage",
         threadId,
         projectId,
+        ...gitTarget,
         paths,
         expectedHead: status.head,
         expectedIndexTree: status.indexTree,
@@ -272,6 +308,7 @@ export function GitPanel({
           type: "project.git.commit",
           threadId,
           projectId,
+          ...gitTarget,
           message,
           stageAll: false,
           expectedHead: status.head,
@@ -295,6 +332,7 @@ export function GitPanel({
         type: "project.git.generateCommitMessage",
         threadId,
         projectId,
+        ...gitTarget,
         expectedHead: status.head,
         expectedIndexTree: status.indexTree,
       }, 70_000);
@@ -314,6 +352,7 @@ export function GitPanel({
         type: direction === "pull" ? "project.git.pull" : "project.git.push",
         threadId,
         projectId,
+        ...gitTarget,
       }, 130_000),
       direction === "pull" ? "代码已拉取到最新版本" : "代码已推送",
       null,
@@ -325,6 +364,20 @@ export function GitPanel({
       <div className="flex h-10 shrink-0 items-center gap-2 border-b px-2">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs">
           <GitBranch className="size-3.5 shrink-0" />
+          <Select
+            value={directory || WORKSPACE_ROOT_VALUE}
+            disabled={directoriesLoading || operation !== null}
+            onValueChange={(value) => setDirectory(value === WORKSPACE_ROOT_VALUE ? "" : value)}
+          >
+            <SelectTrigger size="sm" className="h-7 max-w-48 border-0 bg-muted px-2 text-xs" aria-label="选择 Git 目录">
+              <FolderGit2 className="size-3.5" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              <SelectItem value={WORKSPACE_ROOT_VALUE}>工作区根目录</SelectItem>
+              {directories.map((path) => <SelectItem key={path} value={path}>{path}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <span className="truncate font-medium">{status?.branch ?? (status?.detached ? "detached HEAD" : "Git")}</span>
           {status?.upstream && <span className="hidden truncate text-muted-foreground xl:inline">{status.upstream}</span>}
           {Boolean(status?.ahead) && <span className="text-emerald-600">↑{status?.ahead}</span>}

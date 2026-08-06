@@ -13,6 +13,7 @@ import {
   projectDiff,
   projectGitPullTarget,
   readProjectFile,
+  resolveProjectGitRoot,
   writeProjectFile,
 } from "./workspace.js";
 import { commitProjectChanges } from "./gitOperations.js";
@@ -61,6 +62,19 @@ test("listProjectDirectory returns one sorted level with file metadata", async (
   const nested = listProjectDirectory(root, "src");
   assert.equal(nested.path, "src");
   assert.deepEqual(nested.entries.map((entry) => entry.name), ["alpha.ts", "zeta.ts"]);
+});
+
+test("Git roots are limited to the workspace root and direct child directories", async (t) => {
+  const root = await fixture(t);
+  const nested = path.join(root, "src", "nested");
+  await fs.mkdir(nested);
+
+  assert.equal(resolveProjectGitRoot(root), await fs.realpath(root));
+  assert.equal(resolveProjectGitRoot(root, "src"), await fs.realpath(path.join(root, "src")));
+  assert.throws(() => resolveProjectGitRoot(root, "src/nested"), /一级目录/);
+  assert.throws(() => resolveProjectGitRoot(root, "README.md"), /一级目录/);
+  assert.throws(() => resolveProjectGitRoot(root, "missing"), /一级目录/);
+  assert.throws(() => resolveProjectGitRoot(root, ".."), /一级目录/);
 });
 
 test("recursive project files retain dotfiles and ignore generated directories", async (t) => {

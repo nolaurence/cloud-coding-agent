@@ -578,15 +578,16 @@ export type ClientMessage =
       expectedVersion: string;
     }
   | { id: string; type: "project.diff"; projectId: string }
-  | { id: string; type: "project.git.status"; projectId: string }
-  | { id: string; type: "project.git.log"; projectId: string; limit?: number; query?: string }
-  | { id: string; type: "project.git.commitDiff"; projectId: string; hash: string }
-  | { id: string; type: "project.git.fileDiff"; projectId: string; path: string; staged: boolean }
+  | { id: string; type: "project.git.status"; projectId: string; directory?: string }
+  | { id: string; type: "project.git.log"; projectId: string; directory?: string; limit?: number; query?: string }
+  | { id: string; type: "project.git.commitDiff"; projectId: string; directory?: string; hash: string }
+  | { id: string; type: "project.git.fileDiff"; projectId: string; directory?: string; path: string; staged: boolean }
   | {
       id: string;
       type: "project.git.generateCommitMessage";
       threadId: string;
       projectId: string;
+      directory?: string;
       expectedHead: string | null;
       expectedIndexTree: string;
     }
@@ -595,17 +596,19 @@ export type ClientMessage =
       type: "project.git.stage" | "project.git.unstage";
       threadId: string;
       projectId: string;
+      directory?: string;
       paths: string[];
       expectedHead: string | null;
       expectedIndexTree: string;
     }
-  | { id: string; type: "project.git.pull"; threadId: string; projectId: string }
-  | { id: string; type: "project.git.push"; threadId: string; projectId: string }
+  | { id: string; type: "project.git.pull"; threadId: string; projectId: string; directory?: string }
+  | { id: string; type: "project.git.push"; threadId: string; projectId: string; directory?: string }
   | {
       id: string;
       type: "project.git.commit";
       threadId: string;
       projectId: string;
+      directory?: string;
       message: string;
       stageAll?: boolean;
       expectedHead?: string | null;
