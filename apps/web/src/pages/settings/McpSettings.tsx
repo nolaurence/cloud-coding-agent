@@ -48,7 +48,8 @@ function toKeyValueLines(obj?: Record<string, string>): string {
 
 export function McpSettings() {
   const settings = useApp((s) => s.settings);
-  const updateSettings = useApp((s) => s.updateSettings);
+  const saveMcpServer = useApp((s) => s.saveMcpServer);
+  const deleteMcpServer = useApp((s) => s.deleteMcpServer);
   const [editing, setEditing] = useState<McpServerConfig | null>(null);
   const [argsText, setArgsText] = useState("");
   const [envText, setEnvText] = useState("");
@@ -59,9 +60,6 @@ export function McpSettings() {
 
   if (!settings) return null;
 
-  const save = (mcpServers: McpServerConfig[]) => {
-    void updateSettings({ ...settings, mcpServers });
-  };
 
   const openEdit = (s?: McpServerConfig) => {
     const target = s ?? emptyServer();
@@ -94,9 +92,9 @@ export function McpSettings() {
       headers: parseKeyValueLines(headersText),
       tools: toolsText.trim() ? toolsText.split(",").map((t) => t.trim()).filter(Boolean) : ["*"],
     };
-    const exists = settings.mcpServers.some((s) => s.id === next.id);
-    save(exists ? settings.mcpServers.map((s) => (s.id === next.id ? next : s)) : [...settings.mcpServers, next]);
-    setEditing(null);
+    void saveMcpServer(next).then(() => setEditing(null), (saveError) => {
+      setError(saveError instanceof Error ? saveError.message : String(saveError));
+    });
   };
 
   return (
@@ -122,7 +120,7 @@ export function McpSettings() {
             <Switch
               checked={s.enabled}
               aria-label={`${s.enabled ? "停用" : "启用"} ${s.name}`}
-              onCheckedChange={(enabled) => save(settings.mcpServers.map((x) => (x.id === s.id ? { ...x, enabled } : x)))}
+              onCheckedChange={(enabled) => void saveMcpServer({ ...s, enabled })}
             />
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">{s.name}</div>
@@ -212,7 +210,7 @@ export function McpSettings() {
         confirmLabel="删除"
         destructive
         onConfirm={() => {
-          if (deleting) save(settings.mcpServers.filter((server) => server.id !== deleting.id));
+          if (deleting) void deleteMcpServer(deleting.id);
           setDeleting(null);
         }}
       />

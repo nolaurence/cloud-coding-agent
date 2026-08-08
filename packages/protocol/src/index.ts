@@ -70,6 +70,8 @@ export type ProviderModelDiscoveryConfig = Pick<
   "type" | "baseUrl" | "apiKey" | "azureApiVersion"
 >;
 
+export type ResourceScope = "platform" | "workspace";
+
 export interface McpServerConfig {
   id: string;
   name: string;
@@ -282,6 +284,7 @@ export interface SkillInfo {
   content: string;
   disabled: boolean;
   builtin: boolean;
+  scope: ResourceScope;
 }
 
 export interface ShellState {
@@ -552,6 +555,9 @@ export type ClientMessage =
   | { id: string; type: "settings.update"; settings: AppSettings }
   | { id: string; type: "connectors.status" }
   | { id: string; type: "skills.list" }
+  | { id: string; type: "mcp.list" }
+  | { id: string; type: "mcp.save"; server: McpServerConfig }
+  | { id: string; type: "mcp.delete"; idToDelete: string }
   | { id: string; type: "skill.save"; name: string; description: string; content: string }
   | { id: string; type: "skill.delete"; name: string }
   | { id: string; type: "plugins.marketplaces.list" }

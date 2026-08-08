@@ -109,13 +109,30 @@ test("rejects sandbox bypasses and non-workspace capabilities by default", async
   }
 });
 
-test("only approves the registered custom tool and non-bypass URL access", async (t) => {
+test("only approves registered custom tools and non-bypass URL access", async (t) => {
   const { handler } = fixture(t);
-  assert.deepEqual(await handler({ kind: "custom-tool", toolName: "authenticated_git", toolDescription: "Git" }, invocation), { kind: "approve-once" });
+  for (const toolName of ["authenticated_git", "manage_skills", "manage_mcp_servers"]) {
+    assert.deepEqual(await handler({ kind: "custom-tool", toolName, toolDescription: toolName }, invocation), { kind: "approve-once" });
+  }
   assert.deepEqual(await handler({ kind: "url", url: "https://example.com", intention: "fetch" }, invocation), { kind: "approve-once" });
   assert.equal((await handler({ kind: "url", url: "https://example.com", intention: "fetch", requestSandboxBypass: true }, invocation)).kind, "reject");
 });
 
 test("rejects non-existent workspace roots", () => {
   assert.throws(() => createWorkspacePermissionHandler("/path/that/does/not/exist"), /ENOENT/);
+});
+
+
+test("only approves MCP servers explicitly enabled for the session", async (t) => {
+  const { root } = fixture(t);
+  const handler = createWorkspacePermissionHandler(root, new Set(["allowed"]));
+  const request = (serverName: string): PermissionRequest => ({
+    kind: "mcp",
+    readOnly: true,
+    serverName,
+    toolName: "tool",
+    toolTitle: "Tool",
+  });
+  assert.equal((await handler(request("allowed"), invocation)).kind, "approve-once");
+  assert.equal((await handler(request("blocked"), invocation)).kind, "reject");
 });

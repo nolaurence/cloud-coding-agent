@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { CopilotClient, CopilotSession, SessionEvent } from "@github/copilot-sdk";
 import type { AppSettings, Project, ThreadEvent, ThreadMeta } from "@cca/protocol";
@@ -152,14 +155,19 @@ class FakeClient {
   }
 }
 
-function setupStore(t: TestContext, threadId: string, createdAt = Date.now()) {
+function setupStore(
+  t: TestContext,
+  threadId: string,
+  createdAt = Date.now(),
+  projectPath = process.cwd(),
+) {
   const previous = {
     projects: store.projects,
     threads: store.threads,
     settings: store.settings,
     upsertThread: store.upsertThread,
   };
-  const project: Project = { id: "project-1", name: "Project", path: process.cwd(), ownerId: "admin" };
+  const project: Project = { id: "project-1", name: "Project", path: projectPath, ownerId: "admin" };
   const thread: ThreadMeta = {
     id: threadId,
     projectId: project.id,
@@ -1347,7 +1355,7 @@ test("a new subscriber does not replace the actor session during a running turn"
   assert.equal(manager.isRunning(threadId), true);
 });
 
-test("creates an isolated session with only the authenticated Git extension", async (t) => {
+test("creates an isolated session with managed resource tools", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
   const client = new FakeClient();
@@ -1400,11 +1408,70 @@ test("creates an isolated session with only the authenticated Git extension", as
       },
     },
   });
-  assert.deepEqual(config.tools?.map((tool) => tool.name), ["authenticated_git", "browser_use"]);
+  assert.deepEqual(config.tools?.map((tool) => tool.name), [
+    "authenticated_git",
+    "browser_use",
+    "manage_skills",
+    "manage_mcp_servers",
+  ]);
   assert.ok(config.tools?.[0]?.handler);
   assert.ok(config.tools?.[1]?.handler);
   assert.match(config.systemMessage?.content ?? "", /authenticated_git/);
   assert.doesNotMatch(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
+  await manager.interrupt(threadId);
+});
+
+
+test("loads platform and workspace MCP and Skill configuration", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "cca-session-resources-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(workspace, ".github", "skills", "workspace-skill"), { recursive: true });
+  fs.writeFileSync(
+    path.join(workspace, ".github", "skills", "workspace-skill", "SKILL.md"),
+    "---\nname: workspace-skill\ndescription: Local\n---\n\n# Local\n",
+  );
+  fs.writeFileSync(path.join(workspace, ".mcp.json"), JSON.stringify({
+    mcpServers: {
+      workspace: {
+        type: "stdio",
+        command: "node",
+        args: ["server.js"],
+        tools: ["read"],
+      },
+    },
+  }));
+
+  const threadId = randomUUID();
+  setupStore(t, threadId, Date.now(), workspace);
+  store.settings = {
+    ...store.settings,
+    disabledSkills: ["disabled-platform-skill"],
+    mcpServers: [{
+      id: "platform",
+      name: "Platform",
+      enabled: true,
+      type: "http",
+      url: "https://example.com/mcp",
+      tools: ["*"],
+    }],
+  };
+  const client = new FakeClient();
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "use resources");
+  const config = client.createdConfigs[0] as {
+    mcpServers: Record<string, { type: string; workingDirectory?: string }>;
+    skillDirectories: string[];
+    disabledSkills: string[];
+    enableSkills: boolean;
+  };
+  assert.equal(config.mcpServers.platform?.type, "http");
+  assert.equal(config.mcpServers.workspace?.type, "stdio");
+  assert.equal(config.mcpServers.workspace?.workingDirectory, workspace);
+  assert.deepEqual(config.skillDirectories, [path.join(workspace, ".github", "skills")]);
+  assert.deepEqual(config.disabledSkills, ["disabled-platform-skill"]);
+  assert.equal(config.enableSkills, true);
   await manager.interrupt(threadId);
 });
 

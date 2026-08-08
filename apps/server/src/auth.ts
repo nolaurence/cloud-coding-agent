@@ -332,6 +332,10 @@ export async function initAuth() {
   }
 }
 
+export function getUserRole(username: string): Role | undefined {
+  return findUser(username)?.role;
+}
+
 export function getBootstrapAdminUsername(): string {
   return bootstrapAdminUsername;
 }

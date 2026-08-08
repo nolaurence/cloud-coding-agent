@@ -34,7 +34,10 @@ function isWorkspacePath(workspaceRoot: string, target: string): boolean {
   }
 }
 
-export function createWorkspacePermissionHandler(workingDirectory: string): PermissionHandler {
+export function createWorkspacePermissionHandler(
+  workingDirectory: string,
+  allowedMcpServers: ReadonlySet<string> = new Set(),
+): PermissionHandler {
   const workspaceRoot = fs.realpathSync(workingDirectory);
 
   return (request) => {
@@ -57,8 +60,13 @@ export function createWorkspacePermissionHandler(workingDirectory: string): Perm
         ? APPROVE
         : reject("命令访问了当前工作区外的路径：" + targets.join(", "));
     }
+    if (request.kind === "mcp") {
+      return allowedMcpServers.has(request.serverName)
+        ? APPROVE
+        : reject("MCP 服务器未在当前工作区启用：" + request.serverName);
+    }
     if (request.kind === "custom-tool") {
-      return request.toolName === "authenticated_git"
+      return ["authenticated_git", "manage_skills", "manage_mcp_servers"].includes(request.toolName)
         ? APPROVE
         : reject("工作区会话不允许执行未注册的自定义工具");
     }

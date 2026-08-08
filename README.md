@@ -6,8 +6,8 @@
 
 - **对话流**(自研,非 assistant-ui):流式输出、思考过程折叠、工具调用时间线、Markdown 渲染
 - **模型配置**:支持 OpenAI(Chat Completions)与 OpenAI Responses 两种 wire 协议,以及 Azure / Anthropic;BYOK,按会话切换模型
-- **MCP 模块**:本地 stdio / 远程 HTTP MCP 服务器管理,按工具白名单启用
-- **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),输入框 `/技能名` 调用
+- **MCP 模块**:本地 stdio / 远程 HTTP MCP 服务器管理,支持平台级配置和 workspace 根目录 `.mcp.json`,按工具白名单启用
+- **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用
 - **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
 - **项目管理**:一个项目 = 服务器上的一个工作目录,会话在其 cwd 中执行
 - **工作区沙箱**:基于 Copilot 运行时的一方沙箱(bubblewrap),每个会话的工具只能读写所属工作区;服务端数据目录和其他工作区被显式拒绝,且禁止沙箱绕过。Linux 部署需要安装 bubblewrap(Docker 镜像已内置)并允许非特权用户命名空间
@@ -123,7 +123,8 @@ docker compose -f docker-compose-prod.yml up -d --build
 3. 设置 → 通用:选择默认模型
 4. 如需操作远程仓库,在设置 → 通用中使用具备仓库读写权限的访问令牌绑定 GitHub 或 Gitee
 5. 回到首页,输入任务开聊;`@` 引用文件,`/` 选择技能
-6. 设置 → MCP / 技能:按需接入外部工具与提示词模块
+6. 设置 → MCP / 技能:按需接入平台级外部工具与提示词模块
+7. Agent 可通过 `manage_mcp_servers` 和 `manage_skills` 查询或管理资源;workspace 写操作对工作区所有者开放,平台写操作仅管理员 Agent 可用。workspace 同名 MCP 覆盖平台配置
 
 绑定令牌使用服务端密钥加密保存,按会话所属用户读取。Agent 通过受控的 `authenticated_git` 工具执行远程 Git 操作;令牌不会写入仓库 URL、`.gitconfig` 或 Web 终端环境。HTTPS 和常见 SSH remote 会统一通过对应平台的 HTTPS 认证执行。
 

@@ -21,6 +21,7 @@ import type {
   ModelOption,
   ModelRef,
   ReasoningEffort,
+  ResourceScope,
   SubagentActivity,
   SubagentMessage,
   ThreadEvent,
@@ -34,6 +35,10 @@ import { createAuthenticatedGitTool } from "./gitOperations.js";
 import { createWorkspacePermissionHandler } from "./permissions.js";
 import { installWorkspaceSandbox } from "./sandbox.js";
 import { browserPool, createBrowserUseTool } from "./browser.js";
+import { createAgentResourceTools } from "./agentResources.js";
+import { effectiveMcpServers } from "./mcpServers.js";
+import { enabledSkillDirectories } from "./skills.js";
+import { getUserRole } from "./auth.js";
 
 interface ThreadRuntime {
   threadId: string;
@@ -60,10 +65,12 @@ interface ThreadRuntime {
   sessionActorId: string;
   detachTimer: NodeJS.Timeout | null;
   subscribers: number;
+  resourceConfigChanged: boolean;
 }
 
 export type ThreadEventSink = (threadId: string, event: ThreadEvent) => void;
 export type ShellChangedSink = () => void;
+export type ResourcesChangedSink = (scope: ResourceScope) => void;
 export type CopilotClientFactory = () => CopilotClient;
 
 const DETACH_IDLE_MS = 10 * 60 * 1000;
@@ -279,6 +286,7 @@ export class CopilotManager {
   private threads = new Map<string, ThreadRuntime>();
   private sinks = new Set<ThreadEventSink>();
   private shellChanged: ShellChangedSink = () => {};
+  private resourcesChanged: ResourcesChangedSink = () => {};
 
   constructor(
     private readonly createClient: CopilotClientFactory = () =>
@@ -295,6 +303,10 @@ export class CopilotManager {
 
   onShellChanged(sink: ShellChangedSink) {
     this.shellChanged = sink;
+  }
+
+  onResourcesChanged(sink: ResourcesChangedSink) {
+    this.resourcesChanged = sink;
   }
 
   private async ensureClient(): Promise<CopilotClient> {
@@ -347,6 +359,7 @@ export class CopilotManager {
         sessionActorId: "",
         detachTimer: null,
         subscribers: 0,
+        resourceConfigChanged: false,
       };
       this.threads.set(threadId, rt);
     }
@@ -602,6 +615,9 @@ export class CopilotManager {
     if (!thread.userId || project.ownerId !== thread.userId) {
       throw new Error("会话与工作区所有者不匹配");
     }
+    const ownerId = thread.userId;
+    const mcpServers = effectiveMcpServers(project.path);
+    const skillConfig = enabledSkillDirectories(project.path);
     const disableApplyPatch =
       providerConfig?.type === "openai" &&
       (providerConfig.wireApi ?? "completions") === "responses";
@@ -623,14 +639,15 @@ export class CopilotManager {
       streaming: true,
       includeSubAgentStreamingEvents: true,
       workingDirectory: project.path,
-      onPermissionRequest: createWorkspacePermissionHandler(project.path),
+      onPermissionRequest: createWorkspacePermissionHandler(project.path, new Set(Object.keys(mcpServers))),
       enableConfigDiscovery: false,
       requestExtensions: false,
-      mcpServers: {},
+      mcpServers,
       customAgents: [],
-      skillDirectories: [],
+      skillDirectories: skillConfig.dirs,
       pluginDirectories: [],
-      enableSkills: false,
+      disabledSkills: skillConfig.disabled,
+      enableSkills: skillConfig.dirs.length > 0,
       enableFileHooks: false,
       memory: { enabled: false },
       enableSessionStore: false,
@@ -639,6 +656,14 @@ export class CopilotManager {
       tools: [
         createAuthenticatedGitTool(actorId || thread.userId, project.path),
         createBrowserUseTool(browserPool.forThread(thread.id)),
+        ...createAgentResourceTools({
+          workspacePath: project.path,
+          canManagePlatform: () => getUserRole(actorId || ownerId) === "admin",
+          onChanged: async (scope) => {
+            await this.reloadResourceConfiguration(scope, thread.projectId);
+            this.resourcesChanged(scope);
+          },
+        }),
       ],
       systemMessage: {
         mode: "append",
@@ -768,7 +793,17 @@ export class CopilotManager {
     rt.currentTurnId = null;
     this.emit(rt.threadId, { kind: "turn.end", turnId });
     this.shellChanged();
-    this.scheduleDetach(rt, true);
+    if (rt.resourceConfigChanged) {
+      rt.resourceConfigChanged = false;
+      const session = rt.session;
+      rt.session = null;
+      rt.sessionActorId = "";
+      void session?.disconnect().catch((error) => {
+        console.error(`reload resource configuration ${rt.threadId} failed`, error);
+      });
+    } else {
+      this.scheduleDetach(rt, true);
+    }
   }
 
   private failRunningTools(rt: ThreadRuntime, message: string, endedAt: number) {
@@ -1912,6 +1947,29 @@ export class CopilotManager {
 
   runningThreadIds(): string[] {
     return [...this.threads.values()].filter((t) => t.running).map((t) => t.threadId);
+  }
+
+  private async reloadResourceConfiguration(scope: ResourceScope, projectId: string): Promise<void> {
+    for (const [threadId, rt] of this.threads) {
+      const thread = store.getThread(threadId);
+      if (scope !== "platform" && thread?.projectId !== projectId) continue;
+      if (rt.running) {
+        rt.resourceConfigChanged = true;
+        continue;
+      }
+      this.clearDetachTimer(rt);
+      const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
+      rt.session = null;
+      rt.attaching = null;
+      rt.sessionActorId = "";
+      if (session) {
+        try {
+          await session.disconnect();
+        } catch (error) {
+          console.error(`reload resource configuration ${threadId} failed`, error);
+        }
+      }
+    }
   }
 
   async reconfigureOpenSessions(

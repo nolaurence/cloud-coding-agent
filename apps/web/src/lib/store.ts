@@ -14,6 +14,7 @@ import type {
   InstalledPlugin,
   MarketplacePlugin,
   ModelRef,
+  McpServerConfig,
   ModelEntry,
   ModelOption,
   PluginInstallResult,
@@ -239,6 +240,8 @@ interface AppState {
   redeemThreadShare: (token: string) => Promise<ThreadMeta>;
   updateSettings: (settings: AppSettings) => Promise<void>;
   refreshConnectorStatuses: () => Promise<void>;
+  saveMcpServer: (server: McpServerConfig) => Promise<void>;
+  deleteMcpServer: (id: string) => Promise<void>;
   saveSkill: (name: string, description: string, content: string) => Promise<void>;
   deleteSkill: (name: string) => Promise<void>;
   listPluginMarketplaces: () => Promise<PluginMarketplace[]>;
@@ -845,6 +848,27 @@ export const useApp = create<AppState>((set, get) => {
     refreshConnectorStatuses: async () => {
       const connectorStatuses = await request<ConnectorStatus[]>({ type: "connectors.status" });
       set({ connectorStatuses });
+    },
+
+    saveMcpServer: async (server) => {
+      const saved = await request<McpServerConfig>({ type: "mcp.save", server });
+      set((state) => state.settings
+        ? {
+            settings: {
+              ...state.settings,
+              mcpServers: state.settings.mcpServers.some((item) => item.id === saved.id)
+                ? state.settings.mcpServers.map((item) => item.id === saved.id ? saved : item)
+                : [...state.settings.mcpServers, saved],
+            },
+          }
+        : {});
+    },
+
+    deleteMcpServer: async (id) => {
+      await request({ type: "mcp.delete", idToDelete: id });
+      set((state) => state.settings
+        ? { settings: { ...state.settings, mcpServers: state.settings.mcpServers.filter((item) => item.id !== id) } }
+        : {});
     },
 
     saveSkill: async (name, description, content) => {

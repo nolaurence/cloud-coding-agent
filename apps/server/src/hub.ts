@@ -18,6 +18,12 @@ import { CopilotManager } from "./copilot.js";
 import { searchFiles } from "./files.js";
 import { deleteSkill, listSkills, saveSkill } from "./skills.js";
 import {
+  deleteScopedMcpServer,
+  listScopedMcpServers,
+  normalizeMcpServer,
+  saveScopedMcpServer,
+} from "./mcpServers.js";
+import {
   flattenModels,
   isAgentMode,
   isReasoningEffort,
@@ -91,6 +97,10 @@ export class Hub {
     });
     this.manager.onShellChanged(() => {
       this.broadcastShell();
+    });
+    this.manager.onResourcesChanged(() => {
+      this.broadcastSettings();
+      this.broadcastSkills();
     });
     void this.connectors.applySettings(store.settings.connectors).catch((error) => {
       console.error("[cca] 连接器启动失败", error);
@@ -658,7 +668,14 @@ export class Hub {
           const prev = store.settings;
           const modelProvidersChanged =
             JSON.stringify(prev.providers) !== JSON.stringify(msg.settings.providers);
-          let nextSettings = msg.settings;
+          const mcpIds = new Set<string>();
+          const mcpServers = msg.settings.mcpServers.map((server) => {
+            const normalized = normalizeMcpServer(server);
+            if (mcpIds.has(normalized.id)) throw new Error("MCP 服务器标识不能重复");
+            mcpIds.add(normalized.id);
+            return normalized;
+          });
+          let nextSettings = { ...msg.settings, mcpServers };
           this.validateModelContextWindows(nextSettings);
           let modelOptions: ModelOption[] | undefined;
           if (nextSettings.defaultModel) {
@@ -723,20 +740,59 @@ export class Hub {
           );
           break;
         }
+        case "mcp.list": {
+          this.requireAdmin(conn);
+          this.reply(conn, msg.id, listScopedMcpServers("platform"));
+          break;
+        }
+        case "mcp.save": {
+          this.requireAdmin(conn);
+          if (this.manager.runningThreadIds().length > 0) {
+            throw new Error("当前仍有任务运行,请停止或等待完成后再修改 MCP 配置");
+          }
+          const prev = store.settings;
+          const saved = saveScopedMcpServer("platform", msg.server);
+          await this.manager.reconfigureOpenSessions(store.settings, prev);
+          this.broadcastSettings();
+          this.reply(conn, msg.id, saved);
+          break;
+        }
+        case "mcp.delete": {
+          this.requireAdmin(conn);
+          if (this.manager.runningThreadIds().length > 0) {
+            throw new Error("当前仍有任务运行,请停止或等待完成后再修改 MCP 配置");
+          }
+          const prev = store.settings;
+          deleteScopedMcpServer("platform", msg.idToDelete);
+          await this.manager.reconfigureOpenSessions(store.settings, prev);
+          this.broadcastSettings();
+          this.reply(conn, msg.id);
+          break;
+        }
         case "skills.list": {
           this.reply(conn, msg.id, listSkills());
           break;
         }
         case "skill.save": {
           this.requireAdmin(conn);
+          if (this.manager.runningThreadIds().length > 0) {
+            throw new Error("当前仍有任务运行,请停止或等待完成后再修改技能配置");
+          }
+          const prev = store.settings;
           saveSkill(msg.name, msg.description, msg.content);
+          await this.manager.reconfigureOpenSessions(store.settings, prev);
           this.broadcastSkills();
           this.reply(conn, msg.id);
           break;
         }
         case "skill.delete": {
           this.requireAdmin(conn);
+          if (this.manager.runningThreadIds().length > 0) {
+            throw new Error("当前仍有任务运行,请停止或等待完成后再修改技能配置");
+          }
+          const prev = store.settings;
           deleteSkill(msg.name);
+          await this.manager.reconfigureOpenSessions(store.settings, prev);
           this.broadcastSkills();
           this.reply(conn, msg.id);
           break;
