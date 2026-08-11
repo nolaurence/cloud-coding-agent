@@ -13,6 +13,7 @@ import { RightPanelResizeHandle } from "../components/RightPanelResizeHandle";
 import { ThreadShareDialog } from "../components/ThreadShareDialog";
 import { useResizableWidth } from "../hooks/useResizableWidth";
 import { Button } from "@/components/ui/button";
+import type { ImagePreviewTarget } from "../lib/imagePreview";
 
 const RIGHT_PANEL_WIDTH_STORAGE_KEY = "cloud-coding-agent:right-panel-width";
 const RIGHT_PANEL_DEFAULT_WIDTH = 540;
@@ -45,6 +46,7 @@ export function ThreadPage() {
   const [switchingMode, setSwitchingMode] = useState(false);
   const [modelError, setModelError] = useState("");
   const [viewingSubagentId, setViewingSubagentId] = useState<string | null>(null);
+  const [imageToOpen, setImageToOpen] = useState<ImagePreviewTarget | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
   const [layoutWidth, setLayoutWidth] = useState(0);
   const layoutRef = useRef<HTMLDivElement>(null);
@@ -106,6 +108,7 @@ export function ThreadPage() {
     setSwitchingMode(false);
     setModelError("");
     setViewingSubagentId(null);
+    setImageToOpen(null);
   }, [threadId]);
 
   useEffect(() => {
@@ -197,6 +200,10 @@ export function ThreadPage() {
             bottomInset={canInteract ? composerHeight : 0}
             selectedSubagentId={viewingSubagentId}
             onSubagentViewChange={setViewingSubagentId}
+            onOpenImage={canManageThread ? (image) => {
+              setImageToOpen({ ...image });
+              setPanelOpen(true);
+            } : undefined}
           />
           {canInteract && (
             <div ref={composerOverlayRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-2">
@@ -281,7 +288,14 @@ export function ThreadPage() {
               : "hidden"}
             style={{ "--right-panel-width": `${panelWidth}px` } as CSSProperties}
           >
-            <RightPanel threadId={threadId} projectId={thread?.projectId} panelVisible={panelOpen} onClose={() => setPanelOpen(false)} />
+            <RightPanel
+              key={threadId}
+              threadId={threadId}
+              projectId={thread?.projectId}
+              panelVisible={panelOpen}
+              imageToOpen={imageToOpen?.threadId === threadId ? imageToOpen : null}
+              onClose={() => setPanelOpen(false)}
+            />
           </div>
         </>
       )}

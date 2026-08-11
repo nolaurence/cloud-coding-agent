@@ -5,6 +5,7 @@ import {
   FolderTree,
   Gauge,
   Globe2,
+  Image as ImageIcon,
   PanelRightClose,
   Plus,
   RefreshCw,
@@ -20,11 +21,17 @@ import { GitPanel } from "./workspace/GitPanel";
 import { TerminalPanel } from "./workspace/TerminalPanel";
 import "./workspace/workspace.css";
 import { shouldShowNativeBrowser } from "../lib/browserVisibility";
+import type { ImagePreviewTarget } from "../lib/imagePreview";
+import { ImagePreviewPanel } from "./ImagePreviewPanel";
 
-type PanelTab = "browser" | "terminal" | "files" | "diff" | "context";
+type StaticPanelTab = "browser" | "terminal" | "files" | "diff" | "context";
+
+type PanelTab =
+  | { id: StaticPanelTab; kind: "static"; label: string; icon: typeof Globe2 }
+  | { id: string; kind: "image"; label: string; icon: typeof Globe2; image: ImagePreviewTarget };
 
 const panelOptions: {
-  id: PanelTab;
+  id: StaticPanelTab;
   label: string;
   description: string;
   icon: typeof Globe2;
@@ -41,32 +48,62 @@ export function RightPanel({
   projectId,
   onClose,
   panelVisible,
+  imageToOpen,
 }: {
   threadId: string;
   projectId?: string;
   onClose: () => void;
   panelVisible: boolean;
+  imageToOpen?: ImagePreviewTarget | null;
 }) {
   const [openTabs, setOpenTabs] = useState<PanelTab[]>([]);
-  const [activeTab, setActiveTab] = useState<PanelTab | null>(null);
+  const [activeTab, setActiveTab] = useState<string | null>(null);
   const thread = useApp((state) => state.threads.find((candidate) => candidate.id === threadId));
   const draftOwner = useApp((state) => state.user?.username ?? "anonymous");
   const canManageWorkspace = thread?.access === "owner";
 
-  const openTab = (tab: PanelTab) => {
-    setOpenTabs((current) => current.includes(tab) ? current : [...current, tab]);
-    setActiveTab(tab);
+  const openTab = (tabId: StaticPanelTab) => {
+    const option = panelOptions.find((candidate) => candidate.id === tabId);
+    if (!option) return;
+    setOpenTabs((current) => current.some((tab) => tab.id === tabId)
+      ? current
+      : [...current, { id: option.id, kind: "static", label: option.label, icon: option.icon }]);
+    setActiveTab(tabId);
   };
 
-  const closeTab = (tab: PanelTab) => {
-    const index = openTabs.indexOf(tab);
-    const next = openTabs.filter((candidate) => candidate !== tab);
+  useEffect(() => {
+    if (!imageToOpen) return;
+    const tabId = `image:${imageToOpen.threadId}:${imageToOpen.id}`;
+    setOpenTabs((current) => {
+      const existing = current.find((tab) => tab.id === tabId);
+      if (existing?.kind === "image") {
+        if (existing.label === imageToOpen.displayName) return current;
+        return current.map((tab) => tab.id === tabId
+          ? { ...tab, label: imageToOpen.displayName, image: imageToOpen }
+          : tab);
+      }
+      return [...current, {
+        id: tabId,
+        kind: "image",
+        label: imageToOpen.displayName,
+        icon: ImageIcon,
+        image: imageToOpen,
+      }];
+    });
+    setActiveTab(tabId);
+  }, [imageToOpen]);
+
+  const closeTab = (tabId: string) => {
+    const index = openTabs.findIndex((tab) => tab.id === tabId);
+    if (index < 0) return;
+    const next = openTabs.filter((tab) => tab.id !== tabId);
     setOpenTabs(next);
-    if (activeTab === tab) setActiveTab(next[index] ?? next[index - 1] ?? null);
+    if (activeTab === tabId) setActiveTab(next[index]?.id ?? next[index - 1]?.id ?? null);
   };
 
   const renderPanel = (tab: PanelTab) => {
-    switch (tab) {
+    if (tab.kind === "image") return <ImagePreviewPanel image={tab.image} />;
+    switch (tab.id) {
       case "browser":
         return <BrowserPanel threadId={threadId} visible={shouldShowNativeBrowser(panelVisible, activeTab)} />;
       case "terminal":
@@ -96,15 +133,14 @@ export function RightPanel({
   return (
     <Tabs
       value={activeTab ?? ""}
-      onValueChange={(value) => setActiveTab(value as PanelTab)}
+      onValueChange={setActiveTab}
       className="flex h-full min-h-0 w-full flex-col gap-0 bg-white dark:bg-zinc-950"
     >
       <div className="flex h-12 shrink-0 items-center gap-1 border-b border-zinc-200 px-2 dark:border-zinc-800">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           <TabsList variant="line" className="h-10 min-w-0 max-w-[calc(100%_-_2rem)] flex-none justify-start gap-1 overflow-x-auto overflow-y-hidden rounded-none p-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {openTabs.map((tab) => {
-              const item = panelOptions.find((candidate) => candidate.id === tab)!;
-              const selected = activeTab === tab;
+            {openTabs.map((item) => {
+              const selected = activeTab === item.id;
               return (
                 <div
                   key={item.id}
@@ -117,7 +153,7 @@ export function RightPanel({
                     className="h-8 flex-none rounded-r-none px-2 text-xs after:hidden data-active:bg-transparent dark:data-active:bg-transparent"
                   >
                     <item.icon className="h-3.5 w-3.5" />
-                    <span>{item.label}</span>
+                    <span className="max-w-32 truncate">{item.label}</span>
                   </TabsTrigger>
                   <button
                     type="button"
@@ -143,8 +179,8 @@ export function RightPanel({
           <PanelEmptyState onSelect={openTab} />
         ) : openTabs.map((tab) => (
           <TabsContent
-            key={tab}
-            value={tab}
+            key={tab.id}
+            value={tab.id}
             forceMount
             className="h-full data-[state=inactive]:hidden"
           >
@@ -161,7 +197,7 @@ function PanelPicker({
   onSelect,
 }: {
   openTabs: PanelTab[];
-  onSelect: (tab: PanelTab) => void;
+  onSelect: (tab: StaticPanelTab) => void;
 }) {
   return (
     <DropdownMenu.Root>
@@ -184,7 +220,7 @@ function PanelPicker({
             >
               <item.icon className="h-4 w-4 shrink-0 text-zinc-500" />
               <span className="flex-1">{item.label}</span>
-              {openTabs.includes(item.id) && <span className="text-[10px] text-zinc-400">已打开</span>}
+              {openTabs.some((tab) => tab.id === item.id) && <span className="text-[10px] text-zinc-400">已打开</span>}
             </DropdownMenu.Item>
           ))}
         </DropdownMenu.Content>
@@ -193,7 +229,7 @@ function PanelPicker({
   );
 }
 
-function PanelEmptyState({ onSelect }: { onSelect: (tab: PanelTab) => void }) {
+function PanelEmptyState({ onSelect }: { onSelect: (tab: StaticPanelTab) => void }) {
   return (
     <div className="flex h-full min-h-0 items-center justify-center overflow-y-auto p-5 sm:p-8">
       <div className="w-full max-w-2xl">

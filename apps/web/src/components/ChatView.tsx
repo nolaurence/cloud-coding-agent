@@ -14,7 +14,8 @@ import {
   X,
 } from "lucide-react";
 import type { ChatMessage, SubagentActivity, ToolActivity } from "@cca/protocol";
-import { loadImage } from "../lib/client";
+import { useImageObjectUrl } from "../hooks/useImageObjectUrl";
+import type { ImagePreviewTarget } from "../lib/imagePreview";
 import { useApp, useThreadState } from "../lib/store";
 import {
   deriveChatTimeline,
@@ -141,6 +142,7 @@ const MessageContext = createContext<{
   threadId: string;
   shareToken?: string;
   showAuthors: boolean;
+  onOpenImage?: (image: ImagePreviewTarget) => void;
 }>({ threadId: "", showAuthors: false });
 
 function MessageImage({
@@ -154,43 +156,42 @@ function MessageImage({
   threadId: string;
   shareToken?: string;
 }) {
-  const [src, setSrc] = useState("");
-  const [failed, setFailed] = useState(false);
+  const { onOpenImage } = useContext(MessageContext);
+  const image = { id, displayName: name, threadId, shareToken };
+  const { src, loading, error } = useImageObjectUrl(image);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    let objectUrl = "";
-    void loadImage(id, threadId, controller.signal, shareToken)
-      .then((blob) => {
-        objectUrl = URL.createObjectURL(blob);
-        setSrc(objectUrl);
-      })
-      .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === "AbortError")) setFailed(true);
-      });
-    return () => {
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [id, shareToken, threadId]);
-
-  if (failed) {
+  if (error) {
     return (
       <div className="flex h-28 w-44 items-center justify-center rounded-xl bg-zinc-200 px-3 text-center text-xs text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
-        图片加载失败
+        {error}
       </div>
     );
   }
-  if (!src) {
+  if (loading || !src) {
     return <div className="h-28 w-44 animate-pulse rounded-xl bg-zinc-200 dark:bg-zinc-700" />;
   }
-  return (
-    <a href={src} target="_blank" rel="noreferrer" title={name}>
-      <img
-        src={src}
-        alt={name}
-        className="max-h-64 max-w-full rounded-xl object-contain"
-      />
+
+  const thumbnail = (
+    <img
+      src={src}
+      alt={name}
+      className="max-h-64 max-w-full rounded-xl object-contain"
+    />
+  );
+
+  return onOpenImage ? (
+    <button
+      type="button"
+      className="cursor-zoom-in rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      aria-label={`在右侧栏打开图片：${name}`}
+      title={`打开图片：${name}`}
+      onClick={() => onOpenImage(image)}
+    >
+      {thumbnail}
+    </button>
+  ) : (
+    <a href={src} target="_blank" rel="noreferrer" className="cursor-zoom-in" title={name}>
+      {thumbnail}
     </a>
   );
 }
@@ -719,6 +720,7 @@ export function ChatView({
   showAuthors,
   selectedSubagentId: controlledSubagentId,
   onSubagentViewChange,
+  onOpenImage,
 }: {
   threadId: string;
   bottomInset?: number;
@@ -727,6 +729,7 @@ export function ChatView({
   showAuthors?: boolean;
   selectedSubagentId?: string | null;
   onSubagentViewChange?: (subagentId: string | null) => void;
+  onOpenImage?: (image: ImagePreviewTarget) => void;
 }) {
   const state = useThreadState(threadId);
   const openThread = useApp((appState) => appState.openThread);
@@ -881,7 +884,7 @@ export function ChatView({
     Boolean(thread?.shared || thread?.access === "readonly" || thread?.access === "collaborate");
 
   return (
-    <MessageContext.Provider value={{ threadId, shareToken, showAuthors: shouldShowAuthors }}>
+    <MessageContext.Provider value={{ threadId, shareToken, showAuthors: shouldShowAuthors, onOpenImage }}>
       <div className="relative h-full">
         <div
           ref={scrollRef}
