@@ -9,7 +9,8 @@ COPY apps/web/package.json apps/web/
 COPY packages/protocol/package.json packages/protocol/
 RUN npm ci --no-audit --no-fund
 COPY . .
-RUN npm run build -w @cca/web
+RUN npm run build -w @cca/web \
+    && npm run build -w @cca/server
 
 FROM node:22-slim
 WORKDIR /app

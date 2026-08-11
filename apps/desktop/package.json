@@ -1,0 +1,19 @@
+{
+  "name": "@cca/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/lifecycle.test.ts src/browserViews.test.ts src/bootstrapCredentials.test.ts src/navigationWait.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "^43.3.0",
+    "esbuild": "^0.25.9",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

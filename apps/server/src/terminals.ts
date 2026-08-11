@@ -1,4 +1,4 @@
-import { spawn as spawnPty } from "node-pty";
+import { createRequire } from "node:module";
 import type { TerminalEvent, TerminalSnapshot } from "@cca/protocol";
 
 interface TerminalProcess {
@@ -59,8 +59,11 @@ const SAFE_ENVIRONMENT_KEYS = [
   "TMPDIR",
 ] as const;
 
-const defaultSpawner: TerminalSpawner = (file, args, options) =>
-  spawnPty(file, args, options);
+const require = createRequire(import.meta.url);
+const defaultSpawner: TerminalSpawner = (file, args, options) => {
+  const { spawn } = require("node-pty") as { spawn: TerminalSpawner };
+  return spawn(file, args, options);
+};
 
 function terminalKey(ownerId: string, terminalId: string): string {
   return `${ownerId}\0${terminalId}`;

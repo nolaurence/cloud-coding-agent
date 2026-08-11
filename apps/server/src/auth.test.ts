@@ -9,6 +9,7 @@ test("admin roles and invite registration persist without storing invite plainte
   const originalDataDirectory = process.env.CCA_DATA_DIR;
   const originalAdminUsername = process.env.ADMIN_USERNAME;
   const originalAdminPassword = process.env.ADMIN_PASSWORD;
+  const originalInvitePolicy = process.env.REGISTRATION_INVITE_REQUIRED;
   process.env.CCA_DATA_DIR = dataDirectory;
   process.env.ADMIN_USERNAME = "bootstrap-admin";
   process.env.ADMIN_PASSWORD = "bootstrap-secret";
@@ -23,6 +24,8 @@ test("admin roles and invite registration persist without storing invite plainte
     else process.env.ADMIN_USERNAME = originalAdminUsername;
     if (originalAdminPassword === undefined) delete process.env.ADMIN_PASSWORD;
     else process.env.ADMIN_PASSWORD = originalAdminPassword;
+    if (originalInvitePolicy === undefined) delete process.env.REGISTRATION_INVITE_REQUIRED;
+    else process.env.REGISTRATION_INVITE_REQUIRED = originalInvitePolicy;
     fs.rmSync(dataDirectory, { recursive: true, force: true });
   });
 
@@ -77,6 +80,13 @@ test("admin roles and invite registration persist without storing invite plainte
   assert.equal(auth.getPublicRegistrationPolicy().inviteRequired, true);
   assert.equal(auth.verifyUser("invited-one", "secret12")?.role, "user");
 
+  auth.setInviteRequired(false);
+  process.env.REGISTRATION_INVITE_REQUIRED = "true";
+  await auth.initAuth();
+  assert.equal(auth.getPublicRegistrationPolicy().inviteRequired, true);
+  assert.equal(JSON.parse(fs.readFileSync(registrationFile, "utf8")).inviteRequired, true);
+  delete process.env.REGISTRATION_INVITE_REQUIRED;
+
   const databaseFile = path.join(dataDirectory, "auth.db");
   await db.initDb(`sqlite:${databaseFile.replaceAll(path.sep, "/")}`);
   await auth.initAuth();
@@ -95,4 +105,18 @@ test("admin roles and invite registration persist without storing invite plainte
   await auth.initAuth();
   assert.equal(auth.getPublicRegistrationPolicy().inviteRequired, false);
   assert.equal(auth.listUsers().find((user) => user.username === "member-one")?.role, "admin");
+});
+
+test("desktop bootstrap forces invite-only registration", async () => {
+  const original = process.env.REGISTRATION_INVITE_REQUIRED;
+  process.env.REGISTRATION_INVITE_REQUIRED = "true";
+  try {
+    const auth = await import("./auth.js");
+    assert.equal(auth.applyRegistrationEnvironment({ inviteRequired: false, invites: [] }).inviteRequired, true);
+    assert.equal(auth.applyRegistrationEnvironment({ inviteRequired: true, invites: [] }).inviteRequired, true);
+    assert.throws(() => auth.setInviteRequired(false), /强制使用邀请码/);
+  } finally {
+    if (original === undefined) delete process.env.REGISTRATION_INVITE_REQUIRED;
+    else process.env.REGISTRATION_INVITE_REQUIRED = original;
+  }
 });

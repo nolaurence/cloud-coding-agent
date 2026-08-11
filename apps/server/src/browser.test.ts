@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "playwright-core";
-import { BrowserPool, assertSafeBrowserUrl, createBrowserUseTool, type BrowserManager } from "./browser.js";
+import { BrowserPool, assertSafeBrowserUrl, createBrowserUseTool, BrowserManager } from "./browser.js";
 
 function toolWithPage(page: Partial<Page>) {
-  const manager = {
-    run: async <T>(operation: (activePage: Page) => Promise<T>) => operation(page as Page),
-  } as unknown as BrowserManager;
+  const manager = new BrowserManager("test", 0);
+  manager.run = async <T>(operation: (activePage: Page) => Promise<T>) => operation(page as Page);
   return createBrowserUseTool(manager) as unknown as {
     handler: (args: Record<string, unknown>) => Promise<unknown>;
   };

@@ -307,6 +307,13 @@ export async function initAuth() {
     registrationSettings = loadRegistrationSettings();
   }
 
+  const environmentRegistrationSettings = applyRegistrationEnvironment(registrationSettings);
+  if (environmentRegistrationSettings !== registrationSettings) {
+    registrationSettings = environmentRegistrationSettings;
+    if (usingDatabase()) await persistRegistrationSettingsNow();
+    else saveRegistrationFile();
+  }
+
   const configuredAdminUsername = process.env.ADMIN_USERNAME?.trim() || "admin";
   const adminPassword = process.env.ADMIN_PASSWORD || "admin123";
   const existing = findUser(configuredAdminUsername);
@@ -370,6 +377,12 @@ export function setUserRole(
   return toAdminUser(target);
 }
 
+export function applyRegistrationEnvironment(settings: RegistrationSettings): RegistrationSettings {
+  return process.env.REGISTRATION_INVITE_REQUIRED === "true" && !settings.inviteRequired
+    ? { ...settings, inviteRequired: true }
+    : settings;
+}
+
 export function getPublicRegistrationPolicy(): RegistrationPolicy {
   return { inviteRequired: registrationSettings.inviteRequired };
 }
@@ -386,6 +399,9 @@ export function getAdminRegistrationState(): AdminRegistrationState {
 
 export function setInviteRequired(inviteRequired: boolean): RegistrationPolicy {
   if (typeof inviteRequired !== "boolean") throw new Error("邀请码注册设置无效");
+  if (!inviteRequired && process.env.REGISTRATION_INVITE_REQUIRED === "true") {
+    throw new Error("当前部署强制使用邀请码注册");
+  }
   if (registrationSettings.inviteRequired !== inviteRequired) {
     registrationSettings.inviteRequired = inviteRequired;
     saveRegistrationSettings();

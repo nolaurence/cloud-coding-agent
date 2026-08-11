@@ -1,3 +1,4 @@
+import { browserPool } from "./browser.js";
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import type {
@@ -507,6 +508,7 @@ export class Hub {
           const thread = store.getThread(msg.threadId);
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
           this.terminals.closeThread(msg.threadId);
+          await browserPool.stopThread(msg.threadId);
           await this.manager.deleteThread(msg.threadId);
           if (thread) removeThreadUploads(thread);
           await deleteThreadShare(msg.threadId);

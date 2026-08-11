@@ -36,6 +36,19 @@ npm install
 npm run dev        # server :8787 + web :5173(代理 /ws)
 ```
 
+## Desktop(macOS / Windows)
+
+Electron 桌面版首次启动会在 `userData` 中生成并以受限权限保存强随机管理员密码,只通过原生对话框显示一次；后续启动复用该密码。桌面注册强制使用管理员签发的邀请码。Electron 桌面版在应用内启动同一个 Fastify 服务,使用随机的 `127.0.0.1` 端口;数据和 SQLite 数据库保存在 Electron `userData` 目录,项目工作区默认为其 `workspaces/` 子目录。桌面进程设置 `BROWSER_BACKEND=electron-ipc`:每个会话使用独立、非持久化且沙箱化的 Electron `WebContentsView`,右侧浏览器面板显示该原生视图。请求会在服务子进程与 Electron 主进程之间通过受验证、限时的 IPC 转发;仅支持 `browser_use` 的固定操作,不提供任意 JavaScript。非桌面部署仍使用原有 Linux Xvfb/Chromium/noVNC 后端。
+
+```bash
+npm ci
+npm run desktop          # 构建并启动未打包应用
+npm run desktop:dir      # 生成可运行的未安装包,便于检查
+npm run desktop:dist     # 当前平台生成 DMG/ZIP 或 NSIS 安装包
+```
+
+发布配置只构建当前主机架构。为覆盖 macOS Intel/Apple Silicon 与 Windows x64/arm64,请使用 `macos-*-x64`、`macos-*-arm64`、`windows-*-x64`、`windows-*-arm64` 四个原生 runner（可组成 CI matrix）,在每个 runner 上从干净目录执行 `npm ci && npm run desktop:dist`。不要在单个 runner 上用 `--x64 --arm64` 交叉打包。`node-pty`、Koffi 和 Copilot 平台运行时保留在 ASAR 外;`npm ci` 会按构建主机安装对应可选平台包；`node-pty` 必须存在目标 OS/架构预编译文件（或在目标 runner 上安装编译工具后构建）。跨架构发布前请在每个目标架构的 runner 上执行并冒烟测试,不要复用其他平台的 `node_modules`。 浏览器网络策略会在顶层导航及 Electron 请求拦截阶段重新解析主机并拒绝本机、私网、链路本地和元数据目标（除非设置 `BROWSER_ALLOW_PRIVATE_NETWORK=true`）；这属于尽力过滤,不是 DNS pinning。正式发布还需配置 Apple Developer ID 签名/公证和 Windows Authenticode 证书;本仓库不会存放证书。产物写入 `release/`。
+
 ## Standalone 部署
 
 Standalone 模式使用内置 SQLite,适合单机或个人服务。应用数据、用户配置、会话记录和 Copilot 运行时状态需要持久化到同一个数据目录;不要让多个实例同时读写同一个 SQLite 文件。

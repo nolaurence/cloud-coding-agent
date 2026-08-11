@@ -39,6 +39,7 @@ import { createAgentResourceTools } from "./agentResources.js";
 import { effectiveMcpServers } from "./mcpServers.js";
 import { enabledSkillDirectories } from "./skills.js";
 import { getUserRole } from "./auth.js";
+import { sanitizedCopilotRuntimeEnv } from "./runtimeEnv.js";
 
 interface ThreadRuntime {
   threadId: string;
@@ -292,7 +293,7 @@ export class CopilotManager {
     private readonly createClient: CopilotClientFactory = () =>
       new CopilotClient({
         logLevel: "warning",
-        env: { ...process.env, COPILOT_HOME },
+        env: sanitizedCopilotRuntimeEnv(),
       }),
   ) {}
 

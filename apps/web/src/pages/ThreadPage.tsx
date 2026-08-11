@@ -281,7 +281,7 @@ export function ThreadPage() {
               : "hidden"}
             style={{ "--right-panel-width": `${panelWidth}px` } as CSSProperties}
           >
-            <RightPanel threadId={threadId} projectId={thread?.projectId} onClose={() => setPanelOpen(false)} />
+            <RightPanel threadId={threadId} projectId={thread?.projectId} panelVisible={panelOpen} onClose={() => setPanelOpen(false)} />
           </div>
         </>
       )}

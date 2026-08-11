@@ -11,13 +11,21 @@
     "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm run dev -w @cca/server",
     "dev:web": "npm run dev -w @cca/web",
-    "build": "npm run build -w @cca/web && npm run build -w @cca/server",
+    "build": "npm run build -w @cca/web && npm run build -w @cca/server && npm run build -w @cca/desktop",
     "start": "node apps/server/dist/index.js",
     "test": "npm run test -w @cca/server",
-    "typecheck": "npm run typecheck -w @cca/protocol && npm run typecheck -w @cca/server && npm run typecheck -w @cca/web"
+    "typecheck": "npm run typecheck -w @cca/protocol && npm run typecheck -w @cca/server && npm run typecheck -w @cca/web && npm run typecheck -w @cca/desktop",
+    "desktop": "npm run desktop:build && electron apps/desktop",
+    "desktop:build": "npm run build -w @cca/web && npm run build -w @cca/desktop",
+    "desktop:dir": "npm run desktop:build && electron-builder --dir",
+    "desktop:dist": "npm run desktop:build && electron-builder",
+    "test:desktop": "npm run test -w @cca/desktop"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.9",
     "typescript": "^5.8.3"
   },
   "engines": {
@@ -25,5 +33,48 @@
   },
   "allowScripts": {
     "node-pty@1.1.0": true
+  },
+  "build": {
+    "appId": "com.github.cloud-coding-agent",
+    "productName": "Cloud Coding Agent",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "apps/desktop/dist/**/*",
+      "apps/server/dist/**/*",
+      "apps/web/dist/**/*",
+      "apps/desktop/package.json",
+      "apps/server/package.json",
+      "packages/protocol/package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/prebuilds/**/*",
+      "node_modules/@github/copilot-*/**/*",
+      "node_modules/koffi/**/*",
+      "node_modules/@koromix/**/*"
+    ],
+    "npmRebuild": false,
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "main": "apps/desktop/dist/main.js",
+  "dependencies": {
+    "@cca/server": "*"
   }
 }

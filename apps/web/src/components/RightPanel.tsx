@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ExternalLink,
   FileDiff,
@@ -19,6 +19,7 @@ import { FilesPanel } from "./workspace/FilesPanel";
 import { GitPanel } from "./workspace/GitPanel";
 import { TerminalPanel } from "./workspace/TerminalPanel";
 import "./workspace/workspace.css";
+import { shouldShowNativeBrowser } from "../lib/browserVisibility";
 
 type PanelTab = "browser" | "terminal" | "files" | "diff" | "context";
 
@@ -39,10 +40,12 @@ export function RightPanel({
   threadId,
   projectId,
   onClose,
+  panelVisible,
 }: {
   threadId: string;
   projectId?: string;
   onClose: () => void;
+  panelVisible: boolean;
 }) {
   const [openTabs, setOpenTabs] = useState<PanelTab[]>([]);
   const [activeTab, setActiveTab] = useState<PanelTab | null>(null);
@@ -65,7 +68,7 @@ export function RightPanel({
   const renderPanel = (tab: PanelTab) => {
     switch (tab) {
       case "browser":
-        return <BrowserPanel threadId={threadId} />;
+        return <BrowserPanel threadId={threadId} visible={shouldShowNativeBrowser(panelVisible, activeTab)} />;
       case "terminal":
         return <TerminalPanel threadId={threadId} />;
       case "files":
@@ -221,82 +224,67 @@ function Empty({ text }: { text: string }) {
   return <div className="flex h-full items-center justify-center p-6 text-sm text-zinc-500">{text}</div>;
 }
 
-function BrowserPanel({ threadId }: { threadId: string }) {
+function BrowserPanel({ threadId, visible }: { threadId: string; visible: boolean }) {
   const token = localStorage.getItem("cca-token") ?? "";
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const desktop = window.ccaDesktop?.browser;
   const [reloadKey, setReloadKey] = useState(0);
-  const [browser, setBrowser] = useState<{ ready: boolean; ticket?: string; error?: string } | null>(null);
+  const [browser, setBrowser] = useState<{ ready: boolean; ticket?: string; backend?: string; error?: string } | null>(null);
   const issueTicket = async (signal?: AbortSignal) => {
     const response = await fetch("/api/browser/ticket", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ threadId }),
-      signal,
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId }), signal,
     });
-    const data = await response.json() as { ticket?: string; error?: string };
+    const data = await response.json() as { ticket?: string; backend?: string; error?: string };
     if (!response.ok || !data.ticket) throw new Error(data.error || "无法连接浏览器");
-    return data.ticket;
+    return { ticket: data.ticket, backend: data.backend };
   };
   useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
     const load = async () => {
       try {
-        const response = await fetch(`/api/browser/status?threadId=${encodeURIComponent(threadId)}`, {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: controller.signal,
-        });
+        const response = await fetch(`/api/browser/status?threadId=${encodeURIComponent(threadId)}`, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
         const data = await response.json() as { ready?: boolean; error?: string };
         if (!response.ok) throw new Error(data.error || "无法获取浏览器状态");
-        if (data.ready) {
-          setBrowser({ ready: true, ticket: await issueTicket(controller.signal) });
-        } else {
-          setBrowser({ ready: false, error: data.error });
-          timer = setTimeout(() => void load(), 1_000);
-        }
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          setBrowser({ ready: false, error: error instanceof Error ? error.message : String(error) });
-        }
-      }
+        if (data.ready) { const access = await issueTicket(controller.signal); setBrowser({ ready: true, ...access }); }
+        else { setBrowser({ ready: false, error: data.error }); timer = setTimeout(() => void load(), 1_000); }
+      } catch (error) { if (!controller.signal.aborted) setBrowser({ ready: false, error: error instanceof Error ? error.message : String(error) }); }
     };
-    setBrowser(null);
-    void load();
-    return () => {
-      controller.abort();
-      if (timer) clearTimeout(timer);
-    };
-  }, [reloadKey, threadId, token]);
+    setBrowser(null); void load();
+    return () => { controller.abort(); if (timer) clearTimeout(timer); desktop?.detach(threadId); };
+  }, [reloadKey, threadId, token, desktop]);
+  useEffect(() => {
+    if (!desktop || browser?.backend !== "electron-native" || !browser.ticket || !surfaceRef.current) return;
+    const surface = surfaceRef.current;
+    const bounds = () => { const rect = surface.getBoundingClientRect(); return { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) }; };
+    let attached = true;
+    void desktop.attach(threadId, browser.ticket, bounds()).catch((error) => { if (attached) setBrowser({ ready: false, error: error instanceof Error ? error.message : String(error) }); });
+    const observer = new ResizeObserver(() => desktop.updateBounds(threadId, bounds())); observer.observe(surface);
+    const update = () => desktop.updateBounds(threadId, bounds()); window.addEventListener("resize", update);
+    return () => { attached = false; observer.disconnect(); window.removeEventListener("resize", update); desktop.detach(threadId); };
+  }, [browser?.backend, browser?.ticket, desktop, threadId]);
+  useEffect(() => { if (desktop && browser?.backend === "electron-native") desktop.setVisible(threadId, visible && document.visibilityState === "visible"); }, [browser?.backend, desktop, threadId, visible]);
+  useEffect(() => { if (!desktop) return; const update = () => desktop.setVisible(threadId, visible && document.visibilityState === "visible"); document.addEventListener("visibilitychange", update); return () => document.removeEventListener("visibilitychange", update); }, [desktop, threadId, visible]);
+  const native = browser?.backend === "electron-native" && desktop;
   const openInNewWindow = () => {
     const popup = window.open("about:blank", "_blank", "noopener,noreferrer");
     if (!popup) {
       setBrowser((current) => ({ ready: false, error: current?.error || "浏览器阻止了新窗口" }));
       return;
     }
-    void issueTicket().then((ticket) => {
-      popup.location.href = browserUrl(ticket);
+    void issueTicket().then((access) => {
+      popup.location.href = browserUrl(access.ticket);
     }).catch((error) => {
       popup.close();
       setBrowser({ ready: false, error: error instanceof Error ? error.message : String(error) });
     });
   };
-  const url = browser?.ticket ? browserUrl(browser.ticket) : "";
-  return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-1 border-b border-zinc-200 p-2 dark:border-zinc-800">
-        <div className="min-w-0 flex-1 truncate px-2 text-xs text-zinc-500">Agent 浏览器</div>
-        <Button type="button" variant="ghost" size="icon" onClick={() => setReloadKey((value) => value + 1)} aria-label="重新连接" title="重新连接"><RefreshCw className="h-3.5 w-3.5" /></Button>
-        <Button type="button" variant="ghost" size="icon" disabled={!browser?.ready} onClick={openInNewWindow} aria-label="在新窗口打开" title="在新窗口打开"><ExternalLink className="h-3.5 w-3.5" /></Button>
-      </div>
-      {browser?.ready && url ? (
-        <iframe key={reloadKey} src={url} title="Agent 浏览器" className="min-h-0 flex-1 bg-black" allow="clipboard-read; clipboard-write" />
-      ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-sm text-zinc-500">
-          {browser?.error || "浏览器正在启动…"}
-        </div>
-      )}
-      <div className="border-t border-zinc-200 px-2 py-1 text-[10px] text-zinc-400 dark:border-zinc-800">这里显示 Agent 通过 browser_use 操作的同一个 Chromium 会话。</div>
-    </div>
-  );
+  const url = browser?.ticket && !native ? browserUrl(browser.ticket) : "";
+  return <div className="flex h-full flex-col">
+    <div className="flex items-center gap-1 border-b border-zinc-200 p-2 dark:border-zinc-800"><div className="min-w-0 flex-1 truncate px-2 text-xs text-zinc-500">Agent 浏览器</div><Button type="button" variant="ghost" size="icon" onClick={() => setReloadKey((value) => value + 1)} aria-label="重新连接" title="重新连接"><RefreshCw className="h-3.5 w-3.5" /></Button>{!native && <Button type="button" variant="ghost" size="icon" disabled={!browser?.ready} onClick={openInNewWindow} aria-label="在新窗口打开" title="在新窗口打开"><ExternalLink className="h-3.5 w-3.5" /></Button>}</div>
+    {browser?.ready && native ? <div ref={surfaceRef} className="min-h-0 flex-1 bg-black" /> : browser?.ready && url ? <iframe key={reloadKey} src={url} title="Agent 浏览器" className="min-h-0 flex-1 bg-black" allow="clipboard-read; clipboard-write" /> : <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-sm text-zinc-500">{browser?.error || "浏览器正在启动…"}</div>}
+    <div className="border-t border-zinc-200 px-2 py-1 text-[10px] text-zinc-400 dark:border-zinc-800">这里显示 Agent 通过 browser_use 操作的同一个 Chromium 会话。</div>
+  </div>;
 }
 
 function browserUrl(ticket: string) {

@@ -7,6 +7,7 @@ import path from "node:path";
 import { defineTool, type Tool } from "@github/copilot-sdk";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { DATA_DIR } from "./env.js";
+import { BROWSER_IPC_CHANNEL, BROWSER_IPC_TIMEOUT_MS, isBrowserIpcResponse, type BrowserInspectResult, type BrowserIpcOperation, type BrowserIpcRequest } from "./electronBrowserIpc.js";
 
 const SCREEN = process.env.BROWSER_SCREEN?.trim() || "1280x900x24";
 const START_TIMEOUT_MS = 20_000;
@@ -14,7 +15,7 @@ const VNC_TICKET_TTL_MS = 60_000;
 const ALLOW_PRIVATE_NETWORK = process.env.BROWSER_ALLOW_PRIVATE_NETWORK === "true";
 export const NOVNC_ROOT = process.env.NOVNC_ROOT?.trim() || "/usr/share/novnc";
 
-type BrowserAction = "navigate" | "inspect" | "click" | "type" | "press" | "scroll" | "back" | "forward" | "reload";
+export type BrowserAction = "navigate" | "inspect" | "click" | "type" | "press" | "scroll" | "back" | "forward" | "reload";
 
 export interface BrowserUseArgs {
   action: BrowserAction;
@@ -132,7 +133,88 @@ export async function assertSafeBrowserUrl(rawUrl: string): Promise<URL> {
   return url;
 }
 
-export class BrowserManager {
+export interface BrowserController {
+  readonly enabled: boolean;
+  status(): BrowserStatus;
+  start(): Promise<void>;
+  runAction(args: BrowserUseArgs): Promise<BrowserInspectResult>;
+  redeemTicket(ticket: string): Promise<void>;
+  vncWebSocketPort?(): number;
+  stop(): Promise<void>;
+}
+
+class ElectronIpcBrowserManager implements BrowserController {
+  readonly enabled = true;
+  private ready = false;
+  private starting: Promise<void> | null = null;
+  private error: string | undefined;
+  private operation = Promise.resolve();
+
+  constructor(private readonly threadId: string) {}
+
+  status(): BrowserStatus {
+    return { enabled: true, ready: this.ready, starting: this.starting !== null, error: this.error };
+  }
+
+  private request<T>(payload: BrowserIpcOperation): Promise<T> {
+    if (!process.send || !process.connected) return Promise.reject(new Error("Electron browser IPC is unavailable"));
+    const requestId = crypto.randomUUID();
+    const message: BrowserIpcRequest = { channel: BROWSER_IPC_CHANNEL, kind: "request", requestId, threadId: this.threadId, payload };
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => finish(new Error("Electron browser operation timed out")), BROWSER_IPC_TIMEOUT_MS);
+      const onDisconnect = () => finish(new Error("Electron browser IPC disconnected"));
+      const onMessage = (response: unknown) => {
+        if (!isBrowserIpcResponse(response) || response.requestId !== requestId) return;
+        finish(response.ok ? undefined : new Error(response.error || "Electron browser operation failed"), response.result as T);
+      };
+      const finish = (error?: Error, result?: T) => {
+        clearTimeout(timer);
+        process.off("message", onMessage);
+        process.off("disconnect", onDisconnect);
+        error ? reject(error) : resolve(result as T);
+      };
+      process.on("message", onMessage);
+      process.once("disconnect", onDisconnect);
+      process.send!(message, (error) => { if (error) finish(error); });
+    });
+  }
+
+  async start(): Promise<void> {
+    if (this.ready) return;
+    if (!this.starting) {
+      this.starting = this.request<BrowserStatus>({ operation: "start" }).then((status) => {
+        if (!status.ready) throw new Error(status.error || "Electron browser did not become ready");
+        this.ready = true;
+        this.error = undefined;
+      }).catch((error) => {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      }).finally(() => { this.starting = null; });
+    }
+    return this.starting;
+  }
+
+  runAction(args: BrowserUseArgs): Promise<BrowserInspectResult> {
+    const pending = this.operation.then(async () => {
+      await this.start();
+      return this.request<BrowserInspectResult>({ operation: "run", args });
+    });
+    this.operation = pending.then(() => undefined, () => undefined);
+    return pending;
+  }
+
+  async redeemTicket(ticket: string): Promise<void> {
+    await this.start();
+    await this.request({ operation: "redeem-ticket", ticket });
+  }
+
+  async stop(): Promise<void> {
+    if (process.connected) await this.request({ operation: "stop" }).catch(() => undefined);
+    this.ready = false;
+  }
+}
+
+export class BrowserManager implements BrowserController {
   private processes = new Map<ChildProcess, string>();
   private expectedStops = new WeakSet<ChildProcess>();
   private browser: Browser | null = null;
@@ -267,20 +349,28 @@ export class BrowserManager {
     this.stopping = false;
   }
 
+  async runAction(args: BrowserUseArgs): Promise<BrowserInspectResult> {
+    return this.run((page) => runPlaywrightAction(page, args));
+  }
+
+  async redeemTicket(_ticket: string): Promise<void> {}
+
   async stop() {
     await this.stopProcesses();
   }
 }
 
 export class BrowserPool {
-  private managers = new Map<string, BrowserManager>();
+  private managers = new Map<string, BrowserController>();
   private tickets = new Map<string, VncTicket>();
   private nextSlot = 0;
 
-  forThread(threadId: string): BrowserManager {
+  forThread(threadId: string): BrowserController {
     let manager = this.managers.get(threadId);
     if (!manager) {
-      manager = new BrowserManager(threadId, this.nextSlot++);
+      manager = process.env.BROWSER_BACKEND === "electron-ipc"
+        ? new ElectronIpcBrowserManager(threadId)
+        : new BrowserManager(threadId, this.nextSlot++);
       this.managers.set(threadId, manager);
     }
     return manager;
@@ -296,6 +386,13 @@ export class BrowserPool {
     const value = this.tickets.get(ticket);
     this.tickets.delete(ticket);
     return value && value.expiresAt >= Date.now() ? value : null;
+  }
+
+  async stopThread(threadId: string) {
+    const manager = this.managers.get(threadId);
+    this.managers.delete(threadId);
+    if (manager) await manager.stop();
+    for (const [ticket, value] of this.tickets) if (value.threadId === threadId) this.tickets.delete(ticket);
   }
 
   async stop() {
@@ -323,7 +420,27 @@ function targetSelector(args: BrowserUseArgs) {
   throw new Error("click/type 操作需要 ref 或 selector");
 }
 
-export function createBrowserUseTool(manager: BrowserManager): Tool<BrowserUseArgs> {
+async function runPlaywrightAction(page: Page, args: BrowserUseArgs): Promise<BrowserInspectResult> {
+  switch (args.action) {
+    case "navigate": {
+      if (!args.url?.trim()) throw new Error("navigate 需要 url");
+      const url = await assertSafeBrowserUrl(args.url.trim());
+      await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      break;
+    }
+    case "inspect": break;
+    case "click": await page.locator(targetSelector(args)).click({ timeout: 10_000 }); break;
+    case "type": await page.locator(targetSelector(args)).fill(args.text ?? "", { timeout: 10_000 }); break;
+    case "press": await page.keyboard.press(args.key?.trim() || "Enter"); break;
+    case "scroll": await page.mouse.wheel(0, args.direction === "up" ? -700 : 700); break;
+    case "back": await page.goBack({ waitUntil: "domcontentloaded" }); break;
+    case "forward": await page.goForward({ waitUntil: "domcontentloaded" }); break;
+    case "reload": await page.reload({ waitUntil: "domcontentloaded" }); break;
+  }
+  return inspectPage(page);
+}
+
+export function createBrowserUseTool(manager: BrowserController): Tool<BrowserUseArgs> {
   return defineTool<BrowserUseArgs>("browser_use", {
     description: "操作当前会话专属的可视化 Chromium 浏览器。先 inspect 获取页面内容和元素 ref,再使用 ref 点击或输入。",
     parameters: {
@@ -335,25 +452,7 @@ export function createBrowserUseTool(manager: BrowserManager): Tool<BrowserUseAr
       },
     } as const,
     defer: "never",
-    handler: (args) => manager.run(async (page) => {
-      switch (args.action) {
-        case "navigate": {
-          if (!args.url?.trim()) throw new Error("navigate 需要 url");
-          const url = await assertSafeBrowserUrl(args.url.trim());
-          await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 30_000 });
-          break;
-        }
-        case "inspect": break;
-        case "click": await page.locator(targetSelector(args)).click({ timeout: 10_000 }); break;
-        case "type": await page.locator(targetSelector(args)).fill(args.text ?? "", { timeout: 10_000 }); break;
-        case "press": await page.keyboard.press(args.key?.trim() || "Enter"); break;
-        case "scroll": await page.mouse.wheel(0, args.direction === "up" ? -700 : 700); break;
-        case "back": await page.goBack({ waitUntil: "domcontentloaded" }); break;
-        case "forward": await page.goForward({ waitUntil: "domcontentloaded" }); break;
-        case "reload": await page.reload({ waitUntil: "domcontentloaded" }); break;
-      }
-      return inspectPage(page);
-    }),
+    handler: (args) => manager.runAction(args),
   });
 }
 

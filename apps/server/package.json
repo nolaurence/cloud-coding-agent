@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc --noEmit",
-    "start": "tsx src/index.ts",
-    "test": "node --import tsx --test src/connectors/connectors.test.ts src/sandbox.test.ts src/permissions.test.ts src/providers.test.ts src/reasoning.test.ts src/copilot.test.ts src/browser.test.ts src/db.test.ts src/auth.test.ts src/threadShares.test.ts src/gitOperations.test.ts src/gitWorkspace.test.ts src/terminals.test.ts src/uploads.test.ts src/workspaceProjects.test.ts src/workspace.test.ts src/resources.test.ts ../web/src/lib/directoryPaths.test.ts ../web/src/lib/chatTimeline.test.ts ../web/src/lib/theme.test.ts ../web/src/lib/diffRendering.test.ts ../web/src/lib/gitGraph.test.ts ../web/src/lib/composerDrafts.test.ts ../web/src/components/workspace/fileAutosaver.test.ts",
+    "build": "node ../desktop/build-server.mjs",
+    "start": "node dist/index.js",
+    "test": "node --import tsx --test src/connectors/connectors.test.ts src/sandbox.test.ts src/permissions.test.ts src/providers.test.ts src/reasoning.test.ts src/copilot.test.ts src/browser.test.ts src/electronBrowserIpc.test.ts src/runtimeEnv.test.ts src/db.test.ts src/auth.test.ts src/threadShares.test.ts src/gitOperations.test.ts src/gitWorkspace.test.ts src/terminals.test.ts src/uploads.test.ts src/workspaceProjects.test.ts src/workspace.test.ts src/resources.test.ts ../web/src/lib/directoryPaths.test.ts ../web/src/lib/browserVisibility.test.ts ../web/src/lib/chatTimeline.test.ts ../web/src/lib/theme.test.ts ../web/src/lib/diffRendering.test.ts ../web/src/lib/gitGraph.test.ts ../web/src/lib/composerDrafts.test.ts ../web/src/components/workspace/fileAutosaver.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -28,6 +28,7 @@
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.0",
     "tsx": "^4.19.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "esbuild": "^0.25.9"
   }
 }

@@ -30,9 +30,7 @@ import { initThreadShares, validateThreadShareToken } from "./threadShares.js";
 import { getThreadAccess } from "./threadAccess.js";
 import { browserPool, NOVNC_ROOT } from "./browser.js";
 import WebSocket from "ws";
-
-const PORT = Number(process.env.PORT ?? 8787);
-const HOST = process.env.HOST ?? "0.0.0.0";
+import { clearBootstrapCredentials } from "./runtimeEnv.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.resolve(__dirname, "../../web/dist");
@@ -63,7 +61,9 @@ function authenticate(header: string | undefined) {
   return token ? verifyToken(token) : null;
 }
 
-async function main() {
+export async function startServer(options: { port?: number; host?: string; installSignalHandlers?: boolean } = {}) {
+  const port = options.port ?? Number(process.env.PORT ?? 8787);
+  const host = options.host ?? process.env.HOST ?? "0.0.0.0";
   ensureDataDirs();
   const databaseUrl = process.env.DATABASE_URL;
   if (databaseUrl) {
@@ -73,6 +73,7 @@ async function main() {
   }
   await store.init();
   await initAuth();
+  clearBootstrapCredentials();
   await store.migrateLegacyWorkspaceOwnership(getBootstrapAdminUsername());
   await initThreadShares();
   console.log(`[cca] data dir: ${DATA_DIR}`);
@@ -114,7 +115,12 @@ async function main() {
     }
     const manager = browserPool.forThread(thread.id);
     await manager.start();
-    return { ticket: browserPool.issueTicket(thread.id, user.username) };
+    const ticket = browserPool.issueTicket(thread.id, user.username);
+    if (process.env.BROWSER_BACKEND === "electron-ipc") {
+      if (!browserPool.consumeTicket(ticket)) throw new Error("浏览器显示凭据无效");
+      await manager.redeemTicket(ticket);
+    }
+    return { ticket, backend: process.env.BROWSER_BACKEND === "electron-ipc" ? "electron-native" : "novnc" };
   });
 
   if (fs.existsSync(NOVNC_ROOT)) {
@@ -135,7 +141,9 @@ async function main() {
       }
       let upstream: WebSocket;
       try {
-        upstream = new WebSocket(`ws://127.0.0.1:${browserPool.forThread(access.threadId).vncWebSocketPort()}`);
+        const port = browserPool.forThread(access.threadId).vncWebSocketPort?.();
+        if (!port) throw new Error("VNC unavailable");
+        upstream = new WebSocket(`ws://127.0.0.1:${port}`);
       } catch {
         socket.close(1011, "browser unavailable");
         return;
@@ -336,31 +344,60 @@ async function main() {
     });
   }
 
-  await app.listen({ port: PORT, host: HOST });
-  console.log(`[cca] server listening on http://${HOST}:${PORT}`);
+  await app.listen({ port, host });
+  console.log(`[cca] server listening on http://${host}:${port}`);
   hub.warmupPlugins();
 
-  let shuttingDown = false;
-  const shutdown = async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    try {
-      await hub.shutdown();
-      await browserPool.stop();
-      await app.close();
-      await closeDb();
-    } catch (err) {
-      console.error("[cca] shutdown failed", err);
-      process.exitCode = 1;
-    } finally {
-      process.exit();
+  let shuttingDown: Promise<void> | null = null;
+  const close = () => {
+    if (!shuttingDown) {
+      shuttingDown = (async () => {
+        await hub.shutdown();
+        await browserPool.stop();
+        await app.close();
+        await closeDb();
+      })();
     }
+    return shuttingDown;
   };
-  process.once("SIGINT", () => void shutdown());
-  process.once("SIGTERM", () => void shutdown());
+  if (options.installSignalHandlers ?? false) {
+    const shutdown = () => void close().then(
+      () => process.exit(0),
+      (error) => {
+        console.error("[cca] shutdown failed", error);
+        process.exit(1);
+      },
+    );
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+  }
+  return { app, close, address: app.server.address() };
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+function isDirectExecution(): boolean {
+  const entry = process.argv[1];
+  return Boolean(entry && path.resolve(entry) === fileURLToPath(import.meta.url));
+}
+
+if (isDirectExecution()) {
+  startServer({ installSignalHandlers: true }).then(({ address, close }) => {
+    if (address && typeof address !== "string") {
+      process.send?.({ type: "cca-server-ready", port: address.port });
+    }
+    process.on("message", (message) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        (message as { type?: unknown }).type === "cca-server-shutdown"
+      ) {
+        void close().then(() => process.exit(0), (error) => {
+          console.error("[cca] shutdown failed", error);
+          process.exit(1);
+        });
+      }
+    });
+  }).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
