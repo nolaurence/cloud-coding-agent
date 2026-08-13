@@ -94,6 +94,10 @@ const ULTRA_SYSTEM_INSTRUCTIONS = [
   "Keep the main agent responsible for synthesis and final decisions. Verify important subagent findings against the workspace before acting on them.",
   "Before finishing, validate the requested outcome with the most relevant existing tests, checks, or direct inspection, and resolve discovered issues instead of reporting a plausible but unverified result.",
 ] as const;
+const STANDARD_SYSTEM_INSTRUCTIONS = [
+  "Standard mode is enabled and Ultra mode is disabled. Disregard any Ultra-mode instructions retained from earlier turns or resumed session state.",
+  "Do not proactively invoke the Task tool or create subagents in Standard mode unless the user explicitly requests delegation.",
+] as const;
 
 type ToolStartData = Extract<SessionEvent, { type: "tool.execution_start" }>["data"];
 type ToolCompleteData = Extract<SessionEvent, { type: "tool.execution_complete" }>["data"];
@@ -633,6 +637,8 @@ export class CopilotManager {
     }
     if (thread.agentMode === "ultra") {
       systemInstructions.push(...ULTRA_SYSTEM_INSTRUCTIONS);
+    } else {
+      systemInstructions.push(...STANDARD_SYSTEM_INSTRUCTIONS);
     }
 
     const config: Record<string, unknown> = {

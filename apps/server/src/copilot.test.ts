@@ -903,7 +903,7 @@ test("resolves Ultra reasoning from the Copilot model catalog", async (t) => {
   await manager.interrupt(threadId);
 });
 
-test("resumes an established SDK session with Ultra configuration after switching modes", async (t) => {
+test("replaces retained Ultra instructions after switching back to standard reasoning", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
   store.threads[0]!.model = { providerId: "provider-1", modelId: "gpt-5.6-sol" };
@@ -935,6 +935,26 @@ test("resumes an established SDK session with Ultra configuration after switchin
   };
   assert.equal(config.reasoningEffort, "max");
   assert.match(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
+
+  await manager.setThreadAgentMode(threadId, "standard");
+  const standardModel = {
+    providerId: "provider-1",
+    modelId: "gpt-5.6-sol",
+    reasoningEffort: "low" as const,
+  };
+  await manager.setThreadModel(threadId, store.threads[0]!.model, standardModel);
+  store.upsertThread({ ...store.threads[0]!, model: standardModel });
+  await manager.subscribe(threadId, "admin");
+
+  assert.equal(client.resumedConfigs.length, 2);
+  const standardConfig = client.resumedConfigs[1] as {
+    reasoningEffort?: string;
+    systemMessage?: { content?: string };
+  };
+  assert.equal(standardConfig.reasoningEffort, "low");
+  assert.match(standardConfig.systemMessage?.content ?? "", /Standard mode is enabled/);
+  assert.match(standardConfig.systemMessage?.content ?? "", /Do not proactively invoke the Task tool/);
+  assert.doesNotMatch(standardConfig.systemMessage?.content ?? "", /Ultra mode is enabled/);
 });
 
 test("keeps highest Ultra reasoning when hot-switching Copilot models", async (t) => {

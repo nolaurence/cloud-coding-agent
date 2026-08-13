@@ -90,13 +90,17 @@ export function ThreadPage() {
   };
 
   const onAgentModeChange = async (mode: AgentMode) => {
-    if (!threadId || switchingMode || switchingModel || state.running || mode === agentMode) return;
+    if (!threadId || switchingMode || switchingModel || state.running || mode === agentMode) {
+      return false;
+    }
     setSwitchingMode(true);
     setModelError("");
     try {
       await setThreadAgentMode(threadId, mode);
+      return true;
     } catch (error) {
       setModelError(error instanceof Error ? error.message : "切换会话模式失败");
+      return false;
     } finally {
       setSwitchingMode(false);
     }
@@ -237,7 +241,7 @@ export function ThreadPage() {
                             model={effectiveModel}
                             disabled={state.running || switchingModel || switchingMode}
                             agentMode={agentMode}
-                            onAgentModeChange={(mode) => void onAgentModeChange(mode)}
+                            onAgentModeChange={onAgentModeChange}
                             onChange={(reasoningEffort) => {
                               if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
                             }}

@@ -28,7 +28,7 @@ export function ReasoningEffortPicker({
   direction?: "up" | "down";
   compact?: boolean;
   agentMode?: AgentMode;
-  onAgentModeChange?: (mode: AgentMode) => void;
+  onAgentModeChange?: (mode: AgentMode) => boolean | void | Promise<boolean | void>;
   onChange: (effort: ReasoningEffort | undefined) => void;
 }) {
   const models = useApp((state) => state.models);
@@ -178,15 +178,17 @@ export function ReasoningEffortPicker({
     if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus());
   };
 
-  const choose = (item: MenuItem) => {
+  const choose = async (item: MenuItem) => {
     setOpen(false);
     restoreFocusRef.current = true;
     triggerRef.current?.focus();
     if (item.kind === "ultra") {
-      onAgentModeChange?.("ultra");
+      await onAgentModeChange?.("ultra");
     } else {
-      if (ultraSelected) onAgentModeChange?.("standard");
-      onChange(item.value);
+      const modeChanged = ultraSelected
+        ? await onAgentModeChange?.("standard")
+        : undefined;
+      if (modeChanged !== false) onChange(item.value);
     }
     requestAnimationFrame(() => {
       if (!triggerRef.current?.disabled) {
@@ -316,7 +318,7 @@ export function ReasoningEffortPicker({
                     "flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none hover:bg-zinc-100 focus-visible:bg-zinc-100 dark:hover:bg-zinc-800 dark:focus-visible:bg-zinc-800",
                     isSelected && "bg-zinc-100 font-medium dark:bg-zinc-800",
                   )}
-                  onClick={() => choose(item)}
+                  onClick={() => void choose(item)}
                 >
                   {item.kind === "ultra" ? (
                     <>

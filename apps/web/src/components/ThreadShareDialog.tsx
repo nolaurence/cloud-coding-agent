@@ -121,13 +121,13 @@ export function ThreadShareDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md overflow-x-hidden overflow-y-auto sm:max-w-md">
+          <DialogHeader className="min-w-0 pr-8">
             <DialogTitle className="flex items-center gap-2">
               <Link2 className="h-4 w-4" />
               分享会话
             </DialogTitle>
-            <DialogDescription className="truncate" title={threadTitle}>
+            <DialogDescription className="min-w-0 truncate" title={threadTitle}>
               {threadTitle}
             </DialogDescription>
           </DialogHeader>
@@ -137,16 +137,16 @@ export function ThreadShareDialog({
               <Loader2 className="h-5 w-5 animate-spin" aria-label="正在获取分享状态" />
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="min-w-0 space-y-4">
               <div className="space-y-2">
                 <div className="text-xs font-medium text-muted-foreground">访问权限</div>
-                <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1" role="radiogroup" aria-label="分享权限">
+                <div className="grid grid-cols-1 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-2" role="radiogroup" aria-label="分享权限">
                   <button
                     type="button"
                     role="radio"
                     aria-checked={mode === "readonly"}
                     className={cn(
-                      "flex min-h-16 items-start gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                      "flex min-h-16 min-w-0 items-start gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                       mode === "readonly"
                         ? "bg-background text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground",
@@ -164,7 +164,7 @@ export function ThreadShareDialog({
                     role="radio"
                     aria-checked={mode === "collaborate"}
                     className={cn(
-                      "flex min-h-16 items-start gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                      "flex min-h-16 min-w-0 items-start gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                       mode === "collaborate"
                         ? "bg-background text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground",
@@ -189,12 +189,12 @@ export function ThreadShareDialog({
               {shareUrl ? (
                 <div className="space-y-2">
                   <div className="text-xs font-medium text-muted-foreground">分享链接</div>
-                  <div className="flex gap-2">
+                  <div className="flex min-w-0 gap-2">
                     <Input
                       readOnly
                       value={shareUrl}
                       aria-label="分享链接"
-                      className="font-mono text-xs"
+                      className="min-w-0 flex-1 font-mono text-xs"
                       onFocus={(event) => event.currentTarget.select()}
                     />
                     <Button
@@ -211,7 +211,7 @@ export function ThreadShareDialog({
                   <p className="text-xs text-muted-foreground">关闭后不再显示此链接，需要时可重新生成。</p>
                 </div>
               ) : share.active ? (
-                <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <div className="flex flex-col gap-1 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                   <span>分享已启用 · {share.memberCount} 人已加入</span>
                   <span>{share.mode === "collaborate" ? "可加入" : "只读"}</span>
                 </div>
@@ -232,6 +232,7 @@ export function ThreadShareDialog({
               <Button
                 type="button"
                 variant="destructive"
+                className="w-full sm:w-auto"
                 disabled={loading || saving}
                 onClick={() => setConfirmRevoke(true)}
               >
@@ -241,7 +242,7 @@ export function ThreadShareDialog({
             ) : (
               <span />
             )}
-            <Button type="button" disabled={loading || saving} onClick={() => void createShare()}>
+            <Button type="button" className="w-full sm:w-auto" disabled={loading || saving} onClick={() => void createShare()}>
               {saving ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : share.active ? (
