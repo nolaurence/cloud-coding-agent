@@ -199,6 +199,164 @@ function setupStore(
   });
 }
 
+test("forwards an 8700-character prompt to the SDK without truncation", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+  const prompt = "测".repeat(8_700);
+
+  await manager.sendMessage(threadId, prompt);
+
+  assert.equal((session.sent[0] as { prompt?: string }).prompt, prompt);
+  assert.equal((session.sent[0] as { prompt?: string }).prompt?.length, 8_700);
+  await manager.interrupt(threadId);
+});
+
+test("keeps provider errors in thread snapshots", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "触发模型错误");
+  session.emit(sessionEvent("session.error", { message: "模型上下文长度不足" }));
+  const snapshot = await manager.subscribe(threadId);
+
+  assert.equal(snapshot.kind, "snapshot");
+  assert.equal(snapshot.kind === "snapshot" ? snapshot.error : undefined, "模型上下文长度不足");
+  manager.unsubscribe(threadId);
+});
+
+test("restores the latest provider error from session history", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId, Date.now() - 10_000);
+  const session = new FakeSession([
+    sessionEvent("user.message", { content: "触发错误" }),
+    sessionEvent("session.error", { message: "历史中的模型错误" }),
+  ]);
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  const snapshot = await manager.subscribe(threadId);
+
+  assert.equal(snapshot.kind === "snapshot" ? snapshot.error : undefined, "历史中的模型错误");
+  manager.unsubscribe(threadId);
+});
+
+test("clears an earlier provider error when history contains a later user turn", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId, Date.now() - 10_000);
+  const session = new FakeSession([
+    sessionEvent("user.message", { content: "触发错误" }),
+    sessionEvent("session.error", { message: "已被后续消息取代" }),
+    sessionEvent("user.message", { content: "重试" }),
+  ]);
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  const snapshot = await manager.subscribe(threadId);
+
+  assert.equal(snapshot.kind === "snapshot" ? snapshot.error : undefined, undefined);
+  manager.unsubscribe(threadId);
+});
+
+test("runs the synchronous send guard after attach and before SDK send", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  await assert.rejects(
+    manager.sendMessage(threadId, "不要发送", undefined, "admin", () => {
+      throw new Error("ownership lost");
+    }),
+    /ownership lost/,
+  );
+
+  assert.equal(session.sent.length, 0);
+  assert.equal(manager.isRunning(threadId), false);
+});
+
+test("calls the SDK send immediately after the synchronous guard", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  let resolveSend!: () => void;
+  const order: string[] = [];
+  const session = new FakeSession();
+  session.send = (options: unknown) => {
+    order.push("send");
+    session.sent.push(options);
+    return new Promise<string>((resolve) => {
+      resolveSend = () => resolve("message-1");
+    });
+  };
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  const sending = manager.sendMessage(threadId, "发送", undefined, "admin", () => {
+    order.push("guard");
+    queueMicrotask(() => order.push("microtask"));
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(order, ["guard", "send", "microtask"]);
+  resolveSend();
+  await sending;
+  await manager.interrupt(threadId);
+});
+
+test("reports SDK acceptance before a post-send metadata update fails", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+  const previousUpsertThread = store.upsertThread;
+  let accepted = false;
+  store.upsertThread = () => {
+    throw new Error("metadata persistence failed");
+  };
+
+  try {
+    await manager.sendMessage(
+      threadId,
+      "发送后更新元数据",
+      undefined,
+      "admin",
+      undefined,
+      () => {
+        accepted = true;
+      },
+    );
+  } finally {
+    store.upsertThread = previousUpsertThread;
+  }
+
+  assert.equal(session.sent.length, 1);
+  assert.equal(accepted, true);
+  assert.equal(manager.isRunning(threadId), true);
+  await manager.interrupt(threadId);
+  assert.equal(manager.isRunning(threadId), false);
+});
+
 test("keeps a request running across assistant tool turns until session.idle", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
@@ -999,6 +1157,22 @@ test("rejects Ultra mode changes while a turn is running", async (t) => {
   await assert.rejects(manager.setThreadAgentMode(threadId, "ultra"), /当前任务运行中/);
   assert.equal(session.disconnectCalls, 0);
   await manager.interrupt(threadId);
+});
+
+test("does not fall back to Copilot when a locked custom provider is missing", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.model = { providerId: "missing-provider", modelId: "model" };
+  store.threads[0]!.modelProviderId = "missing-provider";
+  const client = new FakeClient();
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await assert.rejects(
+    manager.subscribe(threadId, "admin"),
+    /模型提供方已不存在/,
+  );
+  assert.equal(client.createdConfigs.length, 0);
 });
 
 test("configures Responses gateways without the free-form apply_patch tool", async (t) => {

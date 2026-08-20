@@ -23,7 +23,6 @@ export function NewChatPage() {
   const settings = useApp((s) => s.settings);
   const createWorkspace = useApp((s) => s.createWorkspace);
   const createThread = useApp((s) => s.createThread);
-  const sendMessage = useApp((s) => s.sendMessage);
   const navigate = useNavigate();
   const [projectId, setProjectId] = useState<string>("");
   const [model, setModel] = useState<ModelRef | undefined>(undefined);
@@ -39,9 +38,11 @@ export function NewChatPage() {
     if (!effectiveProjectId || creating) return;
     setCreating(true);
     try {
-      const thread = await createThread(effectiveProjectId, effectiveModel, agentMode);
+      const thread = await createThread(effectiveProjectId, effectiveModel, agentMode, {
+        text,
+        attachments,
+      });
       navigate(`/thread/${thread.id}`);
-      await sendMessage(thread.id, text, attachments);
     } finally {
       setCreating(false);
     }

@@ -1,6 +1,7 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
+import { resolveThreadModel, resolveThreadModelProviderId } from "@cca/protocol";
 import type { AgentMode, ModelRef } from "@cca/protocol";
 import { useApp, useThreadState } from "../lib/store";
 import { threadComposerDraftKey } from "../lib/composerDrafts";
@@ -52,7 +53,8 @@ export function ThreadPage() {
   const layoutRef = useRef<HTMLDivElement>(null);
   const composerOverlayRef = useRef<HTMLDivElement>(null);
   const modelRequestRef = useRef(0);
-  const effectiveModel = thread?.model ?? settings?.defaultModel;
+  const modelProviderId = resolveThreadModelProviderId(thread, settings?.defaultModel);
+  const effectiveModel = resolveThreadModel(thread, settings?.defaultModel);
   const agentMode = thread?.agentMode ?? "standard";
   const panelMaxWidth = useMemo(() => {
     if (layoutWidth === 0) return RIGHT_PANEL_DEFAULT_WIDTH;
@@ -75,6 +77,10 @@ export function ThreadPage() {
 
   const onModelChange = async (ref: ModelRef) => {
     if (!threadId || switchingModel || switchingMode || state.running) return;
+    if (ref.providerId !== modelProviderId) {
+      setModelError("会话创建后不能切换模型提供方,请新建会话使用该模型");
+      return;
+    }
     const requestId = ++modelRequestRef.current;
     setSwitchingModel(true);
     setModelError("");
@@ -235,6 +241,7 @@ export function ThreadPage() {
                             value={effectiveModel}
                             onChange={(ref) => void onModelChange(ref)}
                             disabled={state.running || switchingModel || switchingMode}
+                            lockedProviderId={modelProviderId}
                           />
                           <ReasoningEffortPicker
                             compact

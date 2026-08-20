@@ -4,12 +4,21 @@ import {
   DEFAULT_SETTINGS,
   flattenModels,
   normalizeModelRefReasoning,
+  resolveThreadModelProviderId,
   Project,
   ThreadMeta,
 } from "@cca/protocol";
 import type { ModelOption } from "@cca/protocol";
 import { PROJECTS_FILE, SETTINGS_FILE, THREADS_FILE } from "./env.js";
-import { databaseDialect, enqueueWrite, query, transaction, upsert, usingDatabase } from "./db.js";
+import {
+  databaseDialect,
+  enqueueWrite,
+  flushDbWrites,
+  query,
+  transaction,
+  upsert,
+  usingDatabase,
+} from "./db.js";
 
 function readJson<T>(file: string, fallback: T): T {
   try {
@@ -57,6 +66,7 @@ class Store {
       this.projects = readJson<StoredProject[]>(PROJECTS_FILE, []) as Project[];
       this.threads = readJson<ThreadMeta[]>(THREADS_FILE, []);
     }
+    await this.normalizeStoredThreadModelProviders();
     this.normalizeStoredReasoningEfforts();
     const connectors = this.settings.connectors.map((connector) => ({
       ...connector,
@@ -69,6 +79,24 @@ class Store {
     );
     this.settings = { ...this.settings, connectors };
     if (ownershipChanged) this.saveSettings(this.settings);
+    await flushDbWrites();
+  }
+
+  async normalizeStoredThreadModelProviders(): Promise<boolean> {
+    const changedThreads: ThreadMeta[] = [];
+    this.threads = this.threads.map((thread) => {
+      if (thread.modelProviderId) return thread;
+      const model = thread.model ?? this.settings.defaultModel;
+      const normalized = {
+        ...thread,
+        ...(model ? { model } : {}),
+        modelProviderId: resolveThreadModelProviderId(thread, this.settings.defaultModel),
+      };
+      changedThreads.push(normalized);
+      return normalized;
+    });
+    await this.persistThreadsImmediately(changedThreads);
+    return changedThreads.length > 0;
   }
 
   normalizeStoredReasoningEfforts(
@@ -94,8 +122,52 @@ class Store {
       changedThreads.push(normalized);
       return normalized;
     });
-    for (const thread of changedThreads) this.upsertThread(thread);
+    this.persistThreads(changedThreads);
     return changed;
+  }
+
+  private async persistThreadsImmediately(threads: readonly ThreadMeta[]): Promise<void> {
+    if (threads.length === 0) return;
+    if (usingDatabase()) {
+      await transaction(async (txQuery) => {
+        for (const thread of threads) {
+          await upsert(
+            {
+              table: "threads",
+              values: { id: thread.id, data: JSON.stringify(thread) },
+              conflictColumns: ["id"],
+              updateColumns: ["data"],
+            },
+            txQuery,
+          );
+        }
+      });
+    } else {
+      writeJson(THREADS_FILE, this.threads);
+    }
+  }
+
+  private persistThreads(threads: readonly ThreadMeta[]): void {
+    if (threads.length === 0) return;
+    if (usingDatabase()) {
+      persist(() =>
+        transaction(async (txQuery) => {
+          for (const thread of threads) {
+            await upsert(
+              {
+                table: "threads",
+                values: { id: thread.id, data: JSON.stringify(thread) },
+                conflictColumns: ["id"],
+                updateColumns: ["data"],
+              },
+              txQuery,
+            );
+          }
+        }),
+      );
+    } else {
+      writeJson(THREADS_FILE, this.threads);
+    }
   }
 
   private async initFromDatabase() {

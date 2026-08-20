@@ -275,6 +275,7 @@ export class ConnectorManager {
       projectId: config.projectId,
       title: `${config.name} · ${message.conversationLabel}`.slice(0, 80),
       model: { ...config.model },
+      modelProviderId: config.model.providerId,
       userId: config.ownerId,
       createdAt: now,
       updatedAt: now,

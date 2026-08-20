@@ -163,6 +163,7 @@ test("连接器会去重消息、复用映射会话并回传完整回复", async
   await callbacks!.onMessage(message);
 
   assert.equal(store.threads.length, 1);
+  assert.equal(store.threads[0]?.modelProviderId, "copilot");
   assert.equal(subscriptions, 1);
   assert.equal(unsubscriptions, 1);
   assert.deepEqual(sent, [{ target: message.target, text: "任务完成" }]);

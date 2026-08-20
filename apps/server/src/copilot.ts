@@ -6,10 +6,13 @@ import type {
   SessionEvent,
 } from "@github/copilot-sdk";
 import {
+  DEFAULT_MODEL_PROVIDER_ID,
   flattenModels,
   isReasoningEffort,
   normalizeReasoningEfforts,
   resolveModelContextWindowTokens,
+  resolveThreadModel,
+  resolveThreadModelProviderId,
 } from "@cca/protocol";
 import type {
   AgentMode,
@@ -49,6 +52,7 @@ interface ThreadRuntime {
   activities: ToolActivity[];
   subagents: SubagentActivity[];
   contextUsage: ContextUsage | undefined;
+  lastError: string | null;
   running: boolean;
   compacting: boolean;
   reconfiguring: Promise<void> | null;
@@ -184,10 +188,6 @@ function contextUsageFromData(data: UsageInfoData): ContextUsage | undefined {
   return normalizeContextUsage({ usedTokens: data.currentTokens, maxTokens: data.tokenLimit });
 }
 
-function activeModel(thread: ThreadMeta | undefined, settings: AppSettings): ModelRef | undefined {
-  return thread?.model ?? settings.defaultModel;
-}
-
 function highestSupportedReasoningEffort(
   settings: AppSettings,
   model: ModelRef | undefined,
@@ -222,7 +222,10 @@ function contextWindowTokensForThread(
   thread: ThreadMeta | undefined,
   settings: AppSettings,
 ): number | undefined {
-  return resolveModelContextWindowTokens(settings, activeModel(thread, settings));
+  return resolveModelContextWindowTokens(
+    settings,
+    resolveThreadModel(thread, settings.defaultModel),
+  );
 }
 
 function modelContextLimits(
@@ -353,6 +356,7 @@ export class CopilotManager {
           thread?.contextUsage,
           contextWindowTokensForThread(thread, store.settings),
         ),
+        lastError: null,
         running: false,
         compacting: false,
         reconfiguring: null,
@@ -609,10 +613,18 @@ export class CopilotManager {
     actorId: string,
     capabilityModels: readonly ModelOption[] = [],
   ) {
-    const modelRef = thread.model ?? settings.defaultModel;
-    const providerConfig = modelRef
-      ? settings.providers.find((p) => p.id === modelRef.providerId)
-      : undefined;
+    const modelProviderId = resolveThreadModelProviderId(thread, settings.defaultModel);
+    const modelRef = resolveThreadModel(thread, settings.defaultModel);
+    const providerConfig =
+      modelProviderId === DEFAULT_MODEL_PROVIDER_ID
+        ? undefined
+        : settings.providers.find((provider) => provider.id === modelProviderId);
+    if (modelProviderId !== DEFAULT_MODEL_PROVIDER_ID && !providerConfig) {
+      throw new Error("会话使用的模型提供方已不存在,请恢复对应的模型服务配置");
+    }
+    if (modelProviderId !== DEFAULT_MODEL_PROVIDER_ID && !modelRef) {
+      throw new Error("会话使用的模型配置已不存在,请恢复对应的模型配置");
+    }
     const contextLimits = modelContextLimits(settings, modelRef);
 
     const project = store.projects.find((candidate) => candidate.id === thread.projectId);
@@ -1185,6 +1197,7 @@ export class CopilotManager {
         if (event.agentId) break;
         this.failRunningTools(rt, event.data.message, ts);
         this.failRunningSubagents(rt, event.data.message, ts);
+        rt.lastError = event.data.message;
         this.emit(threadId, { kind: "error", message: event.data.message });
         this.finishTurn(rt);
         break;
@@ -1205,7 +1218,8 @@ export class CopilotManager {
         this.failRunningTools(rt, "模型会话已断开", ts);
         this.failRunningSubagents(rt, "模型会话已断开", ts, "cancelled", true);
         if (wasRunning) {
-          this.emit(threadId, { kind: "error", message: "模型会话意外断开，请重试" });
+          rt.lastError = "模型会话意外断开，请重试";
+          this.emit(threadId, { kind: "error", message: rt.lastError });
         }
         this.finishTurn(rt);
         break;
@@ -1236,7 +1250,7 @@ export class CopilotManager {
     const attaching = (async () => {
       const client = await this.ensureClient();
       const settings = store.settings;
-      const modelRef = activeModel(thread, settings);
+      const modelRef = resolveThreadModel(thread, settings.defaultModel);
       let capabilityModels: ModelOption[] = [];
       if (
         thread.agentMode === "ultra" &&
@@ -1295,6 +1309,7 @@ export class CopilotManager {
       const events = await session.getEvents();
       rt.pendingAssistant = null;
       rt.subagents = [];
+      rt.lastError = null;
       let turnId = "";
       let lastTimestamp = Date.now();
       for (const event of events) {
@@ -1319,6 +1334,7 @@ export class CopilotManager {
               break;
             }
             this.commitPendingAssistant(rt, false);
+            rt.lastError = null;
             turnId = `turn-${randomUUID()}`;
             rt.currentTurnId = turnId;
             rt.messages.push({
@@ -1510,6 +1526,9 @@ export class CopilotManager {
             if (usage) this.updateContextUsage(rt, usage, false);
             break;
           }
+          case "session.error":
+            if (!event.agentId) rt.lastError = event.data.message;
+            break;
           default:
             break;
         }
@@ -1563,6 +1582,32 @@ export class CopilotManager {
     rt.detachTimer.unref();
   }
 
+  private snapshotFor(rt: ThreadRuntime): Extract<ThreadEvent, { kind: "snapshot" }> {
+    return {
+      kind: "snapshot",
+      messages: rt.messages,
+      activities: rt.activities,
+      subagents: rt.subagents.map(copySubagent),
+      running: rt.running,
+      contextUsage: rt.contextUsage,
+      error: rt.lastError ?? undefined,
+      live: rt.pendingAssistant
+        ? {
+            text: rt.pendingAssistant.text,
+            reasoning: rt.pendingAssistant.reasoning,
+            turnId: rt.pendingAssistant.turnId,
+            startedAt: rt.pendingAssistant.startedAt,
+          }
+        : undefined,
+    };
+  }
+
+  snapshot(threadId: string): Extract<ThreadEvent, { kind: "snapshot" }> {
+    const rt = this.threads.get(threadId);
+    if (!rt) throw new Error("会话尚未加载");
+    return this.snapshotFor(rt);
+  }
+
   async subscribe(threadId: string, actorId?: string): Promise<ThreadEvent> {
     const rt = this.runtime(threadId);
     rt.subscribers += 1;
@@ -1575,22 +1620,7 @@ export class CopilotManager {
       if (rt.subscribers === 0 && !rt.session) this.threads.delete(threadId);
       throw error;
     }
-    return {
-      kind: "snapshot",
-      messages: rt.messages,
-      activities: rt.activities,
-      subagents: rt.subagents.map(copySubagent),
-      running: rt.running,
-      contextUsage: rt.contextUsage,
-      live: rt.pendingAssistant
-        ? {
-            text: rt.pendingAssistant.text,
-            reasoning: rt.pendingAssistant.reasoning,
-            turnId: rt.pendingAssistant.turnId,
-            startedAt: rt.pendingAssistant.startedAt,
-          }
-        : undefined,
-    };
+    return this.snapshotFor(rt);
   }
 
   unsubscribe(threadId: string) {
@@ -1631,6 +1661,8 @@ export class CopilotManager {
     text: string,
     attachments?: TurnAttachment[],
     actorId = "",
+    beforeSend?: () => void,
+    onAccepted?: () => void,
   ): Promise<void> {
     const rt = this.runtime(threadId);
     if (rt.running) throw new Error("当前任务仍在运行,请等待完成或先停止任务");
@@ -1639,6 +1671,7 @@ export class CopilotManager {
 
     const turnId = `turn-${randomUUID()}`;
     this.clearDetachTimer(rt);
+    rt.lastError = null;
     rt.running = true;
     rt.currentTurnId = turnId;
     rt.pendingAssistant = null;
@@ -1654,9 +1687,11 @@ export class CopilotManager {
     rt.pendingUserAuthorId = actorId;
     this.emit(threadId, { kind: "turn.start", turnId });
     this.shellChanged();
+    let accepted = false;
     try {
       const session = await this.attach(threadId, actorId);
-      await session.send({
+      beforeSend?.();
+      const sending = session.send({
         prompt: text,
         attachments: attachments?.map((a) => ({
           type: "file" as const,
@@ -1664,13 +1699,29 @@ export class CopilotManager {
           displayName: a.displayName,
         })),
       });
-      const thread = store.getThread(threadId);
-      if (thread) store.upsertThread({ ...thread, updatedAt: Date.now() });
+      await sending;
+      accepted = true;
+      try {
+        onAccepted?.();
+      } catch (error) {
+        console.warn(`[cca] accepted-turn callback failed thread=${threadId}`, error);
+      }
+      try {
+        const thread = store.getThread(threadId);
+        if (thread) store.upsertThread({ ...thread, updatedAt: Date.now() });
+      } catch (error) {
+        console.warn(`[cca] update accepted turn metadata failed thread=${threadId}`, error);
+      }
     } catch (error) {
+      if (accepted) {
+        console.warn(`[cca] post-accept turn handling failed thread=${threadId}`, error);
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (rt.running) {
         rt.pendingUserAttachments = [];
         rt.pendingUserAuthorId = "";
+        rt.lastError = message;
         this.emit(threadId, { kind: "error", message });
         this.finishTurn(rt);
       }
@@ -1727,6 +1778,12 @@ export class CopilotManager {
     currentModel: ModelRef | undefined,
     nextModel: ModelRef,
   ): Promise<void> {
+    const thread = store.getThread(threadId);
+    const modelProviderId = resolveThreadModelProviderId(thread, currentModel);
+    if (nextModel.providerId !== modelProviderId) {
+      throw new Error("会话创建后不支持切换模型提供方,请新建会话使用该模型");
+    }
+
     const rt = this.threads.get(threadId);
     if (!rt) return;
     if (rt.running) throw new Error("当前任务运行中,请等待完成后再切换模型或推理强度");
@@ -1734,7 +1791,6 @@ export class CopilotManager {
     if (rt.reconfiguring) throw new Error("会话模式正在切换,请稍候");
 
     const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
-    const thread = store.getThread(threadId);
     let capabilityModels: ModelOption[] = [];
     if (
       thread?.agentMode === "ultra" &&
@@ -1755,40 +1811,26 @@ export class CopilotManager {
       capabilityModels,
     );
 
-    const currentProviderId = currentModel?.providerId ?? "copilot";
-    const modelChanged =
-      currentProviderId !== nextModel.providerId || currentModel?.modelId !== nextModel.modelId;
-    if (currentProviderId === nextModel.providerId) {
-      if (!session) {
-        if (modelChanged) this.updateContextUsage(rt, undefined);
-        return;
-      }
-      const modelCapabilities = modelCapabilitiesFor(store.settings, nextModel);
-      const options: CopilotSetModelOptions = {
-        ...(reasoningEffort
-          ? {
-              // SDK 1.0.8 omits "none" and "max", but the bundled CLI RPC accepts both.
-              reasoningEffort: reasoningEffort as CopilotReasoningEffort,
-            }
-          : {}),
-        ...(modelCapabilities ? { modelCapabilities } : {}),
-      };
-      await session.setModel(
-        nextModel.modelId,
-        Object.keys(options).length > 0 ? options : undefined,
-      );
+    const modelChanged = currentModel?.modelId !== nextModel.modelId;
+    if (!session) {
       if (modelChanged) this.updateContextUsage(rt, undefined);
       return;
     }
-
-    // 跨 provider 热切换不可靠:CLI resume 已有 session 时不保证应用新的 provider,
-    // 因此只要会话已有历史或已附加 session 就直接拒绝,提示用户新建会话。
-    // 全新空会话除外:下次发送时会按新 provider 直接创建会话。
-    const hasHistory =
-      rt.messages.length > 0 || (!!thread && thread.createdAt < Date.now() - 1000);
-    if (session || hasHistory) {
-      throw new Error("会话内不支持切换模型提供方,请新建会话使用该模型");
-    }
+    const modelCapabilities = modelCapabilitiesFor(store.settings, nextModel);
+    const options: CopilotSetModelOptions = {
+      ...(reasoningEffort
+        ? {
+            // SDK 1.0.8 omits "none" and "max", but the bundled CLI RPC accepts both.
+            reasoningEffort: reasoningEffort as CopilotReasoningEffort,
+          }
+        : {}),
+      ...(modelCapabilities ? { modelCapabilities } : {}),
+    };
+    await session.setModel(
+      nextModel.modelId,
+      Object.keys(options).length > 0 ? options : undefined,
+    );
+    if (modelChanged) this.updateContextUsage(rt, undefined);
   }
 
   async setThreadAgentMode(threadId: string, nextMode: AgentMode): Promise<void> {

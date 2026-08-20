@@ -64,8 +64,10 @@ test("SQLite migrates the complete JSON store and persists subsequent updates", 
     name: "Legacy project",
     path: "/workspace/legacy",
   };
+  const legacyDefaultModel = { providerId: "legacy-provider", modelId: "legacy-model" };
   const legacySettings: AppSettings = {
     ...DEFAULT_SETTINGS,
+    defaultModel: legacyDefaultModel,
     skillDirectories: ["/legacy/skills"],
     connectors: [{
       id: "legacy-connector",
@@ -113,7 +115,12 @@ test("SQLite migrates the complete JSON store and persists subsequent updates", 
   assert.equal(databaseDialect(), "sqlite");
   assert.equal(store.settings.skillDirectories[0], "/legacy/skills");
   assert.deepEqual(store.projects, [legacyProject]);
-  assert.deepEqual(store.threads, [legacyThread]);
+  const migratedLegacyThread = {
+    ...legacyThread,
+    model: legacyDefaultModel,
+    modelProviderId: legacyDefaultModel.providerId,
+  };
+  assert.deepEqual(store.threads, [migratedLegacyThread]);
   assert.equal(await store.migrateLegacyWorkspaceOwnership("legacy-admin"), true);
   assert.deepEqual(store.projects, [{ ...legacyProject, ownerId: "legacy-admin" }]);
   assert.equal(store.getThread(legacyThread.id)?.userId, "legacy-admin");

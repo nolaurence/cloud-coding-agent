@@ -11,7 +11,9 @@ import type {
   ServerMessage,
   ShellState,
   ThreadAccess,
+  ThreadCreateResult,
   ThreadMeta,
+  TurnAttachment,
   UserRole,
 } from "@cca/protocol";
 import { store } from "./store.js";
@@ -25,11 +27,14 @@ import {
   saveScopedMcpServer,
 } from "./mcpServers.js";
 import {
+  DEFAULT_MODEL_PROVIDER_ID,
   flattenModels,
   isAgentMode,
   isReasoningEffort,
   normalizeContextWindowTokens,
   normalizeModelRefReasoning,
+  resolveThreadModel,
+  resolveThreadModelProviderId,
 } from "@cca/protocol";
 import { verifyToken, type TokenPayload } from "./auth.js";
 import { getThreadAccess } from "./threadAccess.js";
@@ -76,10 +81,12 @@ interface ClientConn {
   user: TokenPayload;
   shellSubscribed: boolean;
   threadSubs: Map<string, string | null>;
+  pendingThreadSubs: Set<string>;
 }
 
 export class Hub {
   private clients = new Set<ClientConn>();
+  private provisionalThreads = new Map<string, ClientConn | null>();
   private manager = new CopilotManager();
   private connectors = new ConnectorManager(
     this.manager,
@@ -120,7 +127,13 @@ export class Hub {
       socket.close(4401, "unauthorized");
       return;
     }
-    const conn: ClientConn = { socket, user, shellSubscribed: false, threadSubs: new Map() };
+    const conn: ClientConn = {
+      socket,
+      user,
+      shellSubscribed: false,
+      threadSubs: new Map(),
+      pendingThreadSubs: new Set(),
+    };
     this.clients.add(conn);
     const heartbeat = setInterval(() => {
       if (socket.readyState === socket.OPEN) socket.ping();
@@ -150,12 +163,116 @@ export class Hub {
       for (const threadId of conn.threadSubs.keys()) {
         this.manager.unsubscribe(threadId);
       }
+      for (const threadId of conn.pendingThreadSubs) {
+        this.manager.unsubscribe(threadId);
+      }
+      conn.threadSubs.clear();
+      conn.pendingThreadSubs.clear();
       this.clients.delete(conn);
     });
   }
 
   private threadAccess(conn: ClientConn, thread: ThreadMeta | undefined): ThreadAccess | null {
+    if (thread && this.provisionalThreads.has(thread.id)) return null;
     return getThreadAccess(conn.user, thread);
+  }
+
+  private assertProvisionalOwner(conn: ClientConn, threadId: string) {
+    if (
+      !this.clients.has(conn) ||
+      conn.socket.readyState !== conn.socket.OPEN ||
+      !conn.pendingThreadSubs.has(threadId) ||
+      this.provisionalThreads.get(threadId) !== conn
+    ) {
+      throw new Error("连接已断开");
+    }
+  }
+
+  private initialTurnImageAttachments(value: unknown): TurnAttachment[] | undefined {
+    if (!value || typeof value !== "object") return undefined;
+    const attachments = (value as { attachments?: unknown }).attachments;
+    if (!Array.isArray(attachments)) return undefined;
+    return attachments.flatMap((attachment) => {
+      if (!attachment || typeof attachment !== "object") return [];
+      const imageId = (attachment as { imageId?: unknown }).imageId;
+      return typeof imageId === "string" ? [{ path: "", imageId }] : [];
+    });
+  }
+
+  private cleanupInitialTurnUploads(conn: ClientConn, initialTurn: unknown) {
+    removeUploadedImages(conn.user.username, this.initialTurnImageAttachments(initialTurn));
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  private withCleanupFailures(error: unknown, failures: readonly string[]): Error {
+    const original = this.errorMessage(error);
+    if (failures.length === 0) return error instanceof Error ? error : new Error(original);
+    return new Error(`${original} (清理失败: ${failures.join("; ")})`, { cause: error });
+  }
+
+  private async rollbackInitialThread(
+    conn: ClientConn,
+    thread: ThreadMeta | undefined,
+    initialTurn: unknown,
+    creationError: unknown,
+  ): Promise<Error> {
+    const cleanupFailures: string[] = [];
+    const recordFailure = (step: string, error: unknown) => {
+      cleanupFailures.push(`${step}: ${this.errorMessage(error)}`);
+    };
+
+    if (thread) {
+      this.provisionalThreads.set(thread.id, null);
+      const hadPendingSubscription = conn.pendingThreadSubs.delete(thread.id);
+      const hadActiveSubscription = conn.threadSubs.delete(thread.id);
+      if (hadPendingSubscription || hadActiveSubscription) {
+        try {
+          this.manager.unsubscribe(thread.id);
+        } catch (error) {
+          recordFailure("取消订阅", error);
+        }
+      }
+    }
+
+    try {
+      this.cleanupInitialTurnUploads(conn, initialTurn);
+    } catch (error) {
+      recordFailure("清理上传", error);
+    }
+
+    if (thread) {
+      try {
+        this.terminals.closeThread(thread.id);
+      } catch (error) {
+        recordFailure("关闭终端", error);
+      }
+      try {
+        await browserPool.stopThread(thread.id);
+      } catch (error) {
+        recordFailure("关闭浏览器", error);
+      }
+      try {
+        await this.manager.deleteThread(thread.id);
+      } catch (error) {
+        recordFailure("删除运行时", error);
+      }
+      try {
+        store.deleteThread(thread.id);
+      } catch (error) {
+        recordFailure("删除会话元数据", error);
+      }
+      if (!store.getThread(thread.id)) this.provisionalThreads.delete(thread.id);
+      try {
+        this.broadcastShell();
+      } catch (error) {
+        recordFailure("广播会话列表", error);
+      }
+    }
+
+    return this.withCleanupFailures(creationError, cleanupFailures);
   }
 
   private canRead(conn: ClientConn, thread: ThreadMeta | undefined): boolean {
@@ -177,6 +294,7 @@ export class Hub {
     thread: ThreadMeta | undefined,
   ): boolean {
     if (this.canRead(conn, thread)) return true;
+    if (this.provisionalThreads.has(threadId)) return false;
     const shareToken = conn.threadSubs.get(threadId);
     return typeof shareToken === "string" && validateThreadShareToken(threadId, shareToken) !== null;
   }
@@ -363,11 +481,21 @@ export class Hub {
     }
   }
 
+  private validateModel(model: ModelRef, settings: AppSettings): void {
+    if (model.providerId === DEFAULT_MODEL_PROVIDER_ID) return;
+    const provider = settings.providers.find((candidate) => candidate.id === model.providerId);
+    if (!provider) throw new Error("模型提供方不存在");
+    if (!provider.models.some((candidate) => candidate.id === model.modelId)) {
+      throw new Error("模型不存在");
+    }
+  }
+
   private async validateReasoningEffort(
     model: ModelRef,
     settings: AppSettings = store.settings,
     modelOptions?: readonly ModelOption[],
   ): Promise<void> {
+    this.validateModel(model, settings);
     const effort: unknown = model.reasoningEffort;
     if (effort === undefined) return;
     if (!isReasoningEffort(effort)) throw new Error("不支持的推理强度");
@@ -473,35 +601,125 @@ export class Hub {
           break;
         }
         case "thread.create": {
-          this.requireOwnedProject(conn, msg.projectId);
-          if (msg.agentMode !== undefined && !isAgentMode(msg.agentMode)) {
-            throw new Error("会话模式无效");
-          }
-          const requestedModel = msg.model ?? store.settings.defaultModel;
-          let model = requestedModel;
-          if (requestedModel) {
-            const modelOptions = await this.listModelOptions();
-            if (store.normalizeStoredReasoningEfforts(modelOptions)) {
-              this.broadcastSettings();
-              this.broadcastShell();
+          const initialTurnValue: unknown = msg.initialTurn;
+          let thread: ThreadMeta | undefined;
+          let initialTurnAccepted = false;
+          try {
+            const project = this.requireOwnedProject(conn, msg.projectId);
+            if (msg.agentMode !== undefined && !isAgentMode(msg.agentMode)) {
+              throw new Error("会话模式无效");
             }
-            model = normalizeModelRefReasoning(requestedModel, modelOptions);
-            await this.validateReasoningEffort(model, store.settings, modelOptions);
+            const requestedModel = msg.model ?? store.settings.defaultModel;
+            let model = requestedModel;
+            if (requestedModel) {
+              const modelOptions = await this.listModelOptions();
+              if (store.normalizeStoredReasoningEfforts(modelOptions)) {
+                this.broadcastSettings();
+                this.broadcastShell();
+              }
+              model = normalizeModelRefReasoning(requestedModel, modelOptions);
+              await this.validateReasoningEffort(model, store.settings, modelOptions);
+            }
+
+            if (
+              initialTurnValue !== undefined &&
+              (!initialTurnValue ||
+                typeof initialTurnValue !== "object" ||
+                typeof (initialTurnValue as { text?: unknown }).text !== "string" ||
+                ((initialTurnValue as { attachments?: unknown }).attachments !== undefined &&
+                  !Array.isArray((initialTurnValue as { attachments?: unknown }).attachments)))
+            ) {
+              throw new Error("首条消息格式无效");
+            }
+            const initialTurn = initialTurnValue as typeof msg.initialTurn;
+            if (initialTurn && !initialTurn.text.trim() && !initialTurn.attachments?.length) {
+              throw new Error("请输入消息内容");
+            }
+            if (initialTurn) {
+              validateTurnAttachments(conn.user.username, project.path, initialTurn.attachments);
+            }
+
+            thread = {
+              id: randomUUID(),
+              projectId: msg.projectId,
+              title: "新会话",
+              model,
+              modelProviderId: model?.providerId ?? DEFAULT_MODEL_PROVIDER_ID,
+              agentMode: msg.agentMode ?? "standard",
+              userId: conn.user.username,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              archived: false,
+            };
+            if (initialTurn) this.provisionalThreads.set(thread.id, conn);
+            store.upsertThread(thread);
+
+            if (initialTurn) {
+              conn.pendingThreadSubs.add(thread.id);
+              await this.manager.subscribe(thread.id, conn.user.username);
+              this.assertProvisionalOwner(conn, thread.id);
+              await this.manager.sendMessage(
+                thread.id,
+                initialTurn.text,
+                initialTurn.attachments,
+                conn.user.username,
+                () => this.assertProvisionalOwner(conn, thread!.id),
+                () => {
+                  initialTurnAccepted = true;
+                },
+              );
+              this.provisionalThreads.delete(thread.id);
+
+              const ownsPendingSubscription = conn.pendingThreadSubs.delete(thread.id);
+              if (
+                ownsPendingSubscription &&
+                this.clients.has(conn) &&
+                conn.socket.readyState === conn.socket.OPEN
+              ) {
+                conn.threadSubs.set(thread.id, null);
+                this.send(conn, {
+                  type: "thread.event",
+                  threadId: thread.id,
+                  event: this.manager.snapshot(thread.id),
+                });
+              } else if (ownsPendingSubscription) {
+                this.manager.unsubscribe(thread.id);
+              }
+            }
+          } catch (error) {
+            if (thread && initialTurnAccepted) {
+              this.provisionalThreads.delete(thread.id);
+              const hadPendingSubscription = conn.pendingThreadSubs.delete(thread.id);
+              const hadActiveSubscription = conn.threadSubs.delete(thread.id);
+              if (hadPendingSubscription || hadActiveSubscription) {
+                this.manager.unsubscribe(thread.id);
+              }
+              console.warn(`[cca] finalize accepted initial turn failed thread=${thread.id}`, error);
+              this.broadcastShell();
+              if (this.clients.has(conn) && conn.socket.readyState === conn.socket.OPEN) {
+                this.send(conn, {
+                  type: "thread.event",
+                  threadId: thread.id,
+                  event: this.manager.snapshot(thread.id),
+                });
+                this.reply(conn, msg.id, {
+                  ...this.threadMeta(conn, store.getThread(thread.id) ?? thread),
+                  initialTurnAccepted: true,
+                } satisfies ThreadCreateResult);
+              }
+              break;
+            }
+
+            throw await this.rollbackInitialThread(conn, thread, initialTurnValue, error);
           }
-          const thread: ThreadMeta = {
-            id: randomUUID(),
-            projectId: msg.projectId,
-            title: "新会话",
-            model,
-            agentMode: msg.agentMode ?? "standard",
-            userId: conn.user.username,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            archived: false,
-          };
-          store.upsertThread(thread);
+
+          const createdThread = store.getThread(thread!.id) ?? thread!;
           this.broadcastShell();
-          this.reply(conn, msg.id, this.threadMeta(conn, thread));
+          const result: ThreadCreateResult = {
+            ...this.threadMeta(conn, createdThread),
+            ...(initialTurnAccepted ? { initialTurnAccepted: true } : {}),
+          };
+          this.reply(conn, msg.id, result);
           break;
         }
         case "thread.delete": {
@@ -531,15 +749,21 @@ export class Hub {
           const thread = store.getThread(msg.threadId);
           if (!thread) throw new Error("会话不存在");
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          const modelProviderId = resolveThreadModelProviderId(
+            thread,
+            store.settings.defaultModel,
+          );
+          if (msg.model.providerId !== modelProviderId) {
+            throw new Error("会话创建后不支持切换模型提供方,请新建会话使用该模型");
+          }
           await this.validateReasoningEffort(msg.model);
-          const currentModel = thread.model ?? store.settings.defaultModel;
+          const currentModel = resolveThreadModel(thread, store.settings.defaultModel);
           await this.manager.setThreadModel(msg.threadId, currentModel, msg.model);
-          const modelChanged =
-            currentModel?.providerId !== msg.model.providerId ||
-            currentModel?.modelId !== msg.model.modelId;
+          const modelChanged = currentModel?.modelId !== msg.model.modelId;
           store.upsertThread({
             ...thread,
             model: msg.model,
+            modelProviderId,
             contextUsage: modelChanged ? undefined : thread.contextUsage,
           });
           this.broadcastShell();
@@ -597,7 +821,9 @@ export class Hub {
           const inspected = inspectThreadShare(msg.token);
           if (!inspected) throw new Error("分享链接无效或已失效");
           const thread = store.getThread(inspected.threadId);
-          if (!thread) throw new Error("分享的会话不存在");
+          if (!thread || this.provisionalThreads.has(thread.id)) {
+            throw new Error("分享的会话不存在");
+          }
           const hadSubscription = conn.threadSubs.has(thread.id);
           const previousSubscription = conn.threadSubs.get(thread.id);
           const snapshot = await this.manager.subscribe(thread.id, thread.userId);
@@ -621,8 +847,8 @@ export class Hub {
         case "thread.share.redeem": {
           const redeemed = await redeemThreadShare(msg.token, conn.user.username);
           const thread = store.getThread(redeemed.threadId);
-          if (!thread) {
-            await revokeThreadShare(redeemed.threadId);
+          if (!thread || this.provisionalThreads.has(thread.id)) {
+            if (!thread) await revokeThreadShare(redeemed.threadId);
             throw new Error("分享的会话不存在");
           }
           if (conn.threadSubs.has(thread.id)) conn.threadSubs.set(thread.id, null);

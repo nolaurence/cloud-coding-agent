@@ -6,6 +6,8 @@ import {
   normalizeContextWindowTokens,
   normalizeModelRefReasoning,
   resolveModelContextWindowTokens,
+  resolveThreadModel,
+  resolveThreadModelProviderId,
 } from "@cca/protocol";
 import type { AppSettings, ModelOption } from "@cca/protocol";
 import { CopilotManager } from "./copilot.js";
@@ -261,6 +263,24 @@ test("persisted efforts are only removed when exact capabilities exclude them", 
   );
 });
 
+test("thread model resolution keeps the provider selected when the thread was created", () => {
+  const thread = {
+    modelProviderId: "copilot",
+    model: undefined,
+  };
+  const changedDefault = { providerId: "custom", modelId: "custom-model" };
+
+  assert.equal(resolveThreadModelProviderId(thread, changedDefault), "copilot");
+  assert.equal(resolveThreadModel(thread, changedDefault), undefined);
+  assert.equal(
+    resolveThreadModel(
+      { ...thread, model: { providerId: "custom", modelId: "stale-model" } },
+      changedDefault,
+    ),
+    undefined,
+  );
+});
+
 function seedRuntime(
   manager: CopilotManager,
   session: {
@@ -385,7 +405,7 @@ test("setThreadModel rejects cross-provider switch on an attached session", asyn
   assert.equal(disconnects, 0);
 });
 
-test("setThreadModel allows cross-provider switch on a fresh thread without session", async () => {
+test("setThreadModel rejects cross-provider switch on a fresh thread without session", async () => {
   const manager = new CopilotManager();
   const threads = (manager as unknown as { threads: Map<string, unknown> }).threads;
   threads.set("thread", {
@@ -400,10 +420,26 @@ test("setThreadModel allows cross-provider switch on a fresh thread without sess
     subscribers: 1,
   });
 
-  await manager.setThreadModel(
-    "thread",
-    { providerId: "first", modelId: "model" },
-    { providerId: "second", modelId: "model" },
+  await assert.rejects(
+    manager.setThreadModel(
+      "thread",
+      { providerId: "first", modelId: "model" },
+      { providerId: "second", modelId: "model" },
+    ),
+    /不支持切换模型提供方/,
+  );
+});
+
+test("setThreadModel rejects cross-provider switch without a runtime", async () => {
+  const manager = new CopilotManager();
+
+  await assert.rejects(
+    manager.setThreadModel(
+      "missing-thread",
+      { providerId: "first", modelId: "model" },
+      { providerId: "second", modelId: "model" },
+    ),
+    /不支持切换模型提供方/,
   );
 });
 

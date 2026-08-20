@@ -9,11 +9,13 @@ export function ModelPicker({
   onChange,
   disabled = false,
   direction = "up",
+  lockedProviderId,
 }: {
   value: ModelRef | undefined;
   onChange: (ref: ModelRef) => void;
   disabled?: boolean;
   direction?: "up" | "down";
+  lockedProviderId?: string;
 }) {
   const models = useApp((s) => s.models);
   const settings = useApp((s) => s.settings);
@@ -38,7 +40,11 @@ export function ModelPicker({
     if (disabled) setOpen(false);
   }, [disabled]);
 
-  const current = value ?? settings?.defaultModel;
+  const defaultModel =
+    lockedProviderId === undefined || settings?.defaultModel?.providerId === lockedProviderId
+      ? settings?.defaultModel
+      : undefined;
+  const current = value ?? defaultModel;
   const currentLabel =
     models.find((m) => m.ref.providerId === current?.providerId && m.ref.modelId === current?.modelId)
       ?.label ?? (current ? `${current.providerId} / ${current.modelId}` : "默认模型");
@@ -91,14 +97,24 @@ export function ModelPicker({
             {filtered.map((m) => {
               const selected =
                 current?.providerId === m.ref.providerId && current?.modelId === m.ref.modelId;
+              const providerLocked =
+                lockedProviderId !== undefined && m.ref.providerId !== lockedProviderId;
               return (
                 <button
                   type="button"
                   role="menuitemradio"
                   aria-checked={selected}
+                  aria-disabled={providerLocked}
+                  aria-label={
+                    providerLocked
+                      ? `${m.label}，会话创建后不能切换模型提供方`
+                      : undefined
+                  }
+                  disabled={providerLocked}
+                  title={providerLocked ? "会话创建后不能切换模型提供方" : m.label}
                   key={`${m.ref.providerId}:${m.ref.modelId}`}
                   className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800",
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:hover:bg-zinc-800 dark:disabled:hover:bg-transparent",
                     selected && "font-medium",
                   )}
                   onClick={() => {

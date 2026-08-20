@@ -124,6 +124,8 @@ export interface AppSettings {
   disabledSkills: string[];
 }
 
+export const DEFAULT_MODEL_PROVIDER_ID = "copilot";
+
 export interface ModelRef {
   providerId: string;
   modelId: string;
@@ -229,6 +231,7 @@ export interface ThreadMeta {
   projectId: string;
   title: string;
   model?: ModelRef;
+  modelProviderId?: string;
   agentMode?: AgentMode;
   userId?: string;
   createdAt: number;
@@ -244,6 +247,31 @@ export interface ThreadMeta {
     platform: ConnectorPlatform;
     conversationId: string;
   };
+}
+
+export interface ThreadCreateResult extends ThreadMeta {
+  initialTurnAccepted?: true;
+}
+
+export function resolveThreadModelProviderId(
+  thread: Pick<ThreadMeta, "model" | "modelProviderId"> | undefined,
+  defaultModel?: ModelRef,
+): string {
+  return (
+    thread?.modelProviderId ??
+    thread?.model?.providerId ??
+    defaultModel?.providerId ??
+    DEFAULT_MODEL_PROVIDER_ID
+  );
+}
+
+export function resolveThreadModel(
+  thread: Pick<ThreadMeta, "model" | "modelProviderId"> | undefined,
+  defaultModel?: ModelRef,
+): ModelRef | undefined {
+  const providerId = resolveThreadModelProviderId(thread, defaultModel);
+  if (thread?.model?.providerId === providerId) return thread.model;
+  return defaultModel?.providerId === providerId ? defaultModel : undefined;
 }
 
 export interface AuthUser {
@@ -491,6 +519,11 @@ export interface SubagentActivity {
   };
 }
 
+export interface TurnInput {
+  text: string;
+  attachments?: TurnAttachment[];
+}
+
 export type ThreadEvent =
   | {
       kind: "snapshot";
@@ -499,6 +532,7 @@ export type ThreadEvent =
       subagents?: SubagentActivity[];
       running: boolean;
       contextUsage?: ContextUsage;
+      error?: string;
       live?: { text: string; reasoning: string; turnId: string; startedAt: number };
     }
   | { kind: "turn.start"; turnId: string }
@@ -537,6 +571,7 @@ export type ClientMessage =
       projectId: string;
       model?: ModelRef;
       agentMode?: AgentMode;
+      initialTurn?: TurnInput;
     }
   | { id: string; type: "thread.delete"; threadId: string }
   | { id: string; type: "thread.setModel"; threadId: string; model: ModelRef }

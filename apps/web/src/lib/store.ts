@@ -26,6 +26,7 @@ import type {
   ShellState,
   SkillInfo,
   SubagentActivity,
+  ThreadCreateResult,
   ThreadEvent,
   ThreadMeta,
   ThreadShareMode,
@@ -33,6 +34,7 @@ import type {
   ThreadShareSummary,
   ToolActivity,
   TurnAttachment,
+  TurnInput,
 } from "@cca/protocol";
 import {
   connect,
@@ -224,6 +226,7 @@ interface AppState {
     projectId: string,
     model?: ModelRef,
     agentMode?: AgentMode,
+    initialTurn?: TurnInput,
   ) => Promise<ThreadMeta>;
   deleteThread: (threadId: string) => Promise<void>;
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
@@ -283,7 +286,7 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         live: event.live
           ? { text: event.live.text, reasoning: event.live.reasoning, turnId: event.live.turnId }
           : { text: "", reasoning: "", turnId: null },
-        error: null,
+        error: event.error ?? null,
       };
     }
     case "turn.start":
@@ -709,8 +712,43 @@ export const useApp = create<AppState>((set, get) => {
       await request({ type: "workspace.remove", projectId });
     },
 
-    createThread: async (projectId, model, agentMode) => {
-      return request<ThreadMeta>({ type: "thread.create", projectId, model, agentMode });
+    createThread: async (projectId, model, agentMode, initialTurn) => {
+      const created = await request<ThreadCreateResult>({
+        type: "thread.create",
+        projectId,
+        model,
+        agentMode,
+        initialTurn,
+      });
+      const { initialTurnAccepted, ...thread } = created;
+      if (initialTurn && initialTurnAccepted !== true) {
+        try {
+          await request({
+            type: "turn.start",
+            threadId: thread.id,
+            text: initialTurn.text,
+            attachments: initialTurn.attachments,
+          });
+        } catch (error) {
+          try {
+            await request({ type: "thread.delete", threadId: thread.id });
+          } catch (cleanupError) {
+            const originalMessage = error instanceof Error ? error.message : String(error);
+            const cleanupMessage =
+              cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+            throw new Error(`${originalMessage} (清理新会话失败: ${cleanupMessage})`, {
+              cause: error,
+            });
+          }
+          throw error;
+        }
+      }
+      set((state) => ({
+        threads: state.threads.some((candidate) => candidate.id === thread.id)
+          ? state.threads
+          : [thread, ...state.threads],
+      }));
+      return thread;
     },
 
     deleteThread: async (threadId) => {
