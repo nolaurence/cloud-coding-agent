@@ -185,6 +185,64 @@ button:disabled,
   @apply mt-1;
 }
 
+/* Assistant-only message typography. User bubbles keep the shared markdown defaults. */
+.assistant-message .markdown-body {
+  color: color-mix(in oklab, var(--foreground) 82%, transparent);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+
+.assistant-message .markdown-body p,
+.assistant-message .markdown-body ul,
+.assistant-message .markdown-body ol,
+.assistant-message .markdown-body blockquote,
+.assistant-message .markdown-body pre,
+.assistant-message .markdown-body table {
+  margin-block: 0.65rem;
+}
+
+.assistant-message .markdown-body h1,
+.assistant-message .markdown-body h2,
+.assistant-message .markdown-body h3,
+.assistant-message .markdown-body h4 {
+  color: var(--foreground);
+  line-height: 1.3;
+  margin: 1.25rem 0 0.5rem;
+}
+
+.assistant-message .markdown-body h1 {
+  font-size: 1.25rem;
+}
+
+.assistant-message .markdown-body h2 {
+  font-size: 1.125rem;
+}
+
+.assistant-message .markdown-body h3 {
+  font-size: 1rem;
+}
+
+.assistant-message .markdown-body pre {
+  border-color: color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in oklab, var(--muted) 54%, transparent);
+}
+
+.assistant-message .markdown-body :not(pre) > code {
+  background: color-mix(in oklab, var(--muted) 72%, transparent);
+}
+
+.assistant-message .markdown-body blockquote {
+  border-color: color-mix(in oklab, var(--muted-foreground) 28%, transparent);
+  color: color-mix(in oklab, var(--muted-foreground) 88%, transparent);
+}
+
+.assistant-message .markdown-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: sans-serif;

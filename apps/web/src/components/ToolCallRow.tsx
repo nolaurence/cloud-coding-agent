@@ -134,7 +134,7 @@ export function ToolCallRow({ activity }: { activity: ToolActivity }) {
     <div
       className={cn(
         "flex flex-col rounded-md px-0.5 py-0.5 transition-colors",
-        canExpand && "hover:bg-zinc-100/60 dark:hover:bg-zinc-900/60",
+        canExpand && "hover:bg-accent/20 focus-within:bg-accent/20",
       )}
     >
       <button
@@ -142,7 +142,7 @@ export function ToolCallRow({ activity }: { activity: ToolActivity }) {
         aria-expanded={canExpand ? open : undefined}
         aria-label={`${labels[kind]}，${statusText(activity)}`}
         className={cn(
-          "flex min-h-5 w-full select-none items-center gap-1.5 text-left text-xs leading-5",
+          "flex min-h-5 w-full select-none items-center gap-1.5 text-left text-[12px] leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/60",
           canExpand ? "cursor-pointer" : "cursor-default",
         )}
         onClick={() => {
@@ -152,25 +152,22 @@ export function ToolCallRow({ activity }: { activity: ToolActivity }) {
         <span
           className={cn(
             "flex h-5 w-5 shrink-0 items-center justify-center",
-            activity.status === "error" ? "text-red-500" : "text-zinc-500 dark:text-zinc-400",
+            activity.status === "error" ? "text-destructive" : "text-muted-foreground/65",
           )}
         >
           <ToolIcon kind={kind} />
         </span>
         <span
           className={cn(
-            "min-w-0 shrink-0 truncate font-medium",
-            activity.status === "error"
-              ? "text-red-700 dark:text-red-300"
-              : "text-zinc-700 dark:text-zinc-200",
+            "min-w-0 shrink-0 truncate font-medium text-foreground/80",
           )}
         >
           {labels[kind]}
         </span>
-        <span className="mono min-w-0 flex-1 truncate text-zinc-400" title={target ?? activity.toolName}>
+        <span className="mono min-w-0 flex-1 truncate text-muted-foreground" title={target ?? activity.toolName}>
           {(target ?? activity.toolName).replace(/\s+/g, " ")}
         </span>
-        <span className="flex h-4 w-4 shrink-0 items-center justify-center text-zinc-400">
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground">
           {canExpand && (
             <ChevronDown
               className={cn("h-3 w-3 transition-transform", open && "rotate-180")}
@@ -182,35 +179,35 @@ export function ToolCallRow({ activity }: { activity: ToolActivity }) {
           title={statusText(activity)}
         >
           {activity.status === "running" ? (
-            <Loader2 className="h-3 w-3 animate-spin text-zinc-400" />
+            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
           ) : activity.status === "complete" ? (
-            <Check className="h-3 w-3 text-zinc-500 dark:text-zinc-400" />
+            <Check className="h-3 w-3 text-muted-foreground" />
           ) : (
-            <X className="h-3 w-3 text-red-500" />
+            <X className="h-3 w-3 text-destructive" />
           )}
         </span>
       </button>
 
       {open && canExpand && (
-        <div className="ml-7 mt-1 border-l border-zinc-200 pb-1 pl-3 dark:border-zinc-800">
-          <div className="mb-1.5 flex flex-wrap items-center gap-x-3 text-[11px] text-zinc-400">
+        <div className="ml-7 mt-1 border-l border-border/45 pb-1 pl-3 pt-0.5">
+          <div className="mb-1.5 flex flex-wrap items-center gap-x-3 text-[11px] text-muted-foreground">
             <span className="mono">{activity.toolName}</span>
             {elapsed && <span>{elapsed}</span>}
           </div>
           {activity.args && (
             <div className="mb-2">
-              <div className="mb-1 text-[11px] font-medium text-zinc-500">参数</div>
-              <pre className="mono max-h-52 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-500 select-text dark:text-zinc-400">
+              <div className="mb-1 text-[11px] font-medium text-muted-foreground/70">参数</div>
+              <pre className="mono max-h-52 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-muted-foreground select-text">
                 {formatPayload(activity.args)}
               </pre>
             </div>
           )}
           {activity.result && (
             <div>
-              <div className="mb-1 text-[11px] font-medium text-zinc-500">
+              <div className="mb-1 text-[11px] font-medium text-muted-foreground/70">
                 {activity.status === "error" ? "错误" : "输出"}
               </div>
-              <pre className="mono max-h-72 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-500 select-text dark:text-zinc-400">
+              <pre className="mono max-h-72 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-muted-foreground select-text">
                 {formatPayload(activity.result)}
               </pre>
             </div>

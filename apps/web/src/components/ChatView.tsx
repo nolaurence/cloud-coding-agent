@@ -58,22 +58,27 @@ function ReasoningBlock({ text, streaming = false }: { text: string; streaming?:
   }, [streaming]);
 
   return (
-    <div className="mb-2 overflow-hidden rounded-md border border-zinc-200/80 bg-zinc-50/60 text-xs dark:border-zinc-800 dark:bg-zinc-900/50">
+    <div className="assistant-reasoning mb-2">
       <button
         type="button"
         aria-expanded={open}
-        className="flex min-h-8 w-full items-center gap-1.5 px-2.5 py-1.5 text-left font-medium text-zinc-500 hover:bg-zinc-100/70 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-200"
+        className="flex min-h-6 items-center gap-1 rounded-md px-1 py-0.5 text-left text-[12px] font-medium leading-5 text-muted-foreground transition-colors hover:bg-accent/20 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/60"
         onClick={() => setOpen((value) => !value)}
       >
         <ChevronRight
-          className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")}
+          className={cn("h-3.5 w-3.5 shrink-0 opacity-70 transition-transform", open && "rotate-90")}
         />
-        <Bot className="h-3.5 w-3.5 shrink-0" />
         <span>{streaming ? "正在思考" : "思考过程"}</span>
-        {streaming && <span className="animate-pulse text-zinc-400">...</span>}
+        {streaming && (
+          <span className="inline-flex items-center gap-[3px] pl-0.5" aria-hidden="true">
+            <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/35" />
+            <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/35 [animation-delay:200ms]" />
+            <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/35 [animation-delay:400ms]" />
+          </span>
+        )}
       </button>
       {open && (
-        <div className="mx-2.5 mb-2.5 border-l-2 border-zinc-200 pl-2.5 text-sm leading-6 text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+        <div className="ml-2.5 mt-1 border-l border-border/60 pl-3 text-muted-foreground/75">
           <Markdown>{text}</Markdown>
         </div>
       )}
@@ -207,14 +212,14 @@ function AssistantMessage({
 }) {
   return (
     <article
-      className="group/assistant min-w-0 px-1 py-0.5"
+      className="assistant-message group/assistant min-w-0 px-1 py-0.5"
       aria-live={streaming ? "polite" : undefined}
     >
       {message.reasoning && <ReasoningBlock text={message.reasoning} streaming={streaming} />}
       {message.text && <Markdown>{message.text}</Markdown>}
       {showMeta && !streaming && message.text && (
-        <div className="mt-1.5 flex h-7 items-center gap-2 text-xs text-zinc-400 opacity-100 transition-opacity sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
-          <CopyAction text={message.text} label="复制回复" />
+        <div className="mt-1.5 flex h-7 items-center gap-2 text-xs tabular-nums text-muted-foreground opacity-100 transition-opacity duration-200 sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
+          <CopyAction text={message.text} label="复制回复" className="h-6 w-6 text-muted-foreground" />
           <MessageTime at={message.createdAt} />
         </div>
       )}
@@ -294,7 +299,7 @@ function WorkGroup({
   const visibleActivities = expanded ? activities : activities.slice(-1);
 
   return (
-    <div className="space-y-px py-0.5">
+    <div className="-mx-1 space-y-px px-1 py-0.5">
       {visibleActivities.map((activity) => (
         <ToolCallRow key={activity.id} activity={activity} />
       ))}
@@ -302,10 +307,10 @@ function WorkGroup({
         <button
           type="button"
           aria-expanded={expanded}
-          className="flex w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-xs font-medium leading-5 text-zinc-600 hover:bg-zinc-100/60 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-900/60 dark:hover:text-zinc-100"
+          className="flex w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] font-medium leading-5 text-foreground/80 transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/60"
           onClick={() => onToggle(groupId)}
         >
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-400">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground/65">
             <ChevronDown
               className={cn(
                 "h-3.5 w-3.5 transition-transform duration-200",
@@ -391,11 +396,11 @@ function WorkingIndicator({ startedAt }: { startedAt: number | null }) {
   }, [startedAt]);
 
   return (
-    <div className="flex items-center gap-2 px-1.5 py-1 text-[11px] tabular-nums text-zinc-400" aria-live="polite">
+    <div className="flex items-center gap-2 px-1.5 py-1 text-[11px] tabular-nums text-muted-foreground" aria-live="polite">
       <span className="inline-flex items-center gap-[3px]" aria-hidden="true">
-        <span className="h-1 w-1 animate-pulse rounded-full bg-zinc-400/60" />
-        <span className="h-1 w-1 animate-pulse rounded-full bg-zinc-400/60 [animation-delay:200ms]" />
-        <span className="h-1 w-1 animate-pulse rounded-full bg-zinc-400/60 [animation-delay:400ms]" />
+        <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30" />
+        <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30 [animation-delay:200ms]" />
+        <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30 [animation-delay:400ms]" />
       </span>
       <span>{startedAt ? `已工作 ${formatDuration(now - startedAt)}` : "正在工作"}</span>
     </div>
@@ -475,11 +480,11 @@ function CompletedTurn({
       })}
       {hasCollapsibleEntries && (
         <>
-          <div className="border-b border-zinc-200/80 pb-2 pt-0.5 dark:border-zinc-800">
+          <div className="border-b border-border/60 pb-2 pt-0.5">
             <button
               type="button"
               aria-expanded={expanded}
-              className="flex items-center gap-1 rounded-md px-1 text-xs tabular-nums text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+              className="flex items-center gap-1 rounded-md px-1 text-xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/60"
               onClick={() => onToggleTurn(turnId)}
             >
               <span>{durationLabel}</span>
@@ -689,19 +694,21 @@ function SubagentDetail({
           <WorkingIndicator startedAt={subagent.startedAt} />
         )}
         {subagent.status === "idle" && !hasLive && (
-          <div className="flex items-center gap-2 px-1.5 py-2 text-xs text-zinc-400">
+          <div className="flex items-center gap-2 px-1.5 py-2 text-xs text-muted-foreground/70">
             <Pause className="h-3.5 w-3.5" />
             等待后续任务
           </div>
         )}
         {subagent.error && (
-          <div className={cn(
-            "rounded-md border px-3 py-2.5 text-sm",
-            subagent.status === "cancelled"
-              ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-950 dark:bg-amber-950/30 dark:text-amber-300"
-              : "border-red-200 bg-red-50 text-red-700 dark:border-red-950 dark:bg-red-950/30 dark:text-red-300",
-          )}>
-            {subagent.error}
+          <div
+            role="alert"
+            className={cn(
+              "flex items-start gap-2 px-1.5 py-1.5 text-sm",
+              subagent.status === "cancelled" ? "text-amber-600 dark:text-amber-400" : "text-destructive",
+            )}
+          >
+            {subagent.status === "cancelled" ? <Ban className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <X className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+            <span>{subagent.error}</span>
           </div>
         )}
         {subagent.status !== "running" && subagent.status !== "idle" && !subagent.error && entries.length === 0 && !hasLive && (
