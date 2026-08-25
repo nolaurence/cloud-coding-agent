@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState, type KeyboardEvent } from "react";
 import {
   Check,
   ChevronDown,
   FilePenLine,
   FileSearch,
   Globe2,
-  Loader2,
+  Minus,
   Search,
   SquareTerminal,
   Wrench,
@@ -89,7 +89,7 @@ const labels: Record<ToolKind, string> = {
 };
 
 function ToolIcon({ kind }: { kind: ToolKind }) {
-  const className = "h-3.5 w-3.5 shrink-0 stroke-[1.8]";
+  const className = "block size-3.5 shrink-0 stroke-[1.8] opacity-80";
   if (kind === "modify") return <FilePenLine className={className} />;
   if (kind === "read") return <FileSearch className={className} />;
   if (kind === "search") return <Search className={className} />;
@@ -106,10 +106,13 @@ function formatPayload(raw: string): string {
   }
 }
 
-function duration(activity: ToolActivity): string | null {
-  if (!activity.endedAt) return null;
-  const elapsed = Math.max(0, activity.endedAt - activity.startedAt);
-  return elapsed < 1000 ? `${elapsed} ms` : `${(elapsed / 1000).toFixed(1)} 秒`;
+function expandedBody(activity: ToolActivity): string | null {
+  const blocks: string[] = [];
+  if (activity.args?.trim()) blocks.push(`参数\n${formatPayload(activity.args)}`);
+  if (activity.result?.trim()) {
+    blocks.push(`${activity.status === "error" ? "错误" : "输出"}\n${formatPayload(activity.result)}`);
+  }
+  return blocks.length > 0 ? blocks.join("\n\n") : null;
 }
 
 function statusText(activity: ToolActivity): string {
@@ -118,169 +121,95 @@ function statusText(activity: ToolActivity): string {
   return "已完成";
 }
 
-
-function ToolRowContent({
-  activity,
-  kind,
-  target,
-  elapsed,
-  status,
-  canExpand,
-  open,
-}: {
-  activity: ToolActivity;
-  kind: ToolKind;
-  target: string | null;
-  elapsed: string | null;
-  status: string;
-  canExpand: boolean;
-  open: boolean;
-}) {
-  return (
-    <>
-        <span
-          className={cn(
-            "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border shadow-sm",
-            activity.status === "error"
-              ? "border-destructive/25 bg-destructive/10 text-destructive"
-              : activity.status === "running"
-                ? "border-border bg-background text-foreground/75"
-                : "border-border/70 bg-muted/55 text-muted-foreground",
-          )}
-        >
-          <ToolIcon kind={kind} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-baseline gap-2">
-            <span className="shrink-0 text-[12px] font-semibold leading-5 text-foreground/85">
-              {labels[kind]}
-            </span>
-            <span
-              className="mono min-w-0 flex-1 truncate text-[11px] leading-5 text-muted-foreground"
-              title={target ?? activity.toolName}
-            >
-              {(target ?? activity.toolName).replace(/\s+/g, " ")}
-            </span>
-          </span>
-          <span className="flex items-center gap-1.5 text-[10px] leading-4 text-muted-foreground/80">
-            <span>{activity.toolName}</span>
-            {elapsed && <span>· {elapsed}</span>}
-          </span>
-        </span>
-        <span
-          className={cn(
-            "flex h-6 shrink-0 items-center gap-1 rounded-full px-2 text-[10px] font-medium",
-            activity.status === "error"
-              ? "bg-destructive/10 text-destructive"
-              : activity.status === "running"
-                ? "bg-foreground/5 text-foreground/75"
-                : "bg-muted text-muted-foreground",
-          )}
-          title={status}
-        >
-          {activity.status === "running" ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : activity.status === "complete" ? (
-            <Check className="h-3 w-3" />
-          ) : (
-            <X className="h-3 w-3" />
-          )}
-          <span className="hidden sm:inline">{status}</span>
-        </span>
-        <span className="flex h-6 w-5 shrink-0 items-center justify-center text-muted-foreground/70">
-          {canExpand && (
-            <ChevronDown
-              className={cn("h-3.5 w-3.5 transition-transform duration-200", open && "rotate-180")}
-            />
-          )}
-        </span>
-      </>
-  );
-}
-
 export function ToolCallRow({ activity }: { activity: ToolActivity }) {
-  const [open, setOpen] = useState(activity.status === "error");
+  const [expanded, setExpanded] = useState(false);
   const args = useMemo(() => parseArgs(activity.args), [activity.args]);
   const target = useMemo(() => toolTarget(args), [args]);
   const kind = toolKind(activity, target);
-  const elapsed = duration(activity);
-  const canExpand = Boolean(activity.args || activity.result);
-  const status = statusText(activity);
-
-  useEffect(() => {
-    if (activity.status === "error") setOpen(true);
-  }, [activity.status]);
+  const heading = labels[kind];
+  const rawPreview = (target ?? activity.toolName).replace(/\s+/g, " ");
+  const preview = rawPreview.toLowerCase() === heading.toLowerCase() ? null : rawPreview;
+  const displayText = preview ? `${heading} - ${preview}` : heading;
+  const body = expandedBody(activity);
+  const canExpand = body !== null;
+  const failed = activity.status === "error";
+  const rowToggleProps = canExpand
+    ? {
+        role: "button" as const,
+        tabIndex: 0,
+        "aria-label": displayText,
+        onClick: () => setExpanded((value) => !value),
+        onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setExpanded((value) => !value);
+          }
+        },
+      }
+    : {};
 
   return (
-    <div className="group/tool flex flex-col py-1.5 first:pt-1 last:pb-1">
-      {canExpand ? (
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-label={`${labels[kind]}，${status}`}
-          className="flex min-h-9 w-full select-none items-center gap-2 rounded-lg px-1.5 text-left transition-colors hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/60"
-          onClick={() => setOpen((value) => !value)}
-        >
-          <ToolRowContent
-            activity={activity}
-            kind={kind}
-            target={target}
-            elapsed={elapsed}
-            status={status}
-            canExpand
-            open={open}
-          />
-        </button>
-      ) : (
-        <div
-          className="flex min-h-9 w-full select-none items-center gap-2 rounded-lg px-1.5 text-left"
-          aria-label={`${labels[kind]}，${status}`}
-        >
-          <ToolRowContent
-            activity={activity}
-            kind={kind}
-            target={target}
-            elapsed={elapsed}
-            status={status}
-            canExpand={false}
-            open={false}
-          />
-        </div>
+    <div
+      className={cn(
+        "flex flex-col rounded-md px-0.5 py-0.5 transition-colors",
+        canExpand &&
+          "cursor-pointer hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
       )}
-
-      {open && canExpand && (
-        <div className="mx-1.5 mt-1.5 overflow-hidden rounded-lg border border-border/65 bg-background/75 shadow-sm">
-          <div className="flex items-center justify-between border-b border-border/55 bg-muted/25 px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-            <span>调用详情</span>
-            {elapsed && <span className="normal-case tracking-normal tabular-nums">{elapsed}</span>}
+      {...rowToggleProps}
+    >
+      <div className="flex select-none items-center gap-1.5 transition-[opacity,translate] duration-200">
+        <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/65">
+          <ToolIcon kind={kind} />
+        </span>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <p className="flex min-w-0 w-full items-baseline gap-1.5 text-[12px] leading-5">
+              <span className="min-w-0 shrink truncate font-medium text-foreground/82">
+                {heading}
+              </span>
+              {preview && (
+                <span className="min-w-0 flex-1 truncate text-muted-foreground/55">{preview}</span>
+              )}
+            </p>
           </div>
-          <div className="grid gap-3 p-3 md:grid-cols-2">
-            {activity.args && (
-              <section className={cn(!activity.result && "md:col-span-2")}>
-                <div className="mb-1.5 text-[11px] font-semibold text-foreground/75">参数</div>
-                <pre className="mono max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/45 p-2.5 text-[11px] leading-5 text-muted-foreground select-text">
-                  {formatPayload(activity.args)}
-                </pre>
-              </section>
-            )}
-            {activity.result && (
-              <section className={cn(!activity.args && "md:col-span-2")}>
-                <div
+          <div className="flex shrink-0 items-center gap-px text-muted-foreground/55">
+            <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden={!canExpand}>
+              {canExpand ? (
+                <ChevronDown
                   className={cn(
-                    "mb-1.5 text-[11px] font-semibold",
-                    activity.status === "error" ? "text-destructive" : "text-foreground/75",
+                    "size-3 shrink-0 opacity-70 transition-transform duration-200",
+                    expanded && "rotate-180",
                   )}
-                >
-                  {activity.status === "error" ? "错误" : "输出"}
-                </div>
-                <pre className="mono max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/45 p-2.5 text-[11px] leading-5 text-muted-foreground select-text">
-                  {formatPayload(activity.result)}
-                </pre>
-              </section>
-            )}
+                  aria-hidden
+                />
+              ) : null}
+            </span>
+            <span
+              className="flex size-4 shrink-0 items-center justify-center"
+              title={statusText(activity)}
+            >
+              {failed ? (
+                <X className="block size-3 shrink-0 text-destructive" aria-hidden />
+              ) : activity.status === "complete" ? (
+                <Check className="block size-3 shrink-0 stroke-current" aria-hidden />
+              ) : (
+                <Minus className="block size-3 shrink-0 opacity-70" aria-hidden />
+              )}
+            </span>
           </div>
         </div>
-      )}
+      </div>
+      {expanded && canExpand && body ? (
+        <div
+          className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
+            {body}
+          </pre>
+        </div>
+      ) : null}
     </div>
   );
 }
