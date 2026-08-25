@@ -11,6 +11,7 @@ import {
   Loader2,
   Pause,
   Sparkles,
+  Wrench,
   X,
 } from "lucide-react";
 import type { ChatMessage, SubagentActivity, ToolActivity } from "@cca/protocol";
@@ -297,31 +298,59 @@ function WorkGroup({
 }) {
   const hiddenCount = Math.max(0, activities.length - 1);
   const visibleActivities = expanded ? activities : activities.slice(-1);
+  const runningCount = activities.filter((activity) => activity.status === "running").length;
+  const errorCount = activities.filter((activity) => activity.status === "error").length;
+  const summaryParts = [
+    runningCount > 0 ? `${runningCount} 项执行中` : null,
+    errorCount > 0 ? `${errorCount} 项失败` : null,
+  ].filter(Boolean);
+  const summary = summaryParts.length > 0
+    ? summaryParts.join(" · ")
+    : `${activities.length} 项已完成`;
 
   return (
-    <div className="-mx-1 space-y-px px-1 py-0.5">
-      {visibleActivities.map((activity) => (
-        <ToolCallRow key={activity.id} activity={activity} />
-      ))}
-      {hiddenCount > 0 && (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          className="flex w-full items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] font-medium leading-5 text-foreground/80 transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/60"
-          onClick={() => onToggle(groupId)}
-        >
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground/65">
+    <section
+      className="tool-turn overflow-hidden rounded-xl border border-border/70 bg-card/45 shadow-[0_1px_2px_color-mix(in_oklab,var(--foreground)_5%,transparent)]"
+      aria-label={`工具调用，${summary}`}
+    >
+      <header className="flex min-h-11 items-center gap-2.5 border-b border-border/55 bg-muted/30 px-3 py-2">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border/65 bg-background/80 text-muted-foreground shadow-sm">
+          <Wrench className="h-3.5 w-3.5 stroke-[1.8]" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-semibold text-foreground/85">工具调用</span>
+          <span
+            className={cn(
+              "block text-[11px] leading-4",
+              errorCount > 0 ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {summary}
+          </span>
+        </span>
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            className="flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/60"
+            onClick={() => onToggle(groupId)}
+          >
+            <span>{expanded ? "收起" : `查看全部 ${activities.length} 项`}</span>
             <ChevronDown
               className={cn(
                 "h-3.5 w-3.5 transition-transform duration-200",
                 expanded && "rotate-180",
               )}
             />
-          </span>
-          {expanded ? "收起工具调用" : `先前的 ${hiddenCount} 次工具调用`}
-        </button>
-      )}
-    </div>
+          </button>
+        )}
+      </header>
+      <div className="divide-y divide-border/45 px-2 py-1">
+        {visibleActivities.map((activity) => (
+          <ToolCallRow key={activity.id} activity={activity} />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -445,10 +474,44 @@ function CompletedTurn({
     else processSegments.push([entry]);
   }
   const hasCollapsibleEntries = processEntries.some((entry) => entry.kind !== "subagent");
+  const toolCount = processEntries.filter((entry) => entry.kind === "tool").length;
   const startedAt = turnStartedAt(entries);
   const endedAt = turnEndedAt(entries);
   const durationLabel =
-    startedAt !== null && endedAt !== null ? `工作了 ${formatDuration(endedAt - startedAt)}` : "工作过程";
+    startedAt !== null && endedAt !== null ? `工作了 ${formatDuration(endedAt - startedAt)}` : "已完成工作过程";
+  const processSummary = toolCount > 0
+    ? `${durationLabel} · ${toolCount} 次工具调用`
+    : durationLabel;
+  const firstCollapsibleSegmentId = processSegments.find(
+    (segment) => segment[0]?.kind !== "subagent",
+  )?.[0]?.id;
+
+  const workSummary = hasCollapsibleEntries ? (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      className="group/work-summary flex w-full items-center gap-2.5 rounded-xl border border-border/65 bg-muted/25 px-3 py-2 text-left transition-colors hover:border-border hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/60"
+      onClick={() => onToggleTurn(turnId)}
+    >
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/80 text-muted-foreground shadow-sm ring-1 ring-border/60">
+        <Wrench className="h-3.5 w-3.5 stroke-[1.8]" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-xs font-semibold text-foreground/85">工作过程</span>
+        <span className="block truncate text-[11px] leading-4 text-muted-foreground tabular-nums">
+          {processSummary}
+        </span>
+      </span>
+      <span className="flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-muted-foreground transition-colors group-hover/work-summary:bg-background/70 group-hover/work-summary:text-foreground">
+        {expanded ? "收起" : "展开"}
+        {expanded ? (
+          <ChevronDown className="h-3.5 w-3.5" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5" />
+        )}
+      </span>
+    </button>
+  ) : null;
 
   return (
     <section className="flex flex-col gap-3" data-turn-id={turnId}>
@@ -467,36 +530,21 @@ function CompletedTurn({
             />
           );
         }
-        if (!expanded) return null;
+        const isFirstCollapsible = first.id === firstCollapsibleSegmentId;
         return (
-          <ProcessEntries
-            key={`segment:${first.id}`}
-            entries={segment}
-            expandedWorkGroups={expandedWorkGroups}
-            onToggleWorkGroup={onToggleWorkGroup}
-            onOpenSubagent={onOpenSubagent}
-          />
+          <div key={`segment:${first.id}`} className="contents">
+            {isFirstCollapsible && workSummary}
+            {expanded && (
+              <ProcessEntries
+                entries={segment}
+                expandedWorkGroups={expandedWorkGroups}
+                onToggleWorkGroup={onToggleWorkGroup}
+                onOpenSubagent={onOpenSubagent}
+              />
+            )}
+          </div>
         );
       })}
-      {hasCollapsibleEntries && (
-        <>
-          <div className="border-b border-border/60 pb-2 pt-0.5">
-            <button
-              type="button"
-              aria-expanded={expanded}
-              className="flex items-center gap-1 rounded-md px-1 text-xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/60"
-              onClick={() => onToggleTurn(turnId)}
-            >
-              <span>{durationLabel}</span>
-              {expanded ? (
-                <ChevronDown className="h-3.5 w-3.5" />
-              ) : (
-                <ChevronRight className="h-3.5 w-3.5" />
-              )}
-            </button>
-          </div>
-        </>
-      )}
       {terminalAssistant && <AssistantMessage message={terminalAssistant.message} />}
     </section>
   );
