@@ -13,7 +13,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import type { ChatMessage, SubagentActivity, ToolActivity } from "@cca/protocol";
+import type { ChatMessage, SubagentActivity } from "@cca/protocol";
 import { useImageObjectUrl } from "../hooks/useImageObjectUrl";
 import type { ImagePreviewTarget } from "../lib/imagePreview";
 import { useApp, useThreadState } from "../lib/store";
@@ -25,7 +25,7 @@ import {
   type ChatTimelineEntry,
 } from "../lib/chatTimeline";
 import { Markdown } from "./Markdown";
-import { ToolCallRow } from "./ToolCallRow";
+import { ToolCallGroup } from "./ToolCallRow";
 import {
   SubagentTaskCard,
   subagentStatusText,
@@ -284,56 +284,6 @@ function UserMessage({ message }: { message: ChatMessage }) {
   );
 }
 
-function WorkGroup({
-  activities,
-  groupId,
-  expanded,
-  onToggle,
-}: {
-  activities: ToolActivity[];
-  groupId: string;
-  expanded: boolean;
-  onToggle: (groupId: string) => void;
-}) {
-  const hiddenCount = Math.max(0, activities.length - 1);
-  const visibleActivities = expanded ? activities : activities.slice(-1);
-  const groupLabel = activities.length === 1
-    ? "1 次工具调用"
-    : `${activities.length} 次工具调用`;
-
-  return (
-    <>
-      <section className="-mx-1 space-y-0.5 px-1 py-0.5" aria-label={groupLabel}>
-        <div className="space-y-px">
-          {visibleActivities.map((activity) => (
-            <ToolCallRow key={activity.id} activity={activity} />
-          ))}
-        </div>
-      </section>
-      {hiddenCount > 0 && (
-        <button
-          type="button"
-          className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-          aria-expanded={expanded}
-          onClick={() => onToggle(groupId)}
-        >
-          <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/65">
-            <ChevronDown
-              className={cn(
-                "size-3.5 shrink-0 opacity-70 transition-transform duration-200",
-                expanded && "rotate-180",
-              )}
-            />
-          </span>
-          <span className="font-medium text-foreground/82">
-            {expanded ? "收起工具调用" : `+${hiddenCount} 次先前的工具调用`}
-          </span>
-        </button>
-      )}
-    </>
-  );
-}
-
 function ProcessEntries({
   entries,
   expandedWorkGroups,
@@ -371,12 +321,11 @@ function ProcessEntries({
       }
       const groupId = `work-group:${entry.id}`;
       rows.push(
-        <WorkGroup
+        <ToolCallGroup
           key={groupId}
           activities={activities}
-          groupId={groupId}
           expanded={expandedWorkGroups.has(groupId)}
-          onToggle={onToggleWorkGroup}
+          onToggle={() => onToggleWorkGroup(groupId)}
         />,
       );
       index = cursor - 1;
