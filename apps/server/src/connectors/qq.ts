@@ -6,6 +6,13 @@ import type {
   ConnectorTarget,
   InboundConnectorMessage,
 } from "./types.js";
+import {
+  IMAGE_EXTENSIONS,
+  MAX_IMAGE_SIZE,
+  hasImageSignature,
+  removeUploadedImages,
+  storeUploadedImage,
+} from "../uploads.js";
 
 const API_BASE_URL = "https://api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
@@ -19,16 +26,31 @@ interface GatewayPayload {
   t?: string;
 }
 
+interface QQMessageAttachment {
+  content_type?: string;
+  filename?: string;
+  size?: number | string;
+  url?: string;
+}
+
 interface QQMessageData {
   id?: string;
   content?: string;
   channel_id?: string;
   group_openid?: string;
+  attachments?: QQMessageAttachment[];
   author?: {
     id?: string;
     user_openid?: string;
     member_openid?: string;
   };
+}
+
+export interface QQImageAttachment {
+  contentType?: string;
+  filename?: string;
+  size?: number;
+  url: string;
 }
 
 interface TokenResponse {
@@ -46,10 +68,116 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function supportedImageMimeType(value: string | undefined): keyof typeof IMAGE_EXTENSIONS | null {
+  const normalized = value?.split(";", 1)[0]?.trim().toLowerCase();
+  if (normalized === "image/jpg") return "image/jpeg";
+  if (
+    normalized === "image/jpeg" ||
+    normalized === "image/png" ||
+    normalized === "image/gif" ||
+    normalized === "image/webp"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function filenameImageMimeType(filename: string | undefined): keyof typeof IMAGE_EXTENSIONS | null {
+  const normalized = filename?.trim().toLowerCase() ?? "";
+  if (/\.jpe?g$/.test(normalized)) return "image/jpeg";
+  if (normalized.endsWith(".png")) return "image/png";
+  if (normalized.endsWith(".gif")) return "image/gif";
+  if (normalized.endsWith(".webp")) return "image/webp";
+  return null;
+}
+
+export function getQQImageAttachments(data: QQMessageData): QQImageAttachment[] {
+  return (data.attachments ?? []).flatMap((attachment) => {
+    const url = attachment.url?.trim();
+    const contentType = attachment.content_type?.trim();
+    const filename = attachment.filename?.trim();
+    if (!url || (!contentType?.toLowerCase().startsWith("image/") && !filenameImageMimeType(filename))) {
+      return [];
+    }
+    const rawSize = Number(attachment.size);
+    return [{
+      url,
+      ...(contentType ? { contentType } : {}),
+      ...(filename ? { filename } : {}),
+      ...(Number.isFinite(rawSize) && rawSize >= 0 ? { size: rawSize } : {}),
+    }];
+  });
+}
+
+async function readResponseBuffer(response: Response): Promise<Buffer> {
+  const contentLengthValue = response.headers.get("content-length");
+  if (contentLengthValue) {
+    const contentLength = Number(contentLengthValue);
+    if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_SIZE) {
+      throw new Error("单张图片不能超过 10 MB");
+    }
+  }
+  if (!response.body) return Buffer.alloc(0);
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const reader = response.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_IMAGE_SIZE) {
+      await reader.cancel("image exceeds size limit");
+      throw new Error("单张图片不能超过 10 MB");
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total);
+}
+
+export async function fetchQQImage(
+  attachment: QQImageAttachment,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ buffer: Buffer; displayName: string; mimeType: keyof typeof IMAGE_EXTENSIONS }> {
+  if (attachment.size !== undefined && attachment.size > MAX_IMAGE_SIZE) {
+    throw new Error("单张图片不能超过 10 MB");
+  }
+
+  let url: URL;
+  try {
+    url = new URL(attachment.url);
+  } catch {
+    throw new Error("QQ 图片地址无效");
+  }
+  if (url.protocol !== "https:" || url.username || url.password) {
+    throw new Error("QQ 图片地址必须使用 HTTPS");
+  }
+
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`QQ 图片下载失败 (HTTP ${response.status})`);
+  if (response.url) {
+    const finalUrl = new URL(response.url);
+    if (finalUrl.protocol !== "https:") throw new Error("QQ 图片下载被重定向到非 HTTPS 地址");
+  }
+
+  const buffer = await readResponseBuffer(response);
+  const mimeType =
+    supportedImageMimeType(response.headers.get("content-type") ?? undefined) ??
+    supportedImageMimeType(attachment.contentType) ??
+    filenameImageMimeType(attachment.filename);
+  if (!mimeType) throw new Error("QQ 图片格式不受支持，仅支持 JPG、PNG、GIF 和 WebP");
+  if (!hasImageSignature(buffer, mimeType)) throw new Error("QQ 图片内容与文件类型不匹配");
+  return {
+    buffer,
+    mimeType,
+    displayName: attachment.filename || "QQ图片" + IMAGE_EXTENSIONS[mimeType],
+  };
+}
+
 export function normalizeQQMessage(type: string, data: QQMessageData): InboundConnectorMessage | null {
   const messageId = data.id?.trim();
-  const text = data.content?.trim();
-  if (!messageId || !text) return null;
+  const text = data.content?.trim() ?? "";
+  if (!messageId || (!text && getQQImageAttachments(data).length === 0)) return null;
 
   if (type === "C2C_MESSAGE_CREATE") {
     const senderId = data.author?.user_openid?.trim();
@@ -164,6 +292,42 @@ export class QQConnectorClient implements ConnectorClient {
       const body = createQQMarkdownMessage(target, content, msgSeq++, replyToMessageId);
       await this.api(path, { method: "POST", body: JSON.stringify(body) });
     }
+  }
+
+  private async receiveMessage(type: string, data: QQMessageData): Promise<void> {
+    const message = normalizeQQMessage(type, data);
+    if (!message) return;
+
+    const images = getQQImageAttachments(data);
+    if (images.length === 0) {
+      await this.callbacks.onMessage(message);
+      return;
+    }
+
+    const ownerId = this.config.ownerId?.trim();
+    if (!ownerId) throw new Error("QQ 连接器未配置所有者，无法保存图片");
+    const attachments: Array<ReturnType<typeof storeUploadedImage>> = [];
+    try {
+      for (const image of images) {
+        const downloaded = await fetchQQImage(image, this.fetchImpl);
+        attachments.push(storeUploadedImage(
+          ownerId,
+          downloaded.buffer,
+          downloaded.mimeType,
+          downloaded.displayName,
+        ));
+      }
+    } catch (error) {
+      removeUploadedImages(ownerId, attachments);
+      const failure = `图片接收失败：${errorMessage(error)}`;
+      console.error(`[connector:${this.config.id}] QQ ${failure}`);
+      await this.send(message.target, failure, message.messageId).catch((sendError) => {
+        console.error(`[connector:${this.config.id}] QQ 图片错误消息回传失败`, sendError);
+      });
+      return;
+    }
+
+    await this.callbacks.onMessage({ ...message, attachments });
   }
 
   private async token(force = false): Promise<string> {
@@ -292,8 +456,7 @@ export class QQConnectorClient implements ConnectorClient {
           }
           return;
         }
-        const message = normalizeQQMessage(payload.t, (payload.d ?? {}) as QQMessageData);
-        if (message) void this.callbacks.onMessage(message).catch((error) => {
+        void this.receiveMessage(payload.t, (payload.d ?? {}) as QQMessageData).catch((error) => {
           console.error(`[connector:${this.config.id}] QQ 消息处理失败`, error);
         });
       });

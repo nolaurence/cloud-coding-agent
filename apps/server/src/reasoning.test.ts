@@ -41,6 +41,37 @@ test("flattenModels exposes configured reasoning capabilities", () => {
   assert.equal(models[3]?.supportedReasoningEfforts, undefined);
 });
 
+test("flattenModels exposes manually configured reasoning for new provider models", () => {
+  const [model] = flattenModels({
+    providers: [
+      {
+        id: "custom",
+        name: "Custom",
+        type: "openai",
+        baseUrl: "https://example.com/v1",
+        models: [
+          {
+            id: "gpt-6-astra",
+            supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+            defaultReasoningEffort: "high",
+          },
+        ],
+      },
+    ],
+    connectors: [],
+    mcpServers: [],
+    skillDirectories: [],
+    disabledSkills: [],
+  });
+
+  assert.deepEqual(model, {
+    ref: { providerId: "custom", modelId: "gpt-6-astra" },
+    label: "Custom / gpt-6-astra",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    defaultReasoningEffort: "high",
+  });
+});
+
 test("flattenModels resolves reasoning efforts from the matching model catalog", () => {
   const catalog: ModelOption[] = [
     {

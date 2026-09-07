@@ -1,6 +1,7 @@
 import type {
   ConnectorConfig,
   ConnectorConnectionState,
+  TurnAttachment,
 } from "@cca/protocol";
 
 export type ConnectorTarget =
@@ -14,6 +15,7 @@ export interface InboundConnectorMessage {
   conversationLabel: string;
   senderId: string;
   text: string;
+  attachments?: TurnAttachment[];
   target: ConnectorTarget;
 }
 

@@ -9,6 +9,7 @@ import type {
 } from "@cca/protocol";
 import type { CopilotManager } from "../copilot.js";
 import { store } from "../store.js";
+import { removeUploadedImages } from "../uploads.js";
 import { FeishuConnectorClient } from "./feishu.js";
 import { QQConnectorClient } from "./qq.js";
 import type {
@@ -141,7 +142,10 @@ export class ConnectorManager {
     let client: ConnectorClient | undefined;
     const callbacks = {
       onMessage: (message: InboundConnectorMessage) => {
-        if (!client || this.running.get(config.id)?.client !== client) return Promise.resolve();
+        if (!client || this.running.get(config.id)?.client !== client) {
+          this.discardAttachments(config.ownerId, message);
+          return Promise.resolve();
+        }
         return this.handleInbound(config.id, message);
       },
       onStatus: (state: ConnectorConnectionState, message?: string) => {
@@ -173,18 +177,28 @@ export class ConnectorManager {
 
   private async handleInbound(connectorId: string, message: InboundConnectorMessage): Promise<void> {
     const current = this.running.get(connectorId);
-    if (!current || current.config.platform !== message.target.platform) return;
+    if (!current || current.config.platform !== message.target.platform) {
+      this.discardAttachments(current?.config.ownerId, message);
+      return;
+    }
     if (
       current.config.allowedUserIds?.length &&
       !current.config.allowedUserIds.includes(message.senderId)
     ) {
+      this.discardAttachments(current.config.ownerId, message);
       return;
     }
-    if (this.isDuplicate(connectorId, message.eventId)) return;
+    if (this.isDuplicate(connectorId, message.eventId)) {
+      this.discardAttachments(current.config.ownerId, message);
+      return;
+    }
 
+    const attachmentOwnerId = current.config.ownerId;
     const queueKey = `${connectorId}\u0000${message.conversationId}`;
     const previous = this.queues.get(queueKey) ?? Promise.resolve();
-    const task = previous.catch(() => {}).then(() => this.processMessage(connectorId, message));
+    const task = previous.catch(() => {}).then(() =>
+      this.processMessage(connectorId, message, attachmentOwnerId),
+    );
     this.queues.set(queueKey, task);
     try {
       await task;
@@ -207,9 +221,14 @@ export class ConnectorManager {
   private async processMessage(
     connectorId: string,
     message: InboundConnectorMessage,
+    attachmentOwnerId: string | undefined,
   ): Promise<void> {
     const current = this.running.get(connectorId);
-    if (!current || current.config.platform !== message.target.platform) return;
+    if (!current || current.config.platform !== message.target.platform) {
+      this.discardAttachments(attachmentOwnerId, message);
+      return;
+    }
+    let attachmentsAccepted = false;
     try {
       const thread = this.findOrCreateThread(current.config, message);
       const outcomePromise = this.waitForTurn(thread.id);
@@ -223,9 +242,10 @@ export class ConnectorManager {
         await this.manager.sendMessage(
           thread.id,
           message.text,
-          undefined,
+          message.attachments,
           current.config.ownerId ?? thread.userId ?? "",
         );
+        attachmentsAccepted = true;
       } catch (error) {
         this.finishWaiter(thread.id, { error: errorMessage(error) });
       }
@@ -236,6 +256,7 @@ export class ConnectorManager {
       if (!replyClient) throw new Error("连接器已停用或平台配置已变更");
       await replyClient.send(message.target, outcome.text, message.messageId);
     } catch (error) {
+      if (!attachmentsAccepted) this.discardAttachments(attachmentOwnerId, message);
       const failure = `处理消息失败：${errorMessage(error)}`;
       console.error(`[connector:${current.config.id}] ${failure}`);
       const replyClient = this.compatibleClient(current.config.id, message.target.platform);
@@ -243,6 +264,18 @@ export class ConnectorManager {
       await replyClient.send(message.target, failure, message.messageId).catch((sendError) => {
         console.error(`[connector:${current.config.id}] 错误消息回传失败`, sendError);
       });
+    }
+  }
+
+  private discardAttachments(
+    ownerId: string | undefined,
+    message: InboundConnectorMessage,
+  ): void {
+    if (!ownerId || !message.attachments?.length) return;
+    try {
+      removeUploadedImages(ownerId, message.attachments);
+    } catch (error) {
+      console.error("[connector] 清理未使用的图片失败", error);
     }
   }
 

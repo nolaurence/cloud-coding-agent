@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ConnectorConfig, Project, ThreadEvent } from "@cca/protocol";
+import type { ConnectorConfig, Project, ThreadEvent, TurnAttachment } from "@cca/protocol";
 import type { CopilotManager } from "../copilot.js";
 import { store } from "../store.js";
 import { ConnectorManager } from "./manager.js";
 import type { ConnectorClientCallbacks, ConnectorTarget } from "./types.js";
 import { normalizeFeishuMessage, parseFeishuText } from "./feishu.js";
-import { createQQMarkdownMessage, normalizeQQMessage } from "./qq.js";
+import { createQQMarkdownMessage, fetchQQImage, getQQImageAttachments, normalizeQQMessage } from "./qq.js";
 
 const TEST_PROJECT = {
   id: "project-1",
@@ -33,6 +33,53 @@ test("QQ 消息事件归一化会保留会话和回复目标", () => {
       target: { platform: "qq", kind: "group", id: "group-1" },
     },
   );
+});
+
+test("QQ 纯图片消息可归一化并提取图片附件", () => {
+  const data = {
+    id: "message-image",
+    content: " ",
+    author: { user_openid: "user-1" },
+    attachments: [{
+      content_type: "image/png",
+      filename: "screenshot.png",
+      size: 8,
+      url: "https://multimedia.nt.qq.com.cn/download/image",
+    }],
+  };
+
+  assert.deepEqual(normalizeQQMessage("C2C_MESSAGE_CREATE", data), {
+    eventId: "message-image",
+    messageId: "message-image",
+    conversationId: "private:user-1",
+    conversationLabel: "QQ 私聊 user-1",
+    senderId: "user-1",
+    text: "",
+    target: { platform: "qq", kind: "private", id: "user-1" },
+  });
+  assert.deepEqual(getQQImageAttachments(data), [{
+    contentType: "image/png",
+    filename: "screenshot.png",
+    size: 8,
+    url: "https://multimedia.nt.qq.com.cn/download/image",
+  }]);
+});
+
+test("QQ 图片下载会校验格式并保留文件名", async () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const fetchImpl: typeof fetch = async (input) => {
+    assert.equal(String(input), "https://multimedia.nt.qq.com.cn/download/image");
+    return new Response(png, { headers: { "Content-Type": "image/png" } });
+  };
+
+  const image = await fetchQQImage({
+    contentType: "image/png",
+    filename: "screenshot.png",
+    url: "https://multimedia.nt.qq.com.cn/download/image",
+  }, fetchImpl);
+  assert.equal(image.mimeType, "image/png");
+  assert.equal(image.displayName, "screenshot.png");
+  assert.deepEqual(image.buffer, png);
 });
 
 test("QQ 回复使用原生 Markdown 消息体", () => {
@@ -115,11 +162,13 @@ test("连接器会去重消息、复用映射会话并回传完整回复", async
   let subscriptions = 0;
   let unsubscriptions = 0;
   const sent: Array<{ target: ConnectorTarget; text: string }> = [];
+  let receivedAttachments: TurnAttachment[] | undefined;
   const fakeManager = {
     onThreadEvent(next: typeof sink) { sink = next; },
     async subscribe() { subscriptions += 1; return { kind: "snapshot", messages: [], activities: [], running: false }; },
     unsubscribe() { unsubscriptions += 1; },
-    async sendMessage(threadId: string) {
+    async sendMessage(threadId: string, _text: string, attachments?: TurnAttachment[]) {
+      receivedAttachments = attachments;
       sink?.(threadId, {
         kind: "assistant.message",
         message: { id: "assistant-1", role: "assistant", text: "任务完成", turnId: "turn-1", createdAt: Date.now() },
@@ -157,6 +206,11 @@ test("连接器会去重消息、复用映射会话并回传完整回复", async
     conversationLabel: "QQ 私聊 user-1",
     senderId: "user-1",
     text: "执行任务",
+    attachments: [{
+      path: "/tmp/qq-image.png",
+      displayName: "qq-image.png",
+      imageId: "00000000-0000-4000-8000-000000000000.png",
+    }],
     target: { platform: "qq", kind: "private", id: "user-1" } as const,
   };
   await callbacks!.onMessage(message);
@@ -166,6 +220,7 @@ test("连接器会去重消息、复用映射会话并回传完整回复", async
   assert.equal(store.threads[0]?.modelProviderId, "copilot");
   assert.equal(subscriptions, 1);
   assert.equal(unsubscriptions, 1);
+  assert.deepEqual(receivedAttachments, message.attachments);
   assert.deepEqual(sent, [{ target: message.target, text: "任务完成" }]);
   await manager.shutdown();
 });

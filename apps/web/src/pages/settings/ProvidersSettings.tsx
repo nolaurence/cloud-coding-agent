@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
-import type { ModelEntry, ModelProviderConfig, ProviderType, WireApi } from "@cca/protocol";
+import {
+  REASONING_EFFORTS,
+  type ModelEntry,
+  type ModelProviderConfig,
+  type ProviderType,
+  type ReasoningEffort,
+  type WireApi,
+} from "@cca/protocol";
 import { useApp } from "../../lib/store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +22,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+const reasoningEffortLabels: Record<ReasoningEffort, string> = {
+  none: "关闭",
+  minimal: "最低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "极高",
+  max: "最高",
+};
 
 const emptyProvider = (): ModelProviderConfig => ({
   id: "",
@@ -73,9 +90,17 @@ export function ProvidersSettings() {
         apiKey: editing.apiKey,
         azureApiVersion: editing.azureApiVersion,
       });
-      setEditing((current) =>
-        current?.id === editing.id ? { ...current, models } : current,
-      );
+      setEditing((current) => {
+        if (current?.id !== editing.id) return current;
+        const configuredModels = new Map(current.models.map((model) => [model.id, model]));
+        return {
+          ...current,
+          models: models.map((model) => ({
+            ...configuredModels.get(model.id),
+            ...model,
+          })),
+        };
+      });
       setNotice(`已获取 ${models.length} 个模型`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "获取模型失败");
@@ -104,6 +129,57 @@ export function ProvidersSettings() {
     } : current);
   };
 
+  const setModelReasoningEfforts = (
+    index: number,
+    supportedReasoningEfforts: ReasoningEffort[] | undefined,
+  ) => {
+    setEditing((current) => current ? {
+      ...current,
+      models: current.models.map((model, modelIndex) => {
+        if (modelIndex !== index) return model;
+        const defaultReasoningEffort =
+          model.defaultReasoningEffort &&
+          supportedReasoningEfforts?.includes(model.defaultReasoningEffort)
+            ? model.defaultReasoningEffort
+            : undefined;
+        return { ...model, supportedReasoningEfforts, defaultReasoningEffort };
+      }),
+    } : current);
+  };
+
+  const toggleModelReasoningEffort = (index: number, effort: ReasoningEffort) => {
+    setEditing((current) => current ? {
+      ...current,
+      models: current.models.map((model, modelIndex) => {
+        if (modelIndex !== index) return model;
+        const currentEfforts = model.supportedReasoningEfforts ?? [];
+        const supportedReasoningEfforts = currentEfforts.includes(effort)
+          ? currentEfforts.filter((candidate) => candidate !== effort)
+          : REASONING_EFFORTS.filter(
+              (candidate) => candidate === effort || currentEfforts.includes(candidate),
+            );
+        const defaultReasoningEffort =
+          model.defaultReasoningEffort &&
+          supportedReasoningEfforts.includes(model.defaultReasoningEffort)
+            ? model.defaultReasoningEffort
+            : undefined;
+        return { ...model, supportedReasoningEfforts, defaultReasoningEffort };
+      }),
+    } : current);
+  };
+
+  const updateModelDefaultReasoningEffort = (
+    index: number,
+    defaultReasoningEffort: ReasoningEffort | undefined,
+  ) => {
+    setEditing((current) => current ? {
+      ...current,
+      models: current.models.map((model, modelIndex) =>
+        modelIndex === index ? { ...model, defaultReasoningEffort } : model,
+      ),
+    } : current);
+  };
+
   const addModel = () => {
     setEditing((current) => current ? {
       ...current,
@@ -126,7 +202,11 @@ export function ProvidersSettings() {
     }
     const populatedModels = editing.models.filter(
       (model) =>
-        model.id.trim() || model.name?.trim() || model.contextWindowTokens !== undefined,
+        model.id.trim() ||
+        model.name?.trim() ||
+        model.contextWindowTokens !== undefined ||
+        model.supportedReasoningEfforts !== undefined ||
+        model.defaultReasoningEffort !== undefined,
     );
     if (populatedModels.some((model) => !model.id.trim())) {
       setError("请填写每个模型的模型 ID");
@@ -301,49 +381,119 @@ export function ProvidersSettings() {
                   </Button>
                 </div>
               </div>
-              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(7rem,0.65fr)_1.75rem] gap-2 px-0.5 pb-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(7rem,0.65fr)_1.75rem] gap-2 px-2 pb-1 text-[11px] text-zinc-500 dark:text-zinc-400">
                 <span>模型 ID</span>
                 <span>显示名称</span>
                 <span>上下文 Token</span>
                 <span className="sr-only">操作</span>
               </div>
-              <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+              <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
                 {editing.models.map((model, index) => (
-                  <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(7rem,0.65fr)_1.75rem] items-center gap-2">
-                    <Input
-                      className="font-mono"
-                      value={model.id}
-                      onChange={(event) => updateModel(index, "id", event.target.value)}
-                      placeholder="gpt-4o"
-                      aria-label={`第 ${index + 1} 个模型 ID`}
-                    />
-                    <Input
-                      value={model.name ?? ""}
-                      onChange={(event) => updateModel(index, "name", event.target.value)}
-                      placeholder="可选"
-                      aria-label={`第 ${index + 1} 个模型显示名称`}
-                    />
-                    <Input
-                      type="number"
-                      min={1}
-                      step={1}
-                      inputMode="numeric"
-                      value={model.contextWindowTokens ?? ""}
-                      onChange={(event) => updateModelContextWindow(index, event.target.value)}
-                      placeholder="258000"
-                      aria-label={`第 ${index + 1} 个模型上下文 Token`}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="text-zinc-500 hover:text-red-500"
-                      title="删除模型"
-                      aria-label={`删除第 ${index + 1} 个模型`}
-                      onClick={() => removeModel(index)}
-                    >
-                      <Trash2 />
-                    </Button>
+                  <div key={index} className="rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
+                    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(7rem,0.65fr)_1.75rem] items-center gap-2">
+                      <Input
+                        className="font-mono"
+                        value={model.id}
+                        onChange={(event) => updateModel(index, "id", event.target.value)}
+                        placeholder="gpt-4o"
+                        aria-label={`第 ${index + 1} 个模型 ID`}
+                      />
+                      <Input
+                        value={model.name ?? ""}
+                        onChange={(event) => updateModel(index, "name", event.target.value)}
+                        placeholder="可选"
+                        aria-label={`第 ${index + 1} 个模型显示名称`}
+                      />
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        inputMode="numeric"
+                        value={model.contextWindowTokens ?? ""}
+                        onChange={(event) => updateModelContextWindow(index, event.target.value)}
+                        placeholder="258000"
+                        aria-label={`第 ${index + 1} 个模型上下文 Token`}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="text-zinc-500 hover:text-red-500"
+                        title="删除模型"
+                        aria-label={`删除第 ${index + 1} 个模型`}
+                        onClick={() => removeModel(index)}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <span className="mr-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                        推理强度
+                      </span>
+                      <Button
+                        type="button"
+                        variant={model.supportedReasoningEfforts === undefined ? "secondary" : "outline"}
+                        size="xs"
+                        aria-pressed={model.supportedReasoningEfforts === undefined}
+                        onClick={() => setModelReasoningEfforts(index, undefined)}
+                      >
+                        自动
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={model.supportedReasoningEfforts?.length === 0 ? "secondary" : "outline"}
+                        size="xs"
+                        aria-pressed={model.supportedReasoningEfforts?.length === 0}
+                        onClick={() => setModelReasoningEfforts(index, [])}
+                      >
+                        不支持
+                      </Button>
+                      {REASONING_EFFORTS.map((effort) => {
+                        const selected = model.supportedReasoningEfforts?.includes(effort) ?? false;
+                        return (
+                          <Button
+                            key={effort}
+                            type="button"
+                            variant={selected ? "secondary" : "outline"}
+                            size="xs"
+                            aria-pressed={selected}
+                            onClick={() => toggleModelReasoningEffort(index, effort)}
+                          >
+                            {reasoningEffortLabels[effort]}
+                          </Button>
+                        );
+                      })}
+                      {model.supportedReasoningEfforts && model.supportedReasoningEfforts.length > 0 && (
+                        <div className="ml-auto flex items-center gap-1.5 pl-2">
+                          <span className="text-[11px] text-zinc-500 dark:text-zinc-400">默认</span>
+                          <Select
+                            value={model.defaultReasoningEffort ?? "model-default"}
+                            onValueChange={(value) =>
+                              updateModelDefaultReasoningEffort(
+                                index,
+                                value === "model-default" ? undefined : value as ReasoningEffort,
+                              )
+                            }
+                          >
+                            <SelectTrigger
+                              size="sm"
+                              className="w-24"
+                              aria-label={`第 ${index + 1} 个模型默认推理强度`}
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="model-default">模型默认</SelectItem>
+                              {model.supportedReasoningEfforts.map((effort) => (
+                                <SelectItem key={effort} value={effort}>
+                                  {reasoningEffortLabels[effort]}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
                 {editing.models.length === 0 && (
@@ -353,7 +503,7 @@ export function ProvidersSettings() {
                 )}
               </div>
               <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-                留空时优先使用模型服务返回的上限或内置默认值。
+                上下文留空、推理强度选择“自动”时，优先使用模型服务返回的能力或内置默认值。
               </p>
             </div>
             <div aria-live="polite">
