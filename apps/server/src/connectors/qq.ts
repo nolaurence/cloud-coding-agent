@@ -31,6 +31,8 @@ interface QQMessageAttachment {
   filename?: string;
   size?: number | string;
   url?: string;
+  width?: number;
+  height?: number;
 }
 
 interface QQMessageData {
@@ -39,6 +41,7 @@ interface QQMessageData {
   channel_id?: string;
   group_openid?: string;
   attachments?: QQMessageAttachment[];
+  message_reference?: { message_id?: string };
   author?: {
     id?: string;
     user_openid?: string;
@@ -68,20 +71,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function supportedImageMimeType(value: string | undefined): keyof typeof IMAGE_EXTENSIONS | null {
-  const normalized = value?.split(";", 1)[0]?.trim().toLowerCase();
-  if (normalized === "image/jpg") return "image/jpeg";
-  if (
-    normalized === "image/jpeg" ||
-    normalized === "image/png" ||
-    normalized === "image/gif" ||
-    normalized === "image/webp"
-  ) {
-    return normalized;
-  }
-  return null;
-}
-
 function filenameImageMimeType(filename: string | undefined): keyof typeof IMAGE_EXTENSIONS | null {
   const normalized = filename?.trim().toLowerCase() ?? "";
   if (/\.jpe?g$/.test(normalized)) return "image/jpeg";
@@ -96,7 +85,11 @@ export function getQQImageAttachments(data: QQMessageData): QQImageAttachment[] 
     const url = attachment.url?.trim();
     const contentType = attachment.content_type?.trim();
     const filename = attachment.filename?.trim();
-    if (!url || (!contentType?.toLowerCase().startsWith("image/") && !filenameImageMimeType(filename))) {
+    const isImage = contentType?.toLowerCase().startsWith("image/") ||
+      filenameImageMimeType(filename) ||
+      (Number(attachment.width) > 0 && Number(attachment.height) > 0) ||
+      filenameImageMimeType(url?.split("?", 1)[0]);
+    if (!url || !isImage) {
       return [];
     }
     const rawSize = Number(attachment.size);
@@ -145,7 +138,10 @@ export async function fetchQQImage(
 
   let url: URL;
   try {
-    url = new URL(attachment.url);
+    const address = attachment.url.trim();
+    url = new URL(address.startsWith("//") ? `https:${address}` :
+      /^[a-z][a-z0-9+.-]*:/i.test(address) ? address : `https://${address}`);
+    if (url.protocol === "http:") url.protocol = "https:";
   } catch {
     throw new Error("QQ 图片地址无效");
   }
@@ -161,12 +157,9 @@ export async function fetchQQImage(
   }
 
   const buffer = await readResponseBuffer(response);
-  const mimeType =
-    supportedImageMimeType(response.headers.get("content-type") ?? undefined) ??
-    supportedImageMimeType(attachment.contentType) ??
-    filenameImageMimeType(attachment.filename);
+  const mimeType = (Object.keys(IMAGE_EXTENSIONS) as Array<keyof typeof IMAGE_EXTENSIONS>)
+    .find((type) => hasImageSignature(buffer, type));
   if (!mimeType) throw new Error("QQ 图片格式不受支持，仅支持 JPG、PNG、GIF 和 WebP");
-  if (!hasImageSignature(buffer, mimeType)) throw new Error("QQ 图片内容与文件类型不匹配");
   return {
     buffer,
     mimeType,
@@ -177,7 +170,7 @@ export async function fetchQQImage(
 export function normalizeQQMessage(type: string, data: QQMessageData): InboundConnectorMessage | null {
   const messageId = data.id?.trim();
   const text = data.content?.trim() ?? "";
-  if (!messageId || (!text && getQQImageAttachments(data).length === 0)) return null;
+  if (!messageId || (!text && getQQImageAttachments(data).length === 0 && !data.message_reference?.message_id)) return null;
 
   if (type === "C2C_MESSAGE_CREATE") {
     const senderId = data.author?.user_openid?.trim();
@@ -242,6 +235,7 @@ export class QQConnectorClient implements ConnectorClient {
   private socket: WebSocket | null = null;
   private accessToken = "";
   private tokenExpiresAt = 0;
+  private readonly receivedMessages = new Map<string, { data: QQMessageData; receivedAt: number }>();
   private sequence: number | null = null;
   private sessionId = "";
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -270,6 +264,7 @@ export class QQConnectorClient implements ConnectorClient {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.receivedMessages.clear();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.reconnectTimer = null;
@@ -298,7 +293,27 @@ export class QQConnectorClient implements ConnectorClient {
     const message = normalizeQQMessage(type, data);
     if (!message) return;
 
-    const images = getQQImageAttachments(data);
+    if (this.config.allowedUserIds?.length && !this.config.allowedUserIds.includes(message.senderId)) return;
+    const now = Date.now();
+    for (const [key, entry] of this.receivedMessages) {
+      if (now - entry.receivedAt > 10 * 60_000) this.receivedMessages.delete(key);
+    }
+    const referenceId = data.message_reference?.message_id?.trim();
+    const original = referenceId
+      ? this.receivedMessages.get(message.conversationId + ":" + referenceId)?.data
+      : undefined;
+    this.receivedMessages.set(message.conversationId + ":" + message.messageId, { data, receivedAt: now });
+    if (this.receivedMessages.size > 500) {
+      this.receivedMessages.delete(this.receivedMessages.keys().next().value!);
+    }
+    const directImages = getQQImageAttachments(data);
+    if (referenceId && !original) {
+      await this.send(message.target, "无法获取被引用的原消息，请直接发送原图并 @机器人。机器人只能读取近期实际收到的消息，不能读取任意群聊历史。", message.messageId);
+      if (directImages.length === 0) return;
+    }
+    if (original?.content?.trim()) message.text = "引用消息：\n" + original.content.trim() + "\n\n" + message.text;
+    const images = [...directImages, ...(original ? getQQImageAttachments(original) : [])]
+      .filter((image, index, all) => all.findIndex((candidate) => candidate.url === image.url) === index);
     if (images.length === 0) {
       await this.callbacks.onMessage(message);
       return;

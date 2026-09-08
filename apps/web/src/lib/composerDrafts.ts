@@ -27,3 +27,12 @@ export function clearComposerDraft(
   if (drafts[key] !== expectedText) return drafts;
   return updateComposerDraft(drafts, key, "");
 }
+
+export function buildFileMentionPayload(text: string) {
+  const paths = new Set<string>();
+  const prompt = text.replace(/(^|\s)@\[([^\]\r\n]+)\]/g, (_match, prefix: string, file: string) => {
+    paths.add(file);
+    return prefix + "`" + file + "`";
+  });
+  return { prompt, attachments: [...paths].map((path) => ({ path, displayName: path })) };
+}

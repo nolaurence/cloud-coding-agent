@@ -10,6 +10,7 @@ import {
   Square,
   X,
 } from "lucide-react";
+import { buildFileMentionPayload } from "../lib/composerDrafts";
 import { uploadImage } from "../lib/client";
 import type { ContextCompactionResult, ContextUsage, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
@@ -286,7 +287,7 @@ export function Composer({
     const element = textareaRef.current;
     if (!element || !trigger) return;
     const caret = element.selectionStart ?? text.length;
-    const token = trigger.kind === "file" ? `@${itemKey}` : `/${itemKey}`;
+    const token = trigger.kind === "file" ? `@[${itemKey}]` : `/${itemKey}`;
     const next = text.slice(0, trigger.start) + token + " " + text.slice(caret);
     const nextCaret = trigger.start + token.length + 1;
     setComposerDraft(draftKey, next);
@@ -354,23 +355,9 @@ export function Composer({
   };
 
   const buildPayload = () => {
-    let prompt = text;
-    const attachments: TurnAttachment[] = [];
-    if (project) {
-      const seen = new Set<string>();
-      const fileTokens = [...text.matchAll(/@([^\s@/]+(?:\/[^\s@]+)*)/g)].map(
-        (match) => match[1]!,
-      );
-      for (const relativePath of fileTokens) {
-        if (seen.has(relativePath)) continue;
-        seen.add(relativePath);
-        attachments.push({
-          path: relativePath,
-          displayName: relativePath,
-        });
-      }
-      prompt = prompt.replace(/@([^\s@/]+(?:\/[^\s@]+)*)/g, "`$1`");
-    }
+    let { prompt, attachments } = project
+      ? buildFileMentionPayload(text)
+      : { prompt: text, attachments: [] };
 
     const usedSkills = skills.filter((skill) => {
       if (skill.disabled) return false;

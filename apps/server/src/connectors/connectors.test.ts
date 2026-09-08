@@ -4,9 +4,10 @@ import type { ConnectorConfig, Project, ThreadEvent, TurnAttachment } from "@cca
 import type { CopilotManager } from "../copilot.js";
 import { store } from "../store.js";
 import { ConnectorManager } from "./manager.js";
-import type { ConnectorClientCallbacks, ConnectorTarget } from "./types.js";
+import { removeUploadedImages } from "../uploads.js";
+import type { InboundConnectorMessage, ConnectorClientCallbacks, ConnectorTarget } from "./types.js";
 import { normalizeFeishuMessage, parseFeishuText } from "./feishu.js";
-import { createQQMarkdownMessage, fetchQQImage, getQQImageAttachments, normalizeQQMessage } from "./qq.js";
+import { QQConnectorClient, createQQMarkdownMessage, fetchQQImage, getQQImageAttachments, normalizeQQMessage } from "./qq.js";
 
 const TEST_PROJECT = {
   id: "project-1",
@@ -380,3 +381,50 @@ test("启用的连接器必须关联所有者自己的工作区", async (t) => {
 function randomId(): string {
   return Math.random().toString(36).slice(2);
 }
+
+test("QQ images accept schemeless URLs and generic MIME headers", async () => {
+  for (const url of ["//multimedia.nt.qq.com.cn/image", "multimedia.nt.qq.com.cn/image", "http://multimedia.nt.qq.com.cn/image"]) {
+    const result = await fetchQQImage({ url }, async (input) => {
+      assert.equal(String(input), "https://multimedia.nt.qq.com.cn/image");
+      return new Response(Buffer.from("GIF89a"), { headers: { "Content-Type": "application/octet-stream" } });
+    });
+    assert.equal(result.mimeType, "image/gif");
+  }
+  await assert.rejects(fetchQQImage({ url: "https://example.com/image" }, async () => new Response("not an image")), /格式不受支持/);
+});
+
+test("QQ group images and same-group quoted images reach the callback", async (t) => {
+  const messages: InboundConnectorMessage[] = [];
+  const replies: string[] = [];
+  const ownerId = "qq-image-regression";
+  const client = new QQConnectorClient({
+    id: "qq-image", name: "QQ", platform: "qq", enabled: true, appId: "app", appSecret: "secret",
+    projectId: "project-1", model: { providerId: "copilot", modelId: "model" }, ownerId,
+    allowedUserIds: ["user-1"],
+  }, { async onMessage(message) { messages.push(message); }, onStatus() {} }, async () => new Response(Buffer.from("GIF89a")));
+  client.send = async (_target, text) => { replies.push(text); };
+  t.after(async () => {
+    await client.stop();
+    for (const message of messages) removeUploadedImages(ownerId, message.attachments);
+  });
+  const original = {
+    id: "original", group_openid: "group-1", author: { member_openid: "user-1" },
+    content: "@bot", attachments: [{ url: "//multimedia.nt.qq.com.cn/image", width: 10, height: 10 }],
+  };
+  await client["receiveMessage"]("GROUP_AT_MESSAGE_CREATE", original);
+  assert.equal(messages[0]?.attachments?.length, 1);
+  await client["receiveMessage"]("GROUP_AT_MESSAGE_CREATE", {
+    id: "reply", group_openid: "group-1", author: original.author, content: "describe",
+    message_reference: { message_id: "original" },
+  });
+  assert.equal(messages[1]?.attachments?.length, 1);
+  assert.notEqual(messages[0]?.attachments?.[0]?.path, messages[1]?.attachments?.[0]?.path);
+  await client["receiveMessage"]("GROUP_AT_MESSAGE_CREATE", {
+    id: "other-group", group_openid: "group-2", author: original.author, content: "describe",
+    message_reference: { message_id: "original" },
+  });
+  assert.equal(messages.length, 2);
+  assert.match(replies[0]!, /无法获取/);
+  await client["receiveMessage"]("GROUP_AT_MESSAGE_CREATE", { ...original, id: "denied", author: { member_openid: "denied" } });
+  assert.equal(messages.length, 2);
+});

@@ -97,7 +97,7 @@ export function validateTurnAttachments(
   attachments?: TurnAttachment[],
 ) {
   const uploadRoot = uploadDirectory(username);
-  const workspaceRoot = fs.realpathSync(projectPath);
+  let workspaceRoot: string | undefined;
   for (const attachment of attachments ?? []) {
     if (attachment.imageId) {
       if (!IMAGE_ID_PATTERN.test(attachment.imageId)) throw new Error("图片标识无效");
@@ -107,6 +107,7 @@ export function validateTurnAttachments(
       }
       continue;
     }
+    workspaceRoot ??= fs.realpathSync(projectPath);
     let realAttachment: string;
     try {
       realAttachment = fs.realpathSync(path.resolve(workspaceRoot, attachment.path));

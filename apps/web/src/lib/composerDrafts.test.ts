@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildFileMentionPayload,
   clearComposerDraft,
   NEW_CHAT_DRAFT_KEY,
   threadComposerDraftKey,
@@ -53,4 +54,16 @@ test("a completed send does not clear text entered after that send started", () 
 
   assert.equal(next, drafts);
   assert.equal(next[thread], "newer text");
+});
+
+test("ordinary mentions and email addresses remain plain text", () => {
+  for (const text of ["@机器人 看图", "mail user@example.com", "npm install @scope/pkg", "hello"]) {
+    assert.deepEqual(buildFileMentionPayload(text), { prompt: text, attachments: [] });
+  }
+});
+
+test("explicit file references survive drafts and support spaces", () => {
+  const result = buildFileMentionPayload("read @[src/my file.ts] @[src/my file.ts]");
+  assert.equal(result.prompt, "read `src/my file.ts` `src/my file.ts`");
+  assert.deepEqual(result.attachments, [{ path: "src/my file.ts", displayName: "src/my file.ts" }]);
 });

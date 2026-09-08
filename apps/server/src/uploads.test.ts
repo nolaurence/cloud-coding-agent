@@ -50,3 +50,8 @@ test("rejects attachments reached through an escaping symbolic link", (t) => {
   const attachments: TurnAttachment[] = [{ path: "outside-link/secret.txt", displayName: "secret.txt" }];
   assert.throws(() => validateTurnAttachments("user", workspace, attachments), /不属于当前工作区/);
 });
+
+test("plain text does not resolve attachment paths", () => {
+  validateTurnAttachments("user", "missing-workspace");
+  validateTurnAttachments("user", "missing-workspace", []);
+});
