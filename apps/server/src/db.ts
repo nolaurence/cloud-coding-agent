@@ -20,6 +20,7 @@ export interface UpsertSpec {
   table:
     | "settings"
     | "projects"
+    | "thread_events"
     | "threads"
     | "users"
     | "registration_settings"
@@ -30,6 +31,16 @@ export interface UpsertSpec {
 }
 
 const MYSQL_CREATE_TABLES = [
+  `CREATE TABLE IF NOT EXISTS thread_events (
+    thread_id VARCHAR(100) COLLATE utf8mb4_bin NOT NULL,
+    event_id VARCHAR(100) COLLATE utf8mb4_bin NOT NULL,
+    sequence_number BIGINT NOT NULL,
+    event_type VARCHAR(100) NOT NULL,
+    occurred_at VARCHAR(40) NOT NULL,
+    data JSON NOT NULL,
+    PRIMARY KEY (thread_id, event_id),
+    UNIQUE KEY thread_event_sequence (thread_id, sequence_number)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   `CREATE TABLE IF NOT EXISTS settings (
     id INT NOT NULL PRIMARY KEY,
     data JSON NOT NULL
@@ -62,6 +73,16 @@ const MYSQL_CREATE_TABLES = [
 ];
 
 const SQLITE_CREATE_TABLES = `
+  CREATE TABLE IF NOT EXISTS thread_events (
+    thread_id TEXT COLLATE BINARY NOT NULL,
+    event_id TEXT COLLATE BINARY NOT NULL,
+    sequence_number INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (thread_id, event_id),
+    UNIQUE (thread_id, sequence_number)
+  );
   CREATE TABLE IF NOT EXISTS settings (
     id INTEGER NOT NULL PRIMARY KEY,
     data TEXT NOT NULL

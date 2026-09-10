@@ -53,7 +53,8 @@
       "node_modules/node-pty/prebuilds/**/*",
       "node_modules/@github/copilot-*/**/*",
       "node_modules/koffi/**/*",
-      "node_modules/@koromix/**/*"
+      "node_modules/@koromix/**/*",
+      "node_modules/@openai/codex*/**/*"
     ],
     "npmRebuild": false,
     "mac": {

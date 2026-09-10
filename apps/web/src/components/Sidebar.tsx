@@ -163,7 +163,7 @@ export function Sidebar({
               location.pathname !== "/plugins" && "text-muted-foreground",
             )}
           >
-            <Package className="h-4 w-4" /> 插件市场
+            <Package className="h-4 w-4" /> 扩展工具
           </Link>
         )}
       </div>

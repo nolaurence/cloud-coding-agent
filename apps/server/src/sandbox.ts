@@ -1,4 +1,4 @@
-import type { CopilotClient } from "@github/copilot-sdk";
+import type { AgentClient as CopilotClient } from "./agentRuntime.js";
 
 /**
  * Per-session sandbox config in the runtime RPC shape

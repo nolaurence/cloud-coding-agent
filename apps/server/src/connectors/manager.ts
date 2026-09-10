@@ -294,6 +294,7 @@ export class ConnectorManager {
     const existing = store.threads.find(
       (thread) =>
         !thread.archived &&
+        thread.runtime === "codex" &&
         thread.connector?.connectorId === config.id &&
         thread.connector.conversationId === message.conversationId &&
         thread.projectId === config.projectId &&
@@ -310,6 +311,7 @@ export class ConnectorManager {
       model: { ...config.model },
       modelProviderId: config.model.providerId,
       userId: config.ownerId,
+      runtime: "codex",
       createdAt: now,
       updatedAt: now,
       archived: false,

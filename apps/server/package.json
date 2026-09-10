@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "node ../desktop/build-server.mjs",
     "start": "node dist/index.js",
-    "test": "node --import tsx --test src/connectors/connectors.test.ts src/sandbox.test.ts src/permissions.test.ts src/providers.test.ts src/reasoning.test.ts src/copilot.test.ts src/browser.test.ts src/electronBrowserIpc.test.ts src/runtimeEnv.test.ts src/db.test.ts src/auth.test.ts src/threadShares.test.ts src/gitOperations.test.ts src/gitWorkspace.test.ts src/terminals.test.ts src/uploads.test.ts src/workspaceProjects.test.ts src/workspace.test.ts src/resources.test.ts ../web/src/lib/directoryPaths.test.ts ../web/src/lib/browserVisibility.test.ts ../web/src/lib/chatTimeline.test.ts ../web/src/lib/theme.test.ts ../web/src/lib/diffRendering.test.ts ../web/src/lib/gitGraph.test.ts ../web/src/lib/composerDrafts.test.ts ../web/src/components/workspace/fileAutosaver.test.ts",
+    "test": "node --import tsx --test src/threadEvents.test.ts src/codex.test.ts src/llmGateway.test.ts src/connectors/connectors.test.ts src/sandbox.test.ts src/permissions.test.ts src/providers.test.ts src/reasoning.test.ts src/copilot.test.ts src/browser.test.ts src/electronBrowserIpc.test.ts src/runtimeEnv.test.ts src/db.test.ts src/auth.test.ts src/threadShares.test.ts src/gitOperations.test.ts src/gitWorkspace.test.ts src/terminals.test.ts src/uploads.test.ts src/workspaceProjects.test.ts src/workspace.test.ts src/resources.test.ts ../web/src/lib/directoryPaths.test.ts ../web/src/lib/browserVisibility.test.ts ../web/src/lib/chatTimeline.test.ts ../web/src/lib/theme.test.ts ../web/src/lib/diffRendering.test.ts ../web/src/lib/gitGraph.test.ts ../web/src/lib/composerDrafts.test.ts ../web/src/components/workspace/fileAutosaver.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -18,6 +18,7 @@
     "@github/copilot": "^1.0.75",
     "@github/copilot-sdk": "^1.0.8",
     "@larksuiteoapi/node-sdk": "^1.71.1",
+    "@openai/codex": "0.114.0",
     "fastify": "^5.2.1",
     "mysql2": "^3.23.1",
     "node-pty": "^1.1.0",
@@ -27,8 +28,8 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.0",
+    "esbuild": "^0.25.9",
     "tsx": "^4.19.3",
-    "typescript": "^5.8.3",
-    "esbuild": "^0.25.9"
+    "typescript": "^5.8.3"
   }
 }

@@ -246,6 +246,7 @@ export function ProvidersSettings() {
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold">模型服务</h2>
+          <p className="text-xs text-muted-foreground">Codex 支持原生 Responses；Chat Completions 由内置网关转换。上游需支持流式工具调用。Anthropic 请使用 OpenAI 兼容接口。</p>
           <p className="text-xs text-zinc-500">
             支持 OpenAI 兼容协议(Chat Completions)和 OpenAI Responses 协议,以及 Azure / Anthropic
           </p>
@@ -316,7 +317,7 @@ export function ProvidersSettings() {
                 <SelectContent>
                   <SelectItem value="openai">OpenAI 兼容</SelectItem>
                   <SelectItem value="azure">Azure OpenAI</SelectItem>
-                  <SelectItem value="anthropic">Anthropic</SelectItem>
+                  <SelectItem value="anthropic" disabled>Anthropic 原生协议（不支持）</SelectItem>
                 </SelectContent>
               </Select>
             </LabeledField>

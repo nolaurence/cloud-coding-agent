@@ -67,6 +67,10 @@ class Store {
       this.threads = readJson<ThreadMeta[]>(THREADS_FILE, []);
     }
     await this.normalizeStoredThreadModelProviders();
+    if (this.settings.defaultModel?.providerId === "copilot") {
+      this.settings = { ...this.settings, defaultModel: undefined };
+      this.saveSettings(this.settings);
+    }
     this.normalizeStoredReasoningEfforts();
     const connectors = this.settings.connectors.map((connector) => ({
       ...connector,
@@ -90,7 +94,7 @@ class Store {
       const normalized = {
         ...thread,
         ...(model ? { model } : {}),
-        modelProviderId: resolveThreadModelProviderId(thread, this.settings.defaultModel),
+        modelProviderId: model?.providerId ?? (thread.runtime === "codex" ? resolveThreadModelProviderId(thread) : "copilot"),
       };
       changedThreads.push(normalized);
       return normalized;

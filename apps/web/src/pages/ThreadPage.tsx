@@ -42,7 +42,8 @@ export function ThreadPage() {
   const thread = threads.find((t) => t.id === threadId);
   const project = projects.find((candidate) => candidate.id === thread?.projectId);
   const canManageThread = thread?.access === "owner";
-  const canInteract = canManageThread || thread?.access === "collaborate";
+  const legacySession = Boolean(thread && thread.runtime !== "codex");
+  const canInteract = !legacySession && (canManageThread || thread?.access === "collaborate");
   const [switchingModel, setSwitchingModel] = useState(false);
   const [switchingMode, setSwitchingMode] = useState(false);
   const [modelError, setModelError] = useState("");
@@ -200,6 +201,7 @@ export function ThreadPage() {
             )}
           </div>
         </header>
+        {legacySession && <p className="border-b px-4 py-2 text-sm text-muted-foreground">旧 Copilot 会话仅保留历史浏览，请新建 Codex 会话继续工作。</p>}
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <div
             aria-hidden="true"

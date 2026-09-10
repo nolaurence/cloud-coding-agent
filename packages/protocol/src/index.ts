@@ -124,7 +124,7 @@ export interface AppSettings {
   disabledSkills: string[];
 }
 
-export const DEFAULT_MODEL_PROVIDER_ID = "copilot";
+export const DEFAULT_MODEL_PROVIDER_ID = "codex";
 
 export interface ModelRef {
   providerId: string;
@@ -227,6 +227,7 @@ export interface ContextCompactionResult {
 }
 
 export interface ThreadMeta {
+  runtime?: "codex";
   id: string;
   projectId: string;
   title: string;

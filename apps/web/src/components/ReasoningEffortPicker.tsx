@@ -72,7 +72,7 @@ export function ReasoningEffortPicker({
             (effort): MenuItem => ({ kind: "effort", value: effort, label: labels[effort] }),
           ),
         ]
-      : []),
+      : onAgentModeChange ? [{ kind: "effort", value: undefined, label: "标准" } satisfies MenuItem] : []),
     ...(onAgentModeChange ? [{ kind: "ultra" } satisfies MenuItem] : []),
   ];
   const ultraIndex = items.findIndex((item) => item.kind === "ultra");
@@ -313,6 +313,8 @@ export function ReasoningEffortPicker({
                   }}
                   type="button"
                   role="menuitemradio"
+                  disabled={item.kind === "ultra"}
+                  title={item.kind === "ultra" ? "Codex 暂不支持 Ultra 子代理模式" : undefined}
                   aria-checked={isSelected}
                   className={cn(
                     "flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none hover:bg-zinc-100 focus-visible:bg-zinc-100 dark:hover:bg-zinc-800 dark:focus-visible:bg-zinc-800",
@@ -328,7 +330,7 @@ export function ReasoningEffortPicker({
                           Ultra
                         </span>
                         <span className="block truncate text-[10px] leading-4 text-zinc-400">
-                          最高推理强度 + 子代理并行探索复核
+                          Codex 暂不支持子代理模式
                         </span>
                       </span>
                     </>

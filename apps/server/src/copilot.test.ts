@@ -1033,7 +1033,7 @@ test("configures Ultra mode with highest supported reasoning and subagent orches
   assert.equal(config.reasoningEffort, "xhigh");
   assert.deepEqual(config.customAgents, []);
   assert.match(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
-  assert.match(config.systemMessage?.content ?? "", /built-in Task tool/);
+  assert.match(config.systemMessage?.content ?? "", /built-in spawn_agent tool/);
   await manager.interrupt(threadId);
 });
 
@@ -1041,7 +1041,7 @@ test("resolves Ultra reasoning from the Copilot model catalog", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
   store.threads[0]!.agentMode = "ultra";
-  store.threads[0]!.model = { providerId: "copilot", modelId: "catalog-model" };
+  store.threads[0]!.model = { providerId: "codex", modelId: "catalog-model" };
   const client = new FakeClient();
   client.models = [
     {
@@ -1111,7 +1111,7 @@ test("replaces retained Ultra instructions after switching back to standard reas
   };
   assert.equal(standardConfig.reasoningEffort, "low");
   assert.match(standardConfig.systemMessage?.content ?? "", /Standard mode is enabled/);
-  assert.match(standardConfig.systemMessage?.content ?? "", /Do not proactively invoke the Task tool/);
+  assert.match(standardConfig.systemMessage?.content ?? "", /Do not proactively invoke the spawn_agent tool/);
   assert.doesNotMatch(standardConfig.systemMessage?.content ?? "", /Ultra mode is enabled/);
 });
 
@@ -1119,7 +1119,7 @@ test("keeps highest Ultra reasoning when hot-switching Copilot models", async (t
   const threadId = randomUUID();
   setupStore(t, threadId);
   store.threads[0]!.agentMode = "ultra";
-  store.threads[0]!.model = { providerId: "copilot", modelId: "first-model" };
+  store.threads[0]!.model = { providerId: "codex", modelId: "first-model" };
   const session = new FakeSession();
   const client = new FakeClient(session);
   client.models = [
@@ -1141,7 +1141,7 @@ test("keeps highest Ultra reasoning when hot-switching Copilot models", async (t
   await manager.setThreadModel(
     threadId,
     store.threads[0]!.model,
-    { providerId: "copilot", modelId: "second-model" },
+    { providerId: "codex", modelId: "second-model" },
   );
   assert.deepEqual(session.setModelCalls, [["second-model", { reasoningEffort: "max" }]]);
 });
@@ -1175,7 +1175,7 @@ test("does not fall back to Copilot when a locked custom provider is missing", a
   assert.equal(client.createdConfigs.length, 0);
 });
 
-test("configures Responses gateways without the free-form apply_patch tool", async (t) => {
+test("keeps free-form apply_patch available for native Responses providers", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
   store.threads[0]!.model = { providerId: "provider-1", modelId: "gpt-5.4" };
@@ -1202,8 +1202,8 @@ test("configures Responses gateways without the free-form apply_patch tool", asy
   };
   assert.equal(config.provider?.apiKey, "secret");
   assert.equal(config.provider?.headers?.["User-Agent"], "cloud-coding-agent/0.1");
-  assert.deepEqual(config.excludedTools, ["builtin:apply_patch"]);
-  assert.match(config.systemMessage?.content ?? "", /apply_patch tool is unavailable/);
+  assert.equal(config.excludedTools, undefined);
+  assert.doesNotMatch(config.systemMessage?.content ?? "", /apply_patch tool is unavailable/);
   await manager.interrupt(threadId);
 });
 

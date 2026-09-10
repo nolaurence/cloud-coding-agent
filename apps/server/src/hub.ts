@@ -458,11 +458,11 @@ export class Hub {
     try {
       models = await this.manager.listModels();
     } catch {
-      // Configured providers remain usable when Copilot authentication is unavailable.
+      // Configured providers remain usable when native Codex authentication is unavailable.
     }
     const copilotModels: ModelOption[] = models.map((model) => ({
-      ref: { providerId: "copilot", modelId: model.id },
-      label: `GitHub Copilot / ${model.name ?? model.id}`,
+      ref: { providerId: DEFAULT_MODEL_PROVIDER_ID, modelId: model.id },
+      label: `Codex / ${model.name ?? model.id}`,
       supportedReasoningEfforts: model.supportedReasoningEfforts,
       defaultReasoningEffort: model.defaultReasoningEffort,
     }));
@@ -609,6 +609,7 @@ export class Hub {
             if (msg.agentMode !== undefined && !isAgentMode(msg.agentMode)) {
               throw new Error("会话模式无效");
             }
+            if (msg.agentMode === "ultra") throw new Error("Codex 暂不支持 Ultra 子代理模式");
             const requestedModel = msg.model ?? store.settings.defaultModel;
             let model = requestedModel;
             if (requestedModel) {
@@ -640,6 +641,7 @@ export class Hub {
             }
 
             thread = {
+              runtime: "codex",
               id: randomUUID(),
               projectId: msg.projectId,
               title: "新会话",

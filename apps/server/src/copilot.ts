@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { CopilotClient } from "@github/copilot-sdk";
+import { CodexClient, SessionNotFoundError } from "./codex.js";
+import type { AgentClient as CopilotClient, AgentSession as CopilotSession } from "./agentRuntime.js";
 import type {
-  CopilotSession,
   ModelCapabilitiesOverride,
+  SessionConfig,
   SessionEvent,
 } from "@github/copilot-sdk";
 import {
@@ -42,7 +43,6 @@ import { createAgentResourceTools } from "./agentResources.js";
 import { effectiveMcpServers } from "./mcpServers.js";
 import { enabledSkillDirectories } from "./skills.js";
 import { getUserRole } from "./auth.js";
-import { sanitizedCopilotRuntimeEnv } from "./runtimeEnv.js";
 
 interface ThreadRuntime {
   threadId: string;
@@ -94,13 +94,13 @@ const ULTRA_REASONING_PRIORITY: readonly ReasoningEffort[] = [
 ];
 const ULTRA_SYSTEM_INSTRUCTIONS = [
   "Ultra mode is enabled. Optimize for correctness, depth, and independent verification rather than speed or token economy.",
-  "For non-trivial work, proactively use the built-in Task tool to delegate independent research, implementation, or review work to specialized subagents. Run independent delegations in parallel when useful, but do not delegate trivial work or duplicate the same investigation.",
+  "For non-trivial work, proactively use the built-in spawn_agent tool to delegate independent research, implementation, or review work to specialized subagents. Run independent delegations in parallel when useful, but do not delegate trivial work or duplicate the same investigation.",
   "Keep the main agent responsible for synthesis and final decisions. Verify important subagent findings against the workspace before acting on them.",
   "Before finishing, validate the requested outcome with the most relevant existing tests, checks, or direct inspection, and resolve discovered issues instead of reporting a plausible but unverified result.",
 ] as const;
 const STANDARD_SYSTEM_INSTRUCTIONS = [
   "Standard mode is enabled and Ultra mode is disabled. Disregard any Ultra-mode instructions retained from earlier turns or resumed session state.",
-  "Do not proactively invoke the Task tool or create subagents in Standard mode unless the user explicitly requests delegation.",
+  "Do not proactively invoke the spawn_agent tool or create subagents in Standard mode unless the user explicitly requests delegation.",
 ] as const;
 
 type ToolStartData = Extract<SessionEvent, { type: "tool.execution_start" }>["data"];
@@ -298,10 +298,7 @@ export class CopilotManager {
 
   constructor(
     private readonly createClient: CopilotClientFactory = () =>
-      new CopilotClient({
-        logLevel: "warning",
-        env: sanitizedCopilotRuntimeEnv(),
-      }),
+      new CodexClient(),
   ) {}
 
   onThreadEvent(sink: ThreadEventSink) {
@@ -323,7 +320,7 @@ export class CopilotManager {
       const starting = (async () => {
         const client = this.createClient();
         await client.start();
-        installWorkspaceSandbox(client, workspaceSandboxDeniedPaths);
+        if (!(client instanceof CodexClient)) installWorkspaceSandbox(client, workspaceSandboxDeniedPaths);
         this.client = client;
       })();
       this.starting = starting;
@@ -635,26 +632,21 @@ export class CopilotManager {
     const ownerId = thread.userId;
     const mcpServers = effectiveMcpServers(project.path);
     const skillConfig = enabledSkillDirectories(project.path);
-    const disableApplyPatch =
-      providerConfig?.type === "openai" &&
-      (providerConfig.wireApi ?? "completions") === "responses";
     const systemInstructions = [
       "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
       "所有文件和命令操作只能访问当前工作区。不要尝试读取或修改工作区外的路径，也不要请求绕过沙箱。",
     ];
-    if (disableApplyPatch) {
-      systemInstructions.push(
-        "The apply_patch tool is unavailable. Use another available file editing tool.",
-      );
-    }
     if (thread.agentMode === "ultra") {
       systemInstructions.push(...ULTRA_SYSTEM_INSTRUCTIONS);
     } else {
       systemInstructions.push(...STANDARD_SYSTEM_INSTRUCTIONS);
     }
 
-    const config: Record<string, unknown> = {
+    const config: Record<string, unknown> & Pick<SessionConfig, "provider" | "model" | "systemMessage"> = {
       sessionId: thread.id,
+      legacySession: thread.runtime !== "codex",
+      agentMode: thread.agentMode ?? "standard",
+      deniedPaths: workspaceSandboxDeniedPaths(project.path),
       streaming: true,
       includeSubAgentStreamingEvents: true,
       workingDirectory: project.path,
@@ -689,10 +681,6 @@ export class CopilotManager {
         content: systemInstructions.join("\n"),
       },
     };
-    if (disableApplyPatch) {
-      // Some Responses-compatible gateways drop free-form custom-tool input.
-      config.excludedTools = ["builtin:apply_patch"];
-    }
     if (modelRef) {
       config.model = modelRef.modelId;
       const reasoningEffort = sessionReasoningEffort(
@@ -743,6 +731,7 @@ export class CopilotManager {
     const config = this.buildSessionConfig(thread, store.settings, actorId);
     Object.assign(config, {
       sessionId,
+      legacySession: false,
       tools: [],
       availableTools: [],
       systemMessage: {
@@ -757,18 +746,16 @@ export class CopilotManager {
       },
     });
 
+    const prompt = [
+      truncated ? "The staged diff was truncated. Infer conservatively from the visible portion." : "The staged diff is complete.",
+      "<staged_diff>", patch, "</staged_diff>",
+    ].join("\n");
+    if (client instanceof CodexClient) return normalizeGeneratedCommitMessage(await client.generateText(config, prompt, COMMIT_MESSAGE_TIMEOUT_MS));
     let session: CopilotSession | null = null;
     let generationError: unknown;
     try {
       session = await client.createSession(config as never);
-      const response = await session.sendAndWait({
-        prompt: [
-          truncated ? "The staged diff was truncated. Infer conservatively from the visible portion." : "The staged diff is complete.",
-          "<staged_diff>",
-          patch,
-          "</staged_diff>",
-        ].join("\n"),
-      }, COMMIT_MESSAGE_TIMEOUT_MS);
+      const response = await session.sendAndWait({ prompt }, COMMIT_MESSAGE_TIMEOUT_MS);
       return normalizeGeneratedCommitMessage(response?.data.content ?? "");
     } catch (error) {
       generationError = error;
@@ -1235,6 +1222,7 @@ export class CopilotManager {
     if (!thread) throw new Error("会话不存在");
     const requestedActorId = actorId || thread.userId || "";
     if (rt.reconfiguring) await rt.reconfiguring;
+    if (rt.session?.runtimeDisconnected) { rt.session = null; rt.sessionActorId = ""; }
     if (rt.session && rt.sessionActorId === requestedActorId) return rt.session;
     if (rt.attaching) {
       await rt.attaching;
@@ -1254,17 +1242,19 @@ export class CopilotManager {
       let capabilityModels: ModelOption[] = [];
       if (
         thread.agentMode === "ultra" &&
-        modelRef?.providerId === "copilot" &&
+        modelRef?.providerId === DEFAULT_MODEL_PROVIDER_ID &&
         !highestSupportedReasoningEffort(settings, modelRef)
       ) {
         capabilityModels = (await this.listModels()).map((model) => ({
-          ref: { providerId: "copilot", modelId: model.id },
-          label: "GitHub Copilot / " + (model.name ?? model.id),
+          ref: { providerId: DEFAULT_MODEL_PROVIDER_ID, modelId: model.id },
+          label: "Codex / " + (model.name ?? model.id),
           supportedReasoningEfforts: model.supportedReasoningEfforts,
           defaultReasoningEffort: model.defaultReasoningEffort,
         }));
       }
-      const config = this.buildSessionConfig(
+      const config = client instanceof CodexClient && thread.runtime !== "codex"
+        ? { sessionId: thread.id, legacySession: true }
+        : this.buildSessionConfig(
         thread,
         settings,
         requestedActorId,
@@ -1273,6 +1263,7 @@ export class CopilotManager {
 
       let session: CopilotSession;
       const hasHistory =
+        client instanceof CodexClient ||
         rt.sdkSessionEstablished ||
         thread.createdAt < Date.now() - 1000 ||
         rt.messages.length > 0;
@@ -1282,7 +1273,8 @@ export class CopilotManager {
         } else {
           throw new Error("create");
         }
-      } catch {
+      } catch (error) {
+        if (client instanceof CodexClient && hasHistory && !(error instanceof SessionNotFoundError)) throw error;
         session = await client.createSession(config as never);
       }
 
@@ -1690,6 +1682,7 @@ export class CopilotManager {
     let accepted = false;
     try {
       const session = await this.attach(threadId, actorId);
+      if (!rt.running) throw new Error("任务已中止");
       beforeSend?.();
       const sending = session.send({
         prompt: text,
@@ -1773,12 +1766,18 @@ export class CopilotManager {
     }
   }
 
+  private async assertThreadEditable(threadId: string) {
+    const thread = store.getThread(threadId);
+    if (thread && thread.runtime !== "codex" && (await this.ensureClient()) instanceof CodexClient) throw new Error("旧 Copilot 会话只读,请新建 Codex 会话");
+  }
+
   async setThreadModel(
     threadId: string,
     currentModel: ModelRef | undefined,
     nextModel: ModelRef,
   ): Promise<void> {
     const thread = store.getThread(threadId);
+    await this.assertThreadEditable(threadId);
     const modelProviderId = resolveThreadModelProviderId(thread, currentModel);
     if (nextModel.providerId !== modelProviderId) {
       throw new Error("会话创建后不支持切换模型提供方,请新建会话使用该模型");
@@ -1794,12 +1793,12 @@ export class CopilotManager {
     let capabilityModels: ModelOption[] = [];
     if (
       thread?.agentMode === "ultra" &&
-      nextModel.providerId === "copilot" &&
+      nextModel.providerId === DEFAULT_MODEL_PROVIDER_ID &&
       !highestSupportedReasoningEffort(store.settings, nextModel)
     ) {
       capabilityModels = (await this.listModels()).map((model) => ({
-        ref: { providerId: "copilot", modelId: model.id },
-        label: "GitHub Copilot / " + (model.name ?? model.id),
+        ref: { providerId: DEFAULT_MODEL_PROVIDER_ID, modelId: model.id },
+        label: "Codex / " + (model.name ?? model.id),
         supportedReasoningEfforts: model.supportedReasoningEfforts,
         defaultReasoningEffort: model.defaultReasoningEffort,
       }));
@@ -1820,7 +1819,7 @@ export class CopilotManager {
     const options: CopilotSetModelOptions = {
       ...(reasoningEffort
         ? {
-            // SDK 1.0.8 omits "none" and "max", but the bundled CLI RPC accepts both.
+            // Shared levels exceed legacy SDK typing; the Codex adapter normalizes max to xhigh.
             reasoningEffort: reasoningEffort as CopilotReasoningEffort,
           }
         : {}),
@@ -1834,6 +1833,8 @@ export class CopilotManager {
   }
 
   async setThreadAgentMode(threadId: string, nextMode: AgentMode): Promise<void> {
+    await this.assertThreadEditable(threadId);
+    if (nextMode === "ultra" && (await this.ensureClient()) instanceof CodexClient) throw new Error("Codex 暂不支持 Ultra 子代理模式");
     const thread = store.getThread(threadId);
     if (!thread) throw new Error("会话不存在");
     if ((thread.agentMode ?? "standard") === nextMode) return;
@@ -1880,12 +1881,8 @@ export class CopilotManager {
       }
     }
     this.threads.delete(threadId);
-    try {
-      const client = await this.ensureClient();
-      await client.deleteSession(threadId);
-    } catch {
-      // ignore
-    }
+    const client = await this.ensureClient();
+    await client.deleteSession(threadId);
   }
 
   async listModels() {
@@ -1913,6 +1910,7 @@ export class CopilotManager {
 
   // 后台预热插件市场缓存,避免用户首次打开插件页时等待市场仓库克隆
   async warmupPlugins(): Promise<void> {
+    if ((await this.ensureClient()) instanceof CodexClient) return;
     try {
       const marketplaces = await this.listPluginMarketplaces();
       await Promise.allSettled(

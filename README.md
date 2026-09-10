@@ -1,16 +1,16 @@
 # Cloud Coding Agent
 
-基于 [GitHub Copilot SDK](https://github.com/github/copilot-sdk) 的云端编码 Agent,提供 Web 对话界面。Agent 的引擎是 Copilot CLI 同款运行时:计划、工具调用、文件编辑、命令执行全部内置,无需自己实现 agent loop。
+基于 [OpenAI Codex](https://github.com/openai/codex) app-server 的云端编码 Agent,提供 Web 对话界面。固定使用 `@openai/codex@0.114.0`,通过 stdio JSON-RPC 接入会话、文件编辑和命令执行,不解析交互终端输出。现有业务事件和工具定义仍复用 Copilot SDK 类型,但新会话不再启动 Copilot CLI。
 
 ## 功能
 
 - **对话流**(自研,非 assistant-ui):流式输出、思考过程折叠、工具调用时间线、Markdown 渲染
-- **模型配置**:支持 OpenAI(Chat Completions)与 OpenAI Responses 两种 wire 协议,以及 Azure / Anthropic;BYOK,按会话切换模型
+- **模型配置**:支持 OpenAI(Chat Completions)与 OpenAI Responses 两种 wire 协议,以及 Azure 的 OpenAI 兼容接口;BYOK,会话内可切换同一提供方的模型。暂不支持 Anthropic 原生 Messages 协议
 - **MCP 模块**:本地 stdio / 远程 HTTP MCP 服务器管理,支持平台级配置和 workspace 根目录 `.mcp.json`,按工具白名单启用
 - **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用
 - **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
 - **项目管理**:一个项目 = 服务器上的一个工作目录,会话在其 cwd 中执行
-- **工作区沙箱**:基于 Copilot 运行时的一方沙箱(bubblewrap),每个会话的工具只能读写所属工作区;服务端数据目录和其他工作区被显式拒绝,且禁止沙箱绕过。Linux 部署需要安装 bubblewrap(Docker 镜像已内置)并允许非特权用户命名空间
+- **工作区沙箱**:基于 Codex 原生沙箱(Linux 强制启用 bubblewrap 后端),原生文件/命令工具的写入仅限所属工作区,读取额外允许必要系统文件和已启用 Skill;禁止工作区覆盖服务数据或其他项目根目录,且禁止沙箱绕过。Linux 部署需要安装 bubblewrap(Docker 镜像已内置)并允许非特权用户命名空间
 - **代码托管账户**:在「设置 → 通用」绑定 GitHub / Gitee,Agent 可使用当前用户的授权执行 clone、fetch、pull、push
 - **用户系统**:登录/注册;管理员由环境变量 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 创建,注册用户为普通用户;会话按用户隔离,管理员可见全部
 - **数据存储**:内置 SQLite 单文件部署,也可连接 MySQL,并兼容旧 JSON 数据迁移
@@ -20,12 +20,14 @@
 ```
 apps/web (React 19 + Vite + Tailwind v4 + zustand + react-router)
       │  WebSocket /ws (JSON 协议,见 packages/protocol)
-apps/server (Fastify + @github/copilot-sdk)
-      │  JSON-RPC
-Copilot CLI runtime(会话、工具、MCP、技能)
+apps/server (Fastify + Codex adapter)
+      │  stdio JSON-RPC
+Codex app-server(会话、工具、MCP、技能)
+      │  Responses
+本地鉴权网关 → 原生 Responses / Chat Completions 上游
 ```
 
-数据存储支持三种模式:`DATABASE_URL=sqlite:/path/to/cca.db` 使用内置 SQLite,`DATABASE_URL=mysql://...` 使用 MySQL;两者都会自动建表并从旧 JSON 文件迁移。未配置时继续使用 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。会话消息历史由 Copilot CLI 持久化在数据目录的 `copilot-home/` 下。
+数据存储支持三种模式:`DATABASE_URL=sqlite:/path/to/cca.db` 使用内置 SQLite,`DATABASE_URL=mysql://...` 使用 MySQL;两者都会自动建表并从旧 JSON 文件迁移。未配置时继续使用 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。新会话在数据目录的 `codex-home/<会话 ID>/` 中保存原生历史、线程映射和应用事件,每个会话使用独立进程和 CODEX_HOME。配置 MySQL/SQLite 时,新会话消息、工具调用/结果及其时间戳写入 `thread_events` 表,按会话内序号读取,事件 ID 去重;写入串行分批提交。`cca-events.jsonl` 保留为故障补录日志,已有 Codex 会话在下次打开时自动补录,数据库故障会明确报错。未配置数据库时继续使用 JSONL。流式正文增量不逐 token 入库,完成消息保存全文;工具开始/完成事件保留参数、结果、状态和时间。Codex 原生状态仍用于续聊,数据库不能替代它,备份仍须覆盖数据库和数据目录。旧 `copilot-home/` 历史保留只读,不自动转换或续写;升级前应备份整个数据目录。旧 Copilot 默认模型会清空,请重新选择模型;连接器请重新选择非 Copilot 模型。
 
 ## 本地开发
 
@@ -47,11 +49,11 @@ npm run desktop:dir      # 生成可运行的未安装包,便于检查
 npm run desktop:dist     # 当前平台生成 DMG/ZIP 或 NSIS 安装包
 ```
 
-发布配置只构建当前主机架构。为覆盖 macOS Intel/Apple Silicon 与 Windows x64/arm64,请使用 `macos-*-x64`、`macos-*-arm64`、`windows-*-x64`、`windows-*-arm64` 四个原生 runner（可组成 CI matrix）,在每个 runner 上从干净目录执行 `npm ci && npm run desktop:dist`。不要在单个 runner 上用 `--x64 --arm64` 交叉打包。`node-pty`、Koffi 和 Copilot 平台运行时保留在 ASAR 外;`npm ci` 会按构建主机安装对应可选平台包；`node-pty` 必须存在目标 OS/架构预编译文件（或在目标 runner 上安装编译工具后构建）。跨架构发布前请在每个目标架构的 runner 上执行并冒烟测试,不要复用其他平台的 `node_modules`。 浏览器网络策略会在顶层导航及 Electron 请求拦截阶段重新解析主机并拒绝本机、私网、链路本地和元数据目标（除非设置 `BROWSER_ALLOW_PRIVATE_NETWORK=true`）；这属于尽力过滤,不是 DNS pinning。正式发布还需配置 Apple Developer ID 签名/公证和 Windows Authenticode 证书;本仓库不会存放证书。产物写入 `release/`。
+发布配置只构建当前主机架构。为覆盖 macOS Intel/Apple Silicon 与 Windows x64/arm64,请使用 `macos-*-x64`、`macos-*-arm64`、`windows-*-x64`、`windows-*-arm64` 四个原生 runner（可组成 CI matrix）,在每个 runner 上从干净目录执行 `npm ci && npm run desktop:dist`。不要在单个 runner 上用 `--x64 --arm64` 交叉打包。`node-pty`、Koffi、Codex 及兼容依赖的平台运行时保留在 ASAR 外;`npm ci` 会按构建主机安装对应可选平台包；`node-pty` 必须存在目标 OS/架构预编译文件（或在目标 runner 上安装编译工具后构建）。跨架构发布前请在每个目标架构的 runner 上执行并冒烟测试,不要复用其他平台的 `node_modules`。 浏览器网络策略会在顶层导航及 Electron 请求拦截阶段重新解析主机并拒绝本机、私网、链路本地和元数据目标（除非设置 `BROWSER_ALLOW_PRIVATE_NETWORK=true`）；这属于尽力过滤,不是 DNS pinning。正式发布还需配置 Apple Developer ID 签名/公证和 Windows Authenticode 证书;本仓库不会存放证书。产物写入 `release/`。
 
 ## Standalone 部署
 
-Standalone 模式使用内置 SQLite,适合单机或个人服务。应用数据、用户配置、会话记录和 Copilot 运行时状态需要持久化到同一个数据目录;不要让多个实例同时读写同一个 SQLite 文件。
+Standalone 模式使用内置 SQLite,适合单机或个人服务。应用数据、用户配置、会话记录和 Codex 运行时状态需要持久化到同一个数据目录;不要让多个实例同时读写同一个 SQLite 文件。
 
 ### 使用 Docker(推荐)
 
@@ -141,4 +143,12 @@ docker compose -f docker-compose-prod.yml up -d --build
 
 绑定令牌使用服务端密钥加密保存,按会话所属用户读取。Agent 通过受控的 `authenticated_git` 工具执行远程 Git 操作;令牌不会写入仓库 URL、`.gitconfig` 或 Web 终端环境。HTTPS 和常见 SSH remote 会统一通过对应平台的 HTTPS 认证执行。
 
-> GitHub Copilot 登录态也可作为模型来源(`models.list` 会合并 Copilot 可用模型),需在服务器上先 `copilot` 登录。BYOK 配置后无需 GitHub 鉴权。
+### Codex 模型接入与兼容范围
+
+推荐在「设置 → 模型服务」添加 OpenAI 兼容服务,Base URL 填 API 根路径(例如含 `/v1`),选择 `completions` 或 `responses`,再设置默认模型。Chat 上游必须支持 `stream: true` 和 function tool calling;网关转换文字、图片输入、推理增量、并行工具调用和工具结果,并把 Codex 的 free-form `apply_patch` 包装成带 `input` 字符串的 JSON 函数参数。工具参数截断或流异常会报错,不会伪装成成功。手动压缩使用 Codex 的本地摘要流程,不伪造远程加密压缩结果。
+
+不保证所有 OpenAI 兼容服务的扩展字段兼容;暂不支持依赖 `previous_response_id` 的服务端状态、原生 Anthropic、跨协议加密推理历史、Copilot 插件市场和 Ultra 子代理模式。扩展请使用现有 Skill/MCP 管理。自动提交信息通过自定义模型服务执行纯文本请求,不开放工具;原生 Codex 账号暂需手动填写提交信息。上游 API key 保留在服务端网关,子进程仅持有会话级随机网关凭证;本地网关不对外发布端口。
+
+也可使用 Codex 原生账号:在运行服务的系统用户下,将 `CODEX_HOME` 指向 `$CCA_DATA_DIR/codex-home` 后,执行 `node node_modules/@openai/codex/bin/codex.js login`。服务会在打开会话时同步该目录的认证信息,不使用旧 Copilot 登录态。修改/清除认证后应重启服务以关闭旧会话。可通过 `CCA_CODEX_PATH` 指定同版本 Codex 可执行文件。请勿把认证文件放到项目工作区。
+
+Linux 主机/容器必须允许 bubblewrap 创建用户命名空间;禁止该能力时文件修改和命令执行会明确失败,不会降级为无沙箱模式。不要通过关闭沙箱或 privileged 容器绕过限制。桌面平台还需在对应原生 runner 上确认 Codex 沙箱能力。
