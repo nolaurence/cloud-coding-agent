@@ -1081,8 +1081,8 @@ test("configures Ultra mode with highest supported reasoning and subagent orches
   };
   assert.equal(config.reasoningEffort, "xhigh");
   assert.deepEqual(config.customAgents, []);
-  assert.match(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
-  assert.match(config.systemMessage?.content ?? "", /built-in spawn_agent tool/);
+  assert.doesNotMatch(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
+  assert.doesNotMatch(config.systemMessage?.content ?? "", /spawn_agent tool/);
   await manager.interrupt(threadId);
 });
 
@@ -1141,7 +1141,7 @@ test("replaces retained Ultra instructions after switching back to standard reas
     systemMessage?: { content?: string };
   };
   assert.equal(config.reasoningEffort, "max");
-  assert.match(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
+  assert.doesNotMatch(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
 
   await manager.setThreadAgentMode(threadId, "standard");
   const standardModel = {

@@ -102,7 +102,7 @@ export class CodexSession implements AgentSession {
     this.tools = config.tools ?? [];
     this.model = config.model;
     const effort: string | undefined = config.reasoningEffort;
-    this.effort = effort === "max" ? "xhigh" : effort;
+    this.effort = config.agentMode === "ultra" ? "xhigh" : effort === "max" ? "xhigh" : effort;
     this.connection.onNotification((method, params) => this.notification(method, params));
     this.connection.onRequest = (method, params) => this.toolRequest(method, params);
     this.connection.onFailure = (error) => {
@@ -131,7 +131,6 @@ export class CodexSession implements AgentSession {
     return { type: "workspaceWrite", writableRoots: [this.cwd], readOnlyAccess, networkAccess: true, excludeTmpdirEnvVar: true, excludeSlashTmp: true };
   }
   async open(resume: boolean) {
-    if (this.config.agentMode === "ultra") throw new Error("Codex 暂不支持 Ultra 子代理模式,请使用标准模式");
     prepareHome(this.home);
     const stored = usingDatabase() ? await this.eventStore.read() : [];
     if (usingDatabase()) {

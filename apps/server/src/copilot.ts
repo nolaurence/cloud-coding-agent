@@ -92,12 +92,6 @@ const ULTRA_REASONING_PRIORITY: readonly ReasoningEffort[] = [
   "minimal",
   "none",
 ];
-const ULTRA_SYSTEM_INSTRUCTIONS = [
-  "Ultra mode is enabled. Optimize for correctness, depth, and independent verification rather than speed or token economy.",
-  "For non-trivial work, proactively use the built-in spawn_agent tool to delegate independent research, implementation, or review work to specialized subagents. Run independent delegations in parallel when useful, but do not delegate trivial work or duplicate the same investigation.",
-  "Keep the main agent responsible for synthesis and final decisions. Verify important subagent findings against the workspace before acting on them.",
-  "Before finishing, validate the requested outcome with the most relevant existing tests, checks, or direct inspection, and resolve discovered issues instead of reporting a plausible but unverified result.",
-] as const;
 const STANDARD_SYSTEM_INSTRUCTIONS = [
   "Standard mode is enabled and Ultra mode is disabled. Disregard any Ultra-mode instructions retained from earlier turns or resumed session state.",
   "Do not proactively invoke the spawn_agent tool or create subagents in Standard mode unless the user explicitly requests delegation.",
@@ -648,9 +642,7 @@ export class CopilotManager {
       "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
       "所有文件和命令操作只能访问当前工作区。不要尝试读取或修改工作区外的路径，也不要请求绕过沙箱。",
     ];
-    if (thread.agentMode === "ultra") {
-      systemInstructions.push(...ULTRA_SYSTEM_INSTRUCTIONS);
-    } else {
+    if (thread.agentMode !== "ultra") {
       systemInstructions.push(...STANDARD_SYSTEM_INSTRUCTIONS);
     }
 
