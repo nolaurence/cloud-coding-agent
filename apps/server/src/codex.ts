@@ -12,6 +12,7 @@ import { array, object, startLlmGateway, text, type GatewayProvider, type JsonOb
 import { sanitizedCopilotRuntimeEnv } from "./runtimeEnv.js";
 
 const CODEX_HOME = path.join(DATA_DIR, "codex-home");
+const MAX_CONTEXT_OUTPUT_RESERVE_TOKENS = 16_000;
 export class SessionNotFoundError extends Error {}
 
 type Config = (SessionConfig | ResumeSessionConfig) & { legacySession?: boolean; agentMode?: "standard" | "ultra"; deniedPaths?: string[] };
@@ -23,6 +24,11 @@ function sessionPath(id: string): string {
   if (!/^[A-Za-z0-9-]{1,100}$/.test(id)) throw new Error("Invalid session id");
   return path.join(CODEX_HOME, id);
 }
+function configuredContextWindow(config: Config): number | undefined {
+  const value = config.modelCapabilities?.limits?.max_context_window_tokens;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 function runtimeEnv(home: string): NodeJS.ProcessEnv {
   const env = sanitizedCopilotRuntimeEnv();
   for (const key of Object.keys(env)) if (key.startsWith("COPILOT_") || key.startsWith("GH_COPILOT_") || key === "GH_HOST" || key === "SSH_AUTH_SOCK") delete env[key];
@@ -187,8 +193,14 @@ export class CodexSession implements AgentSession {
         overrides.model_provider = "cca";
         overrides.model_providers = { cca: { name: "CCA", base_url: this.gateway.url, wire_api: "responses", experimental_bearer_token: this.gateway.token, supports_websockets: false, request_max_retries: 0, stream_max_retries: 0 } };
       }
-      const limit = this.config.modelCapabilities?.limits?.max_context_window_tokens;
-      if (limit) overrides.model_context_window = limit;
+      const contextWindow = configuredContextWindow(this.config);
+      if (contextWindow) {
+        overrides.model_context_window = contextWindow;
+        overrides.model_auto_compact_token_limit = Math.max(
+          1,
+          contextWindow - Math.min(MAX_CONTEXT_OUTPUT_RESERVE_TOKENS, Math.floor(contextWindow * 0.1)),
+        );
+      }
       if (this.effort) overrides.model_reasoning_effort = this.effort;
       await this.connection.start(this.cwd, runtimeEnv(this.home));
       const common: JsonObject = { cwd: this.cwd, model: this.model, approvalPolicy: "never", sandbox: "workspace-write", config: overrides,
@@ -246,8 +258,11 @@ export class CodexSession implements AgentSession {
     } else if (method === "thread/tokenUsage/updated") {
       const usage = object(params.tokenUsage);
       const last = object(usage.last);
-      if (typeof usage.modelContextWindow === "number" && typeof last.totalTokens === "number") {
-        this.usage = { currentTokens: last.totalTokens, tokenLimit: usage.modelContextWindow };
+      const configuredLimit = configuredContextWindow(this.config);
+      const nativeLimit = typeof usage.modelContextWindow === "number" ? usage.modelContextWindow : undefined;
+      const tokenLimit = configuredLimit ?? nativeLimit;
+      if (tokenLimit !== undefined && typeof last.totalTokens === "number") {
+        this.usage = { currentTokens: last.totalTokens, tokenLimit };
         this.emit({ type: "session.usage_info", data: { ...this.usage, messagesLength: this.events.filter((e) => ["user.message", "assistant.message"].includes(e.type)).length } });
       }
     } else if (method === "error") {

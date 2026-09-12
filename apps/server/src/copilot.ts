@@ -110,6 +110,18 @@ type CopilotSetModelOptions = NonNullable<Parameters<CopilotSession["setModel"]>
 type CopilotReasoningEffort = NonNullable<CopilotSetModelOptions["reasoningEffort"]>;
 
 type SubagentStartData = Extract<SessionEvent, { type: "subagent.started" }>["data"];
+type UserMessageData = Extract<SessionEvent, { type: "user.message" }>["data"];
+
+function isInternalUserMessage(data: UserMessageData): boolean {
+  const source = data.source?.trim().toLowerCase();
+  return Boolean(
+    source === "jit-instruction" ||
+      source === "skill" ||
+      source?.startsWith("skill-") ||
+      source?.startsWith("skill:") ||
+      data.content.trimStart().startsWith("<skill-context"),
+  );
+}
 
 function stringifyArguments(args: ToolStartData["arguments"]): string | undefined {
   if (!args) return undefined;
@@ -870,6 +882,7 @@ export class CopilotManager {
       }
       case "user.message": {
         const data = event.data;
+        if (isInternalUserMessage(data)) break;
         if (event.agentId) {
           const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
           this.activateSubagent(subagent);
@@ -1313,6 +1326,7 @@ export class CopilotManager {
             break;
           case "user.message": {
             const data = event.data;
+            if (isInternalUserMessage(data)) break;
             if (event.agentId) {
               const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
               this.activateSubagent(subagent);

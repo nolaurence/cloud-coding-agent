@@ -216,6 +216,55 @@ test("forwards an 8700-character prompt to the SDK without truncation", async (t
   await manager.interrupt(threadId);
 });
 
+test("does not expose skill injections as live user messages", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "用户消息");
+  session.emit(sessionEvent("user.message", {
+    content: "<skill-context name=customize-cloud-agent>内部技能内容</skill-context>",
+    source: "skill-customize-cloud-agent",
+  }));
+  session.emit(sessionEvent("user.message", { content: "用户消息" }));
+  session.emit(sessionEvent("session.idle", {}));
+
+  const snapshot = manager.snapshot(threadId);
+  assert.deepEqual(snapshot.messages.map((message) => message.text), ["用户消息"]);
+  assert.equal(
+    emitted.some((event) => event.kind === "user.message" && event.message.text.includes("skill-context")),
+    false,
+  );
+});
+
+test("does not restore skill injections from session history", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId, Date.now() - 10_000);
+  const session = new FakeSession([
+    sessionEvent("user.message", {
+      content: "<skill-context name=customize-cloud-agent>内部技能内容</skill-context>",
+      source: "skill-customize-cloud-agent",
+    }),
+    sessionEvent("user.message", { content: "历史用户消息" }),
+  ]);
+  const manager = new CopilotManager(
+    () => new FakeClient(session) as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  const snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  assert.deepEqual(snapshot.messages.map((message) => message.text), ["历史用户消息"]);
+  manager.unsubscribe(threadId);
+});
+
 test("keeps provider errors in thread snapshots", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
