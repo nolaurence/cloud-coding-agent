@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import type { MessageOptions, ResumeSessionConfig, SessionConfig, SessionEvent, Tool } from "@github/copilot-sdk";
 import type { AgentClient, AgentSession, AgentModelInfo } from "./agentRuntime.js";
 import { isReasoningEffort } from "@cca/protocol";
@@ -14,6 +15,30 @@ import { sanitizedCopilotRuntimeEnv } from "./runtimeEnv.js";
 const CODEX_HOME = path.join(DATA_DIR, "codex-home");
 const MAX_CONTEXT_OUTPUT_RESERVE_TOKENS = 16_000;
 export class SessionNotFoundError extends Error {}
+
+let bwrapUsernsSupport: boolean | undefined;
+/**
+ * Codex 的 bwrap 沙箱后端依赖非特权用户命名空间;容器或内核禁止时
+ * (bwrap: No permissions to create a new namespace),回退到 Codex 原生
+ * Landlock/seccomp 沙箱,仍然保持 workspace-write 限制,不会关掉沙箱。
+ */
+function bwrapSandboxAvailable(): boolean {
+  if (bwrapUsernsSupport === undefined) {
+    bwrapUsernsSupport = false;
+    if (process.platform === "linux") {
+      try {
+        const probe = spawnSync("bwrap", ["--ro-bind", "/", "/", "true"], { timeout: 10_000, stdio: "ignore" });
+        bwrapUsernsSupport = probe.status === 0;
+      } catch {
+        bwrapUsernsSupport = false;
+      }
+      if (!bwrapUsernsSupport) {
+        console.warn("[cca] bubblewrap 无法创建用户命名空间,Linux 沙箱回退到 Codex 原生 Landlock/seccomp 后端");
+      }
+    }
+  }
+  return bwrapUsernsSupport;
+}
 
 type Config = (SessionConfig | ResumeSessionConfig) & { legacySession?: boolean; agentMode?: "standard" | "ultra"; deniedPaths?: string[] };
 type EventInput = { [K in SessionEvent["type"]]: { type: K; data: Extract<SessionEvent, { type: K }>["data"]; agentId?: string; id?: string } }[SessionEvent["type"]];
@@ -156,7 +181,7 @@ export class CodexSession implements AgentSession {
     await this.eventStore.flush();
     const overrides: JsonObject = {
       approval_policy: "never", sandbox_mode: "workspace-write", web_search: "disabled",
-      features: { multi_agent: false, use_linux_sandbox_bwrap: true },
+      features: { multi_agent: false, ...(bwrapSandboxAvailable() ? { use_linux_sandbox_bwrap: true } : {}) },
       projects: { [this.cwd]: { trust_level: "untrusted" } },
       shell_environment_policy: { inherit: "none", set: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: this.cwd, LANG: "C.UTF-8" } },
       mcp_servers: {},
