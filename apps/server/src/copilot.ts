@@ -429,6 +429,25 @@ export class CopilotManager {
     return rt.pendingAssistant;
   }
 
+  private splitReasoningSegment(
+    rt: ThreadRuntime,
+    reasoningId: string | undefined,
+    emit: boolean,
+  ) {
+    const previous = rt.pendingAssistant;
+    if (
+      !previous ||
+      previous.text ||
+      !previous.messageId ||
+      !reasoningId ||
+      previous.messageId === reasoningId
+    ) {
+      return;
+    }
+    // Codex 按独立 item 推送每段思考;换段时先落定上一段,让前端"正在思考"刷新
+    this.commitPendingAssistant(rt, emit);
+  }
+
   private commitPendingAssistant(rt: ThreadRuntime, emit = true) {
     const pending = rt.pendingAssistant;
     rt.pendingAssistant = null;
@@ -976,17 +995,7 @@ export class CopilotManager {
           });
           break;
         }
-        const previous = rt.pendingAssistant;
-        if (
-          previous &&
-          !previous.text &&
-          previous.messageId &&
-          data.reasoningId &&
-          previous.messageId !== data.reasoningId
-        ) {
-          // Codex 按独立 item 推送每段思考;换段时先落定上一段,让前端"正在思考"刷新
-          this.commitPendingAssistant(rt);
-        }
+        this.splitReasoningSegment(rt, data.reasoningId, true);
         const pending = this.ensurePendingAssistant(rt, rt.currentTurnId ?? "", ts);
         if (data.reasoningId && !pending.messageId) pending.messageId = data.reasoningId;
         pending.reasoning += data.deltaContent;
@@ -1385,7 +1394,11 @@ export class CopilotManager {
                 event.data.deltaContent;
               break;
             }
+            this.splitReasoningSegment(rt, event.data.reasoningId, false);
             const pending = this.ensurePendingAssistant(rt, turnId, ts, undefined, false);
+            if (event.data.reasoningId && !pending.messageId) {
+              pending.messageId = event.data.reasoningId;
+            }
             pending.reasoning += event.data.deltaContent;
             break;
           }

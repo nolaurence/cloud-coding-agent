@@ -1046,6 +1046,51 @@ test("keeps streamed assistant text in snapshots and after an interrupt", async 
   );
 });
 
+test("commits each reasoning segment as its own message when the reasoning id changes", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "分析代码");
+  session.emit(sessionEvent("assistant.turn_start", { turnId: "turn-1" }));
+  session.emit(
+    sessionEvent("assistant.reasoning_delta", {
+      reasoningId: "reason-1",
+      deltaContent: "先搜索相关文件",
+    }),
+  );
+  session.emit(
+    sessionEvent("assistant.reasoning_delta", {
+      reasoningId: "reason-1",
+      deltaContent: "，再阅读实现",
+    }),
+  );
+  session.emit(
+    sessionEvent("assistant.reasoning_delta", {
+      reasoningId: "reason-2",
+      deltaContent: "开始修改代码",
+    }),
+  );
+
+  const committed = emitted.filter((event) => event.kind === "assistant.message");
+  assert.equal(committed.length, 1);
+  const message = committed[0]?.kind === "assistant.message" ? committed[0].message : undefined;
+  assert.equal(message?.id, "reason-1");
+  assert.equal(message?.reasoning, "先搜索相关文件，再阅读实现");
+  assert.equal(message?.text, "");
+
+  const snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  assert.equal(snapshot.live?.reasoning, "开始修改代码");
+  assert.equal(snapshot.live?.text, "");
+});
+
 test("configures Ultra mode with highest supported reasoning and subagent orchestration", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
