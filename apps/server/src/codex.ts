@@ -33,7 +33,7 @@ function bwrapSandboxAvailable(): boolean {
         bwrapUsernsSupport = false;
       }
       if (!bwrapUsernsSupport) {
-        console.warn("[cca] bubblewrap 无法创建用户命名空间,Linux 沙箱回退到 Codex 原生 Landlock/seccomp 后端");
+        console.warn("[cca] bubblewrap 无法创建用户命名空间,Linux 沙箱回退到 Codex 原生 Landlock/seccomp 后端(此模式下 .git 不受写保护,建议在镜像中将 bwrap 设为 setuid)");
       }
     }
   }
@@ -152,7 +152,11 @@ export class CodexSession implements AgentSession {
   on(handler: (event: SessionEvent) => void) { this.listeners.add(handler); return () => { this.listeners.delete(handler); }; }
   async getEvents() { return usingDatabase() ? this.eventStore.read() : [...this.events]; }
   private sandbox() {
-    const readOnlyAccess = { type: "restricted", includePlatformDefaults: true, readableRoots: [this.cwd, ...this.readableSkills] };
+    // bwrap 后端在可写工作区内保持 .git/.codex 只读;legacy Landlock 后端不支持
+    // 受限读取(会直接 panic),回退时放开读取、写入仍限工作区,保证命令可执行。
+    const readOnlyAccess = process.platform === "linux" && !bwrapSandboxAvailable()
+      ? { type: "fullAccess" }
+      : { type: "restricted", includePlatformDefaults: true, readableRoots: [this.cwd, ...this.readableSkills] };
     return { type: "workspaceWrite", writableRoots: [this.cwd], readOnlyAccess, networkAccess: true, excludeTmpdirEnvVar: true, excludeSlashTmp: true };
   }
   async open(resume: boolean) {

@@ -10,7 +10,7 @@
 - **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用
 - **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
 - **项目管理**:一个项目 = 服务器上的一个工作目录,会话在其 cwd 中执行
-- **工作区沙箱**:基于 Codex 原生沙箱(Linux 强制启用 bubblewrap 后端),原生文件/命令工具的写入仅限所属工作区,读取额外允许必要系统文件和已启用 Skill;禁止工作区覆盖服务数据或其他项目根目录,且禁止沙箱绕过。Linux 部署需要安装 bubblewrap(Docker 镜像已内置)并允许非特权用户命名空间
+- **工作区沙箱**:基于 Codex 原生沙箱(Linux 优先启用 bubblewrap 后端,其在可写工作区内保持 `.git` 只读),原生文件/命令工具的写入仅限所属工作区,读取额外允许必要系统文件和已启用 Skill;禁止工作区覆盖服务数据或其他项目根目录,且禁止沙箱绕过。Linux 部署需要安装 bubblewrap(Docker 镜像已内置并设为 setuid,无需宿主开启非特权用户命名空间);bubblewrap 不可用时自动回退 Landlock 沙箱,写入仍限工作区但 `.git` 不再受写保护
 - **代码托管账户**:在「设置 → 通用」绑定 GitHub / Gitee,Agent 可使用当前用户的授权执行 clone、fetch、pull、push
 - **用户系统**:登录/注册;管理员由环境变量 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 创建,注册用户为普通用户;会话按用户隔离,管理员可见全部
 - **数据存储**:内置 SQLite 单文件部署,也可连接 MySQL,并兼容旧 JSON 数据迁移

@@ -82,12 +82,13 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   assert.equal(response?.data.content, "Codex integration works");
   assert.equal(toolCalls, 1);
   const patchResult = array(received.at(-1)?.messages).map(object).find((m) => m.role === "tool" && m.tool_call_id === "call_patch");
-  const namespaceDenied = /No permissions to create a new namespace/.test(String(patchResult?.content));
-  await t.test("native patch writes within the workspace", { skip: namespaceDenied ? "Host prohibits bubblewrap user namespaces; execution remains blocked" : false }, () => {
+  // bwrap 用户命名空间被禁时会回退 Landlock;两种后端都被宿主屏蔽时(如受限 CI 沙箱)只跳过写盘断言。
+  const sandboxBlocked = /No permissions to create a new namespace|error applying legacy Linux sandbox restrictions/.test(String(patchResult?.content));
+  await t.test("native patch writes within the workspace", { skip: sandboxBlocked ? "Host prohibits both bubblewrap user namespaces and Landlock; execution remains blocked" : false }, () => {
     assert.ok(fs.existsSync(path.join(process.env.WORKSPACE_ROOT!, "native-patch.txt")), JSON.stringify(patchResult));
     assert.equal(fs.readFileSync(path.join(process.env.WORKSPACE_ROOT!, "native-patch.txt"), "utf8"), "written by Codex\n");
   });
-  if (namespaceDenied) assert.equal(fs.existsSync(path.join(process.env.WORKSPACE_ROOT!, "native-patch.txt")), false);
+  if (sandboxBlocked) assert.equal(fs.existsSync(path.join(process.env.WORKSPACE_ROOT!, "native-patch.txt")), false);
   assert.ok(requestCount >= 2);
   assert.ok(events.some((event) => event.type === "tool.execution_complete"));
   assert.ok(calls > 0);

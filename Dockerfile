@@ -21,6 +21,7 @@ COPY --from=build /app /app
 # Mounted repositories can have a host UID that differs from the container.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates chromium fonts-noto-cjk git openssh-client bubblewrap novnc ripgrep websockify x11vnc xvfb \
+    && chmod 4755 /usr/bin/bwrap \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data \
     && git config --system --add safe.directory '*'
