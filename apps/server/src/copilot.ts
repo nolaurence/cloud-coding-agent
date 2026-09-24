@@ -976,7 +976,19 @@ export class CopilotManager {
           });
           break;
         }
+        const previous = rt.pendingAssistant;
+        if (
+          previous &&
+          !previous.text &&
+          previous.messageId &&
+          data.reasoningId &&
+          previous.messageId !== data.reasoningId
+        ) {
+          // Codex 按独立 item 推送每段思考;换段时先落定上一段,让前端"正在思考"刷新
+          this.commitPendingAssistant(rt);
+        }
         const pending = this.ensurePendingAssistant(rt, rt.currentTurnId ?? "", ts);
+        if (data.reasoningId && !pending.messageId) pending.messageId = data.reasoningId;
         pending.reasoning += data.deltaContent;
         this.emit(threadId, {
           kind: "assistant.reasoning_delta",
