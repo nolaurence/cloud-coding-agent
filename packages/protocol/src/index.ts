@@ -378,6 +378,29 @@ export interface ProjectFileWriteResult {
   version: string;
 }
 
+export interface WordDocumentPreview {
+  kind: "word";
+  path: string;
+  paragraphs: string[];
+}
+
+export interface SpreadsheetDocumentPreview {
+  kind: "excel";
+  path: string;
+  sheets: Array<{ name: string; rows: string[][] }>;
+}
+
+export interface PresentationDocumentPreview {
+  kind: "powerpoint";
+  path: string;
+  slides: Array<{ index: number; text: string[] }>;
+}
+
+export type DocumentPreview =
+  | WordDocumentPreview
+  | SpreadsheetDocumentPreview
+  | PresentationDocumentPreview;
+
 export interface GitDiffResult {
   patch: string;
   files: number;
@@ -564,7 +587,7 @@ export type ThreadEvent =
 
 export type ClientMessage =
   | { id: string; type: "shell.subscribe" }
-  | { id: string; type: "workspace.create"; name: string }
+  | { id: string; type: "workspace.create"; name: string; path?: string }
   | { id: string; type: "workspace.remove"; projectId: string }
   | {
       id: string;
@@ -610,6 +633,7 @@ export type ClientMessage =
   | { id: string; type: "project.files"; projectId: string }
   | { id: string; type: "project.directory.list"; projectId: string; path?: string }
   | { id: string; type: "project.file.read"; projectId: string; path: string }
+  | { id: string; type: "project.document.preview"; projectId: string; path: string }
   | {
       id: string;
       type: "project.file.write";

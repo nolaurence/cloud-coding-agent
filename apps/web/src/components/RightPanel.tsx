@@ -2,12 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import {
   ExternalLink,
   FileDiff,
+  FileSpreadsheet,
+  FileText,
   FolderTree,
   Gauge,
   Globe2,
   Image as ImageIcon,
   PanelRightClose,
   Plus,
+  Presentation,
   RefreshCw,
   SquareTerminal,
   X,
@@ -23,8 +26,9 @@ import "./workspace/workspace.css";
 import { shouldShowNativeBrowser } from "../lib/browserVisibility";
 import type { ImagePreviewTarget } from "../lib/imagePreview";
 import { ImagePreviewPanel } from "./ImagePreviewPanel";
+import { DocumentPanel } from "./workspace/DocumentPanel";
 
-type StaticPanelTab = "browser" | "terminal" | "files" | "diff" | "context";
+type StaticPanelTab = "browser" | "terminal" | "files" | "diff" | "context" | "word" | "excel" | "powerpoint";
 
 type PanelTab =
   | { id: StaticPanelTab; kind: "static"; label: string; icon: typeof Globe2 }
@@ -41,6 +45,9 @@ const panelOptions: {
   { id: "files", label: "文件", description: "浏览和编辑工作区文件。", icon: FolderTree },
   { id: "diff", label: "差异", description: "检查并提交代码更改。", icon: FileDiff },
   { id: "context", label: "上下文", description: "查看会话消息与工具统计。", icon: Gauge },
+  { id: "word", label: "Word", description: "预览 DOCX 文档。", icon: FileText },
+  { id: "excel", label: "Excel", description: "预览 XLSX 工作簿。", icon: FileSpreadsheet },
+  { id: "powerpoint", label: "PowerPoint", description: "预览 PPTX 演示文稿。", icon: Presentation },
 ];
 
 export function RightPanel({
@@ -127,6 +134,12 @@ export function RightPanel({
         ) : <Empty text="项目不存在" />;
       case "context":
         return <ContextPanel threadId={threadId} />;
+      case "word":
+        return projectId ? <DocumentPanel projectId={projectId} kind="word" /> : <Empty text="项目不存在" />;
+      case "excel":
+        return projectId ? <DocumentPanel projectId={projectId} kind="excel" /> : <Empty text="项目不存在" />;
+      case "powerpoint":
+        return projectId ? <DocumentPanel projectId={projectId} kind="powerpoint" /> : <Empty text="项目不存在" />;
     }
   };
 

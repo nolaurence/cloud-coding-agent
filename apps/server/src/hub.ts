@@ -74,7 +74,9 @@ import {
   revokeThreadShare,
   validateThreadShareToken,
 } from "./threadShares.js";
-import { createUserWorkspace } from "./workspaceProjects.js";
+import { createUserWorkspace, registerSelectedWorkspace } from "./workspaceProjects.js";
+import { isLocalMode } from "./env.js";
+import { previewProjectDocument } from "./documentPreview.js";
 
 interface ClientConn {
   socket: WebSocket;
@@ -582,7 +584,12 @@ export class Hub {
           break;
         }
         case "workspace.create": {
-          const { id, name } = await createUserWorkspace(conn.user.username, msg.name);
+          const project = msg.path
+            ? isLocalMode()
+              ? await registerSelectedWorkspace(conn.user.username, msg.name, msg.path)
+              : await createUserWorkspace(conn.user.username, msg.name)
+            : await createUserWorkspace(conn.user.username, msg.name);
+          const { id, name } = project;
           this.broadcastShell();
           this.reply(conn, msg.id, { id, name });
           break;
@@ -1106,6 +1113,11 @@ export class Hub {
         case "project.file.read": {
           const project = this.requireOwnedProject(conn, msg.projectId);
           this.reply(conn, msg.id, readProjectFile(project.path, msg.path));
+          break;
+        }
+        case "project.document.preview": {
+          const project = this.requireOwnedProject(conn, msg.projectId);
+          this.reply(conn, msg.id, previewProjectDocument(project.path, msg.path));
           break;
         }
         case "project.file.write": {

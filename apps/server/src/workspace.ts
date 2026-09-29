@@ -189,6 +189,14 @@ export function readProjectFile(root: string, relativePath: string): ProjectFile
   };
 }
 
+export function readProjectBinary(root: string, relativePath: string): Buffer {
+  const target = resolveInside(root, relativePath);
+  const stat = fs.statSync(target);
+  if (!stat.isFile()) throw new Error("目标不是文件");
+  if (stat.size > 32 * 1024 * 1024) throw new Error("文件超过 32 MB，无法预览");
+  return fs.readFileSync(target);
+}
+
 export function writeProjectFile(
   root: string,
   relativePath: string,

@@ -7,4 +7,9 @@ const browser = Object.freeze({
   setVisible: (threadId: string, visible: boolean) => ipcRenderer.send("cca-browser-visible", { threadId, visible }),
   detach: (threadId: string) => ipcRenderer.send("cca-browser-detach", threadId),
 });
-contextBridge.exposeInMainWorld("ccaDesktop", Object.freeze({ platform: process.platform, browser }));
+contextBridge.exposeInMainWorld("ccaDesktop", Object.freeze({
+  platform: process.platform,
+  localMode: true,
+  selectFolder: () => ipcRenderer.invoke("cca-select-folder") as Promise<string | null>,
+  browser,
+}));

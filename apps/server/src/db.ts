@@ -128,13 +128,19 @@ export function parseDatabaseUrl(connectionString: string): ParsedDatabaseUrl {
   if (connectionString.startsWith("mysql://")) {
     return { dialect: "mysql", connectionString };
   }
-  if (!connectionString.startsWith("sqlite:")) {
-    throw new Error("DATABASE_URL 必须使用 mysql:// 或 sqlite: 连接串");
+  // Local desktop builds use the embedded H2-style URL. Node's built-in
+  // synchronous SQLite driver provides the same file-backed embedded mode
+  // without requiring a separate database process or native addon.
+  const sqliteConnection = connectionString.startsWith("h2:")
+    ? `sqlite:${connectionString.slice("h2:".length)}`
+    : connectionString;
+  if (!sqliteConnection.startsWith("sqlite:")) {
+    throw new Error("DATABASE_URL 必须使用 mysql:// 或 sqlite: 或 h2: 连接串");
   }
 
   let parsed: URL;
   try {
-    parsed = new URL(connectionString);
+    parsed = new URL(sqliteConnection);
   } catch {
     throw new Error("SQLite DATABASE_URL 格式无效");
   }

@@ -2,7 +2,9 @@ export {};
 declare global {
   interface Window {
     ccaDesktop?: {
-      platform: string;
+    platform: string;
+    localMode?: boolean;
+    selectFolder?(): Promise<string | null>;
       browser: {
         attach(threadId: string, ticket: string, bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
         updateBounds(threadId: string, bounds: { x: number; y: number; width: number; height: number }): void;

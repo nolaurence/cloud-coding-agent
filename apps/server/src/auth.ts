@@ -8,7 +8,7 @@ import type {
   RegistrationPolicy,
   UserRole,
 } from "@cca/protocol";
-import { REGISTRATION_FILE, SECRET_FILE, USERS_FILE } from "./env.js";
+import { isLocalMode, REGISTRATION_FILE, SECRET_FILE, USERS_FILE } from "./env.js";
 import { databaseDialect, enqueueWrite, query, transaction, upsert, usingDatabase } from "./db.js";
 
 export type Role = UserRole;
@@ -39,6 +39,14 @@ interface RegistrationSettings {
 
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const REGISTRATION_SETTINGS_ID = 1;
+export const LOCAL_TOKEN = "cca-local-mode";
+const LOCAL_USER: User = {
+  username: "local",
+  role: "admin",
+  passwordHash: "",
+  salt: "",
+  createdAt: 0,
+};
 
 let users: User[] = [];
 let registrationSettings: RegistrationSettings = { inviteRequired: false, invites: [] };
@@ -248,6 +256,13 @@ function inviteMatches(code: string): boolean {
 
 export async function initAuth() {
   secret = loadSecret();
+  if (isLocalMode()) {
+    users = [];
+    registrationSettings = { inviteRequired: false, invites: [] };
+    bootstrapAdminUsername = LOCAL_USER.username;
+    console.log("[cca] local mode enabled: account management and login are disabled");
+    return;
+  }
   if (usingDatabase()) {
     const rows = await query<{
       username: string;
@@ -340,7 +355,12 @@ export async function initAuth() {
 }
 
 export function getUserRole(username: string): Role | undefined {
+  if (isLocalMode() && username === LOCAL_USER.username) return LOCAL_USER.role;
   return findUser(username)?.role;
+}
+
+export function getLocalUser(): User {
+  return LOCAL_USER;
 }
 
 export function getBootstrapAdminUsername(): string {
@@ -348,6 +368,7 @@ export function getBootstrapAdminUsername(): string {
 }
 
 export function listUsers(): AdminUser[] {
+  if (isLocalMode()) return [];
   return users
     .map(toAdminUser)
     .sort((left, right) => left.createdAt - right.createdAt || left.username.localeCompare(right.username));
@@ -384,6 +405,7 @@ export function applyRegistrationEnvironment(settings: RegistrationSettings): Re
 }
 
 export function getPublicRegistrationPolicy(): RegistrationPolicy {
+  if (isLocalMode()) return { inviteRequired: false };
   return { inviteRequired: registrationSettings.inviteRequired };
 }
 
@@ -437,6 +459,7 @@ export function revokeInvite(id: string): InviteSummary {
 }
 
 export function registerUser(username: string, password: string, inviteCode?: string): User {
+  if (isLocalMode()) throw new Error("本地模式已关闭用户管理");
   const name = username.trim();
   if (!/^[\w.-]{3,32}$/.test(name)) {
     throw new Error("用户名需为 3-32 位字母、数字、点、中划线或下划线");
@@ -468,6 +491,7 @@ export function registerUser(username: string, password: string, inviteCode?: st
 }
 
 export function verifyUser(username: string, password: string): User | null {
+  if (isLocalMode()) return null;
   const user = findUser(username);
   if (!user) return null;
   const hash = hashPassword(password, user.salt);
@@ -480,6 +504,7 @@ export function verifyUser(username: string, password: string): User | null {
 }
 
 export function issueToken(user: User): string {
+  if (isLocalMode()) return LOCAL_TOKEN;
   const payload: TokenPayload = {
     username: user.username,
     role: user.role,
@@ -490,6 +515,11 @@ export function issueToken(user: User): string {
 }
 
 export function verifyToken(token: string): TokenPayload | null {
+  if (isLocalMode()) {
+    return token === LOCAL_TOKEN
+      ? { username: LOCAL_USER.username, role: LOCAL_USER.role, exp: Number.MAX_SAFE_INTEGER }
+      : null;
+  }
   const dot = token.lastIndexOf(".");
   if (dot <= 0) return null;
   const body = token.slice(0, dot);

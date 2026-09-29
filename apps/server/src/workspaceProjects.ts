@@ -47,3 +47,26 @@ export async function createUserWorkspace(
     throw error;
   }
 }
+
+/** Register an existing directory selected by the desktop user. */
+export async function registerSelectedWorkspace(
+  ownerId: string,
+  inputName: string,
+  selectedPath: string,
+): Promise<Project> {
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId) throw new Error("工作区所有者无效");
+  const name = normalizeWorkspaceName(inputName);
+  if (!selectedPath || selectedPath.includes("\0")) throw new Error("本地文件夹路径无效");
+  const projectPath = fs.realpathSync(selectedPath);
+  if (!fs.statSync(projectPath).isDirectory()) throw new Error("本地文件夹无效");
+
+  const project: Project = {
+    id: randomUUID(),
+    name,
+    path: projectPath,
+    ownerId: normalizedOwnerId,
+  };
+  await store.addProject(project);
+  return project;
+}

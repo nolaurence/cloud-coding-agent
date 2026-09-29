@@ -7,12 +7,14 @@ export function RightPanelResizeHandle({
   minWidth,
   maxWidth,
   resizing,
+  placement = "right",
 }: {
   handlers: ResizableWidthHandlers;
   width: number;
   minWidth: number;
   maxWidth: number;
   resizing: boolean;
+  placement?: "left" | "right";
 }) {
   return (
     <div
@@ -26,7 +28,10 @@ export function RightPanelResizeHandle({
       aria-valuenow={Math.round(width)}
       aria-valuetext={`${Math.round(width)} 像素`}
       title="拖动调整面板宽度；双击恢复默认宽度"
-      className="group relative hidden w-2 shrink-0 touch-none cursor-col-resize select-none lg:block"
+      className={cn(
+        "group relative hidden w-2 shrink-0 touch-none cursor-col-resize select-none lg:block",
+        placement === "left" ? "lg:order-1" : "lg:order-3",
+      )}
       {...handlers}
     >
       <span

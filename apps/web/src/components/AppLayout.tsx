@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Menu, PanelLeftOpen, PanelRightOpen, Share2, WifiOff } from "lucide-react";
+import { ArrowLeftRight, Menu, PanelLeftOpen, PanelRightOpen, Share2, WifiOff } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { useApp } from "../lib/store";
@@ -23,6 +23,8 @@ export function AppLayout() {
   const workspacePanelOpen = useApp((s) => s.workspacePanelOpen);
   const setWorkspacePanelOpen = useApp((s) => s.setWorkspacePanelOpen);
   const setShareDialogOpen = useApp((s) => s.setShareDialogOpen);
+  const panelPlacement = useApp((s) => s.panelPlacement);
+  const setPanelPlacement = useApp((s) => s.setPanelPlacement);
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
@@ -149,6 +151,17 @@ export function AppLayout() {
                 onClick={() => setWorkspacePanelOpen(true)}
               >
                 <PanelRightOpen className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="互换对话区与工作区位置"
+                title={panelPlacement === "right" ? "将工作区移到左侧" : "将工作区移到右侧"}
+                className="text-muted-foreground"
+                onClick={() => setPanelPlacement(panelPlacement === "right" ? "left" : "right")}
+              >
+                <ArrowLeftRight className="h-4 w-4" />
               </Button>
             </>
           )}

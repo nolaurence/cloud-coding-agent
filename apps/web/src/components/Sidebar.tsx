@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   FolderGit2,
+  FolderOpen,
   FolderPlus,
   Eye,
   Loader2,
@@ -50,12 +51,15 @@ export function Sidebar({
   const removeWorkspace = useApp((s) => s.removeWorkspace);
   const deleteThread = useApp((s) => s.deleteThread);
   const user = useApp((s) => s.user);
+  const localMode = useApp((s) => s.localMode);
+  const selectLocalFolder = useApp((s) => s.selectLocalFolder);
   const logout = useApp((s) => s.logout);
   const connected = useApp((s) => s.connected);
   const location = useLocation();
   const navigate = useNavigate();
   const [addOpen, setAddOpen] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
+  const [selectedFolder, setSelectedFolder] = useState("");
   const [workspaceError, setWorkspaceError] = useState("");
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState<
@@ -74,12 +78,14 @@ export function Sidebar({
     .sort((a, b) => b.updatedAt - a.updatedAt);
 
   const createNamedWorkspace = async () => {
-    if (!workspaceName.trim() || creatingWorkspace) return;
+    const name = workspaceName.trim() || (localMode ? selectedFolder.split(/[\\/]/).filter(Boolean).at(-1) || "本地工作区" : "");
+    if (creatingWorkspace || !name) return;
     setCreatingWorkspace(true);
     setWorkspaceError("");
     try {
-      await createWorkspace(workspaceName);
+      await createWorkspace(name, localMode ? selectedFolder || undefined : undefined);
       setWorkspaceName("");
+      setSelectedFolder("");
       setAddOpen(false);
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : "创建工作区失败");
@@ -281,26 +287,28 @@ export function Sidebar({
       <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
         <div className="mb-1 flex items-center gap-2 rounded-md px-2 py-1.5">
           <User className="h-4 w-4 shrink-0 text-zinc-400" />
-          <span className="min-w-0 flex-1 truncate text-sm">{user?.username}</span>
+          <span className="min-w-0 flex-1 truncate text-sm">{localMode ? "本地工作区" : user?.username}</span>
           {user?.role === "admin" && (
             <span title="管理员">
               <ShieldCheck className="h-3.5 w-3.5 text-blue-500" />
             </span>
           )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="退出登录"
-            title="退出登录"
-            className="text-zinc-400 hover:text-red-500"
-            onClick={() => {
-              logout();
-              navigate("/");
-              onNavigate?.();
-            }}
-          >
-            <LogOut className="h-4 w-4" />
-          </Button>
+          {!localMode && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="退出登录"
+              title="退出登录"
+              className="text-zinc-400 hover:text-red-500"
+              onClick={() => {
+                logout();
+                navigate("/");
+                onNavigate?.();
+              }}
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
+          )}
         </div>
         <Link
           to="/settings/general"
@@ -325,6 +333,7 @@ export function Sidebar({
           setAddOpen(open);
           if (!open) {
             setWorkspaceName("");
+            setSelectedFolder("");
             setWorkspaceError("");
           }
         }}
@@ -350,12 +359,31 @@ export function Sidebar({
               autoFocus
               disabled={creatingWorkspace}
             />
+            {localMode && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="justify-start"
+                  disabled={creatingWorkspace}
+                  onClick={() => void selectLocalFolder().then((folder) => {
+                    if (!folder) return;
+                    setSelectedFolder(folder);
+                    if (!workspaceName.trim()) setWorkspaceName(folder.split(/[\\/]/).filter(Boolean).at(-1) ?? "本地工作区");
+                  })}
+                >
+                  <FolderOpen className="h-4 w-4" />
+                  {selectedFolder ? "重新选择本地文件夹" : "选择本地文件夹"}
+                </Button>
+                {selectedFolder && <div className="truncate rounded-md bg-zinc-100 px-2.5 py-2 text-xs text-zinc-500 dark:bg-zinc-900" title={selectedFolder}>{selectedFolder}</div>}
+              </>
+            )}
             {workspaceError && <p className="text-xs text-red-600 dark:text-red-400">{workspaceError}</p>}
             <DialogFooter>
               <Button type="button" variant="outline" disabled={creatingWorkspace} onClick={() => setAddOpen(false)}>
                 取消
               </Button>
-              <Button type="submit" disabled={creatingWorkspace || !workspaceName.trim()}>
+              <Button type="submit" disabled={creatingWorkspace || (!workspaceName.trim() && !selectedFolder)}>
                 {creatingWorkspace && <Loader2 className="animate-spin" />}
                 创建
               </Button>

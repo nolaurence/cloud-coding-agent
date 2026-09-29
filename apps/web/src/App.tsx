@@ -19,6 +19,7 @@ import { useTheme } from "./lib/theme";
 export default function App() {
   useTheme();
   const user = useApp((s) => s.user);
+  const localMode = useApp((s) => s.localMode);
   const authReady = useApp((s) => s.authReady);
 
   if (!authReady) {
@@ -107,7 +108,7 @@ export default function App() {
           <Route
             path="users"
             element={
-              user.role === "admin" ? (
+              user.role === "admin" && !localMode ? (
                 <UsersSettings />
               ) : (
                 <Navigate to="/settings/general" replace />

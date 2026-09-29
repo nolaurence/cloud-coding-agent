@@ -54,6 +54,15 @@ import {
 
 const TOKEN_KEY = "cca-token";
 const SHARE_TOKENS_KEY = "cca-thread-share-tokens";
+const PANEL_PLACEMENT_KEY = "cloud-coding-agent:panel-placement";
+
+function readPanelPlacement(): "left" | "right" {
+  try {
+    return window.localStorage.getItem(PANEL_PLACEMENT_KEY) === "left" ? "left" : "right";
+  } catch {
+    return "right";
+  }
+}
 
 async function apiFetch<T>(
   path: string,
@@ -192,6 +201,7 @@ function inferActiveTurn(
 
 interface AppState {
   user: AuthUser | null;
+  localMode: boolean;
   authReady: boolean;
   connected: boolean;
   projects: Workspace[];
@@ -205,6 +215,7 @@ interface AppState {
   composerDrafts: ComposerDrafts;
   activeThreadId: string | null;
   workspacePanelOpen: boolean;
+  panelPlacement: "left" | "right";
   shareDialogOpen: boolean;
 
   init: () => void;
@@ -220,7 +231,8 @@ interface AppState {
   revokeInvite: (inviteId: string) => Promise<void>;
   refreshModels: () => Promise<void>;
   discoverProviderModels: (provider: ProviderModelDiscoveryConfig) => Promise<ModelEntry[]>;
-  createWorkspace: (name: string) => Promise<Workspace>;
+  createWorkspace: (name: string, path?: string) => Promise<Workspace>;
+  selectLocalFolder: () => Promise<string | null>;
   removeWorkspace: (projectId: string) => Promise<void>;
   createThread: (
     projectId: string,
@@ -262,6 +274,7 @@ interface AppState {
   setComposerDraft: (key: string, text: string) => void;
   clearComposerDraft: (key: string, expectedText: string) => void;
   setWorkspacePanelOpen: (open: boolean) => void;
+  setPanelPlacement: (placement: "left" | "right") => void;
   setShareDialogOpen: (open: boolean) => void;
 }
 
@@ -558,6 +571,7 @@ export const useApp = create<AppState>((set, get) => {
       composerDrafts: {},
       activeThreadId: null,
       workspacePanelOpen: false,
+      panelPlacement: "right",
       shareDialogOpen: false,
     });
   }
@@ -570,6 +584,7 @@ export const useApp = create<AppState>((set, get) => {
 
   return {
     user: null,
+    localMode: false,
     authReady: false,
     connected: false,
     projects: [],
@@ -583,6 +598,7 @@ export const useApp = create<AppState>((set, get) => {
     composerDrafts: {},
     activeThreadId: null,
     workspacePanelOpen: false,
+    panelPlacement: readPanelPlacement(),
     shareDialogOpen: false,
 
     init: () => {
@@ -612,20 +628,31 @@ export const useApp = create<AppState>((set, get) => {
           if (active) await get().openThread(active).catch(() => {});
         })();
       });
-      const token = localStorage.getItem(TOKEN_KEY);
-      if (!token) {
-        set({ authReady: true });
-        return;
-      }
-      apiFetch<{ user: AuthUser }>("/api/auth/me", { auth: true })
-        .then((data) => {
+      void (async () => {
+        try {
+          const runtime = await fetch("/api/runtime").then((response) => response.json()) as { localMode?: boolean };
+          if (runtime.localMode) {
+            set({ localMode: true });
+            startSession("cca-local-mode", { username: "local", role: "admin" });
+            return;
+          }
+        } catch {
+          // Older remote servers do not expose the runtime endpoint.
+        }
+        const token = localStorage.getItem(TOKEN_KEY);
+        if (!token) {
+          set({ authReady: true });
+          return;
+        }
+        try {
+          const data = await apiFetch<{ user: AuthUser }>("/api/auth/me", { auth: true });
           set({ user: data.user, authReady: true });
           connect(token);
-        })
-        .catch(() => {
+        } catch {
           localStorage.removeItem(TOKEN_KEY);
           set({ authReady: true });
-        });
+        }
+      })();
     },
 
     login: async (username, password) => {
@@ -650,6 +677,14 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     setWorkspacePanelOpen: (open) => set({ workspacePanelOpen: open }),
+    setPanelPlacement: (placement) => {
+      try {
+        window.localStorage.setItem(PANEL_PLACEMENT_KEY, placement);
+      } catch {
+        // Layout preference is optional when storage is unavailable.
+      }
+      set({ panelPlacement: placement });
+    },
     setShareDialogOpen: (open) => set({ shareDialogOpen: open }),
     setComposerDraft: (key, text) =>
       set((state) => ({
@@ -704,8 +739,13 @@ export const useApp = create<AppState>((set, get) => {
       return request<ModelEntry[]>({ type: "provider.models.discover", provider });
     },
 
-    createWorkspace: async (name) => {
-      return request<Workspace>({ type: "workspace.create", name });
+    createWorkspace: async (name, path) => {
+      return request<Workspace>({ type: "workspace.create", name, path });
+    },
+
+    selectLocalFolder: async () => {
+      if (!window.ccaDesktop?.selectFolder) return null;
+      return window.ccaDesktop.selectFolder();
     },
 
     removeWorkspace: async (projectId) => {

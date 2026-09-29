@@ -17,8 +17,18 @@ export const GIT_BINDINGS_FILE = path.join(root, "git-bindings.json");
 export const SECRET_FILE = path.join(root, "secret.key");
 export const SKILLS_DIR = path.join(root, "skills");
 export const COPILOT_HOME = path.join(root, "copilot-home");
-export const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT?.trim() || "/workspace");
+export const WORKSPACE_ROOT = path.resolve(
+  process.env.WORKSPACE_ROOT?.trim() ||
+    (process.env.CCA_LOCAL_MODE === "true" || process.env.LOCAL_MODE === "true"
+      ? path.join(root, "workspaces")
+      : "/workspace"),
+);
 export const UPLOADS_DIR = path.join(root, "uploads");
+
+/** Desktop and standalone local builds opt out of account management. */
+export function isLocalMode(): boolean {
+  return process.env.CCA_LOCAL_MODE === "true" || process.env.LOCAL_MODE === "true";
+}
 
 export function ensureDataDirs() {
   for (const dir of [root, SKILLS_DIR, COPILOT_HOME, WORKSPACE_ROOT, UPLOADS_DIR]) {

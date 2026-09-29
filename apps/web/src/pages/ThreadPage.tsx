@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
+import { ArrowLeft, ArrowLeftRight, FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { resolveThreadModel, resolveThreadModelProviderId } from "@cca/protocol";
 import type { AgentMode, ModelRef } from "@cca/protocol";
@@ -36,6 +36,8 @@ export function ThreadPage() {
   const setThreadAgentMode = useApp((s) => s.setThreadAgentMode);
   const panelOpen = useApp((s) => s.workspacePanelOpen);
   const setPanelOpen = useApp((s) => s.setWorkspacePanelOpen);
+  const panelPlacement = useApp((s) => s.panelPlacement);
+  const setPanelPlacement = useApp((s) => s.setPanelPlacement);
   const shareDialogOpen = useApp((s) => s.shareDialogOpen);
   const setShareDialogOpen = useApp((s) => s.setShareDialogOpen);
   const state = useThreadState(threadId);
@@ -73,7 +75,7 @@ export function ThreadPage() {
     defaultWidth: RIGHT_PANEL_DEFAULT_WIDTH,
     minWidth: RIGHT_PANEL_MIN_WIDTH,
     maxWidth: panelMaxWidth,
-    edge: "left",
+    edge: panelPlacement === "right" ? "left" : "right",
   });
 
   const onModelChange = async (ref: ModelRef) => {
@@ -159,7 +161,7 @@ export function ThreadPage() {
 
   return (
     <div ref={layoutRef} className="flex h-full min-h-0 min-w-0 overflow-hidden">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${panelPlacement === "left" ? "lg:order-last" : ""}`}>
         <header className="hidden shrink-0 bg-background md:block">
           <div className="flex min-h-13 items-center gap-2 px-3 py-2 sm:px-4">
             <div className="min-w-0 flex-1">
@@ -196,6 +198,17 @@ export function ThreadPage() {
                   onClick={() => setPanelOpen(true)}
                 >
                   <PanelRightOpen className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="互换对话区与工作区位置"
+                  title={panelPlacement === "right" ? "将工作区移到左侧" : "将工作区移到右侧"}
+                  className="text-muted-foreground"
+                  onClick={() => setPanelPlacement(panelPlacement === "right" ? "left" : "right")}
+                >
+                  <ArrowLeftRight className="h-4 w-4" />
                 </Button>
               </>
             )}
@@ -291,13 +304,14 @@ export function ThreadPage() {
               minWidth={RIGHT_PANEL_MIN_WIDTH}
               maxWidth={panelMaxWidth}
               resizing={resizing}
+              placement={panelPlacement}
             />
           )}
           <div
             id="thread-workspace-panel"
             aria-hidden={!panelOpen}
             className={panelOpen
-              ? `fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto lg:my-[10px] lg:mr-[10px] lg:w-[var(--right-panel-width)] lg:shrink-0 lg:rounded-lg lg:border lg:border-zinc-200 lg:shadow-md lg:shadow-zinc-950/10 dark:bg-zinc-950 lg:dark:border-zinc-800 lg:dark:shadow-black/30 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`
+              ? `fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto lg:my-[10px] ${panelPlacement === "right" ? "lg:order-last lg:mr-[10px]" : "lg:order-first lg:ml-[10px]"} lg:w-[var(--right-panel-width)] lg:shrink-0 lg:rounded-lg lg:border lg:border-zinc-200 lg:shadow-md lg:shadow-zinc-950/10 dark:bg-zinc-950 lg:dark:border-zinc-800 lg:dark:shadow-black/30 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`
               : "hidden"}
             style={{ "--right-panel-width": `${panelWidth}px` } as CSSProperties}
           >

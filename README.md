@@ -5,6 +5,8 @@
 ## 功能
 
 - **对话流**(自研,非 assistant-ui):流式输出、思考过程折叠、工具调用时间线、Markdown 渲染
+- **Office 查看器**:工作区内的 DOCX、XLSX、PPTX 可在右侧 tab 中只读预览
+- **工作台布局**:右上角按钮可将对话区与工作区面板互换,位置会在本机记住
 - **模型配置**:支持 OpenAI(Chat Completions)与 OpenAI Responses 两种 wire 协议,以及 Azure 的 OpenAI 兼容接口;BYOK,会话内可切换同一提供方的模型。暂不支持 Anthropic 原生 Messages 协议
 - **MCP 模块**:本地 stdio / 远程 HTTP MCP 服务器管理,支持平台级配置和 workspace 根目录 `.mcp.json`,按工具白名单启用
 - **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用
@@ -27,7 +29,7 @@ Codex app-server(会话、工具、MCP、技能)
 本地鉴权网关 → 原生 Responses / Chat Completions 上游
 ```
 
-数据存储支持三种模式:`DATABASE_URL=sqlite:/path/to/cca.db` 使用内置 SQLite,`DATABASE_URL=mysql://...` 使用 MySQL;两者都会自动建表并从旧 JSON 文件迁移。未配置时继续使用 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。新会话在数据目录的 `codex-home/<会话 ID>/` 中保存原生历史、线程映射和应用事件,每个会话使用独立进程和 CODEX_HOME。配置 MySQL/SQLite 时,新会话消息、工具调用/结果及其时间戳写入 `thread_events` 表,按会话内序号读取,事件 ID 去重;写入串行分批提交。`cca-events.jsonl` 保留为故障补录日志,已有 Codex 会话在下次打开时自动补录,数据库故障会明确报错。未配置数据库时继续使用 JSONL。流式正文增量不逐 token 入库,完成消息保存全文;工具开始/完成事件保留参数、结果、状态和时间。Codex 原生状态仍用于续聊,数据库不能替代它,备份仍须覆盖数据库和数据目录。旧 `copilot-home/` 历史保留只读,不自动转换或续写;升级前应备份整个数据目录。旧 Copilot 默认模型会清空,请重新选择模型;连接器请重新选择非 Copilot 模型。
+数据存储支持三种模式:`DATABASE_URL=sqlite:/path/to/cca.db` 使用内置 SQLite,`DATABASE_URL=h2:/path/to/cca.db` 是桌面本地模式使用的内置嵌入式数据库别名,`DATABASE_URL=mysql://...` 使用 MySQL;两者都会自动建表并从旧 JSON 文件迁移。未配置时继续使用 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。新会话在数据目录的 `codex-home/<会话 ID>/` 中保存原生历史、线程映射和应用事件,每个会话使用独立进程和 CODEX_HOME。配置 MySQL/SQLite 时,新会话消息、工具调用/结果及其时间戳写入 `thread_events` 表,按会话内序号读取,事件 ID 去重;写入串行分批提交。`cca-events.jsonl` 保留为故障补录日志,已有 Codex 会话在下次打开时自动补录,数据库故障会明确报错。未配置数据库时继续使用 JSONL。流式正文增量不逐 token 入库,完成消息保存全文;工具开始/完成事件保留参数、结果、状态和时间。Codex 原生状态仍用于续聊,数据库不能替代它,备份仍须覆盖数据库和数据目录。旧 `copilot-home/` 历史保留只读,不自动转换或续写;升级前应备份整个数据目录。旧 Copilot 默认模型会清空,请重新选择模型;连接器请重新选择非 Copilot 模型。
 
 ## 本地开发
 
@@ -40,7 +42,7 @@ npm run dev        # server :8787 + web :5173(代理 /ws)
 
 ## Desktop(macOS / Windows)
 
-Electron 桌面版首次启动会在 `userData` 中生成并以受限权限保存强随机管理员密码,只通过原生对话框显示一次；后续启动复用该密码。桌面注册强制使用管理员签发的邀请码。Electron 桌面版在应用内启动同一个 Fastify 服务,使用随机的 `127.0.0.1` 端口;数据和 SQLite 数据库保存在 Electron `userData` 目录,项目工作区默认为其 `workspaces/` 子目录。桌面进程设置 `BROWSER_BACKEND=electron-ipc`:每个会话使用独立、非持久化且沙箱化的 Electron `WebContentsView`,右侧浏览器面板显示该原生视图。请求会在服务子进程与 Electron 主进程之间通过受验证、限时的 IPC 转发;仅支持 `browser_use` 的固定操作,不提供任意 JavaScript。非桌面部署仍使用原有 Linux Xvfb/Chromium/noVNC 后端。
+Electron 桌面版运行本地模式:关闭登录、注册和用户管理,使用 `userData/cca.db` 的内置嵌入式数据库,首次创建工作区时可通过原生文件夹选择器登记任意本地目录。数据和默认工作区保存在 Electron `userData` 目录;应用内启动同一个 Fastify 服务并使用随机的 `127.0.0.1` 端口。桌面进程设置 `BROWSER_BACKEND=electron-ipc`:每个会话使用独立、非持久化且沙箱化的 Electron `WebContentsView`,右侧浏览器面板显示该原生视图。请求会在服务子进程与 Electron 主进程之间通过受验证、限时的 IPC 转发;仅支持 `browser_use` 的固定操作,不提供任意 JavaScript。非桌面部署仍使用原有 Linux Xvfb/Chromium/noVNC 后端。
 
 ```bash
 npm ci

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FolderPlus, Loader2 } from "lucide-react";
+import { FolderOpen, FolderPlus, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { AgentMode, ModelRef, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
@@ -21,7 +21,9 @@ import {
 export function NewChatPage() {
   const projects = useApp((s) => s.projects);
   const settings = useApp((s) => s.settings);
+  const localMode = useApp((s) => s.localMode);
   const createWorkspace = useApp((s) => s.createWorkspace);
+  const selectLocalFolder = useApp((s) => s.selectLocalFolder);
   const createThread = useApp((s) => s.createThread);
   const navigate = useNavigate();
   const [projectId, setProjectId] = useState<string>("");
@@ -29,6 +31,7 @@ export function NewChatPage() {
   const [agentMode, setAgentMode] = useState<AgentMode>("standard");
   const [creating, setCreating] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
+  const [selectedFolder, setSelectedFolder] = useState("");
   const [workspaceError, setWorkspaceError] = useState("");
 
   const effectiveProjectId = projectId || projects[0]?.id || "";
@@ -49,13 +52,15 @@ export function NewChatPage() {
   };
 
   const onCreateWorkspace = async () => {
-    if (creating || !workspaceName.trim()) return;
+    const name = workspaceName.trim() || (localMode ? selectedFolder.split(/[\\/]/).filter(Boolean).at(-1) || "本地工作区" : "");
+    if (creating || !name) return;
     setCreating(true);
     setWorkspaceError("");
     try {
-      const workspace = await createWorkspace(workspaceName);
+      const workspace = await createWorkspace(name, localMode ? selectedFolder || undefined : undefined);
       setProjectId(workspace.id);
       setWorkspaceName("");
+      setSelectedFolder("");
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : "创建工作区失败");
     } finally {
@@ -92,8 +97,31 @@ export function NewChatPage() {
               autoFocus
               disabled={creating}
             />
+            {localMode && (
+              <div className="mt-3 flex flex-col gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full justify-start"
+                  disabled={creating}
+                  onClick={() => void selectLocalFolder().then((folder) => {
+                    if (!folder) return;
+                    setSelectedFolder(folder);
+                    if (!workspaceName.trim()) setWorkspaceName(folder.split(/[\\/]/).filter(Boolean).at(-1) ?? "本地工作区");
+                  })}
+                >
+                  <FolderOpen className="h-4 w-4" />
+                  {selectedFolder ? "重新选择本地文件夹" : "选择本地文件夹"}
+                </Button>
+                {selectedFolder && (
+                  <div className="truncate rounded-md bg-zinc-100 px-2.5 py-2 text-xs text-zinc-500 dark:bg-zinc-900" title={selectedFolder}>
+                    {selectedFolder}
+                  </div>
+                )}
+              </div>
+            )}
             {workspaceError && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{workspaceError}</p>}
-            <Button className="mt-3 w-full" type="submit" disabled={creating || !workspaceName.trim()}>
+            <Button className="mt-3 w-full" type="submit" disabled={creating || (!workspaceName.trim() && !selectedFolder)}>
               {creating && <Loader2 className="animate-spin" />}
               创建工作区
             </Button>
