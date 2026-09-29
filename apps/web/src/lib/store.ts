@@ -744,7 +744,9 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     selectLocalFolder: async () => {
-      if (!window.ccaDesktop?.selectFolder) return null;
+      if (!window.ccaDesktop?.selectFolder) {
+        throw new Error("当前窗口未启用本地文件夹选择器");
+      }
       return window.ccaDesktop.selectFolder();
     },
 

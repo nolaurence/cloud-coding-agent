@@ -21,7 +21,7 @@ const shared = {
 
 await Promise.all([
   build({ ...shared, entryPoints: ["src/main.ts"], outfile: "dist/main.js", external: ["electron"] }),
-  build({ ...shared, entryPoints: ["src/preload.ts"], outfile: "dist/preload.js", external: ["electron"] }),
+  build({ ...shared, format: "cjs", entryPoints: ["src/preload.ts"], outfile: "dist/preload.cjs", external: ["electron"] }),
 
 ]);
 await import("./build-server.mjs");

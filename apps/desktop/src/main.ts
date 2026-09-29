@@ -9,7 +9,7 @@ import { isValidBrowserBounds } from "./browserSecurity.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.resolve(__dirname, "../../server/dist/index.js");
-const PRELOAD_ENTRY = path.join(__dirname, "preload.js");
+const PRELOAD_ENTRY = path.join(__dirname, "preload.cjs");
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
 let serverOrigin: string | null = null;

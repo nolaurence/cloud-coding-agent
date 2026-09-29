@@ -108,7 +108,7 @@ export function NewChatPage() {
                     if (!folder) return;
                     setSelectedFolder(folder);
                     if (!workspaceName.trim()) setWorkspaceName(folder.split(/[\\/]/).filter(Boolean).at(-1) ?? "本地工作区");
-                  })}
+                  }).catch((error) => setWorkspaceError(error instanceof Error ? error.message : "无法打开文件夹选择器"))}
                 >
                   <FolderOpen className="h-4 w-4" />
                   {selectedFolder ? "重新选择本地文件夹" : "选择本地文件夹"}
