@@ -25,6 +25,7 @@ import { cn } from "../lib/utils";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { BrandLogo } from "./BrandLogo";
+import { WindowControls } from "./WindowControls";
 import {
   Dialog,
   DialogContent,
@@ -55,6 +56,7 @@ export function Sidebar({
   const selectLocalFolder = useApp((s) => s.selectLocalFolder);
   const logout = useApp((s) => s.logout);
   const connected = useApp((s) => s.connected);
+  const appName = localMode ? "Kloud Work" : "Kloud Coding Agent";
   const location = useLocation();
   const navigate = useNavigate();
   const [addOpen, setAddOpen] = useState(false);
@@ -96,9 +98,10 @@ export function Sidebar({
 
   return (
     <aside className="flex h-full w-full shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:w-[17rem] md:rounded-lg md:border md:shadow-md md:shadow-zinc-950/10 dark:border-zinc-800 dark:md:shadow-black/30 dark:bg-zinc-900">
-      <div className="flex h-12 items-center gap-2 px-4">
+      <div className="window-drag-region flex h-12 items-center gap-2 px-4">
+        <WindowControls show="mac" />
         <BrandLogo className="h-6 w-6" />
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold">kcloud coding agent</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold">{appName}</span>
         {!connected && (
           <WifiOff className="h-3.5 w-3.5 text-amber-500" aria-label="正在连接服务器" />
         )}
@@ -109,7 +112,7 @@ export function Sidebar({
             size="icon-sm"
             aria-label="隐藏会话侧边栏"
             title="隐藏会话侧边栏 (⌘B)"
-            className="text-zinc-400"
+            className="window-no-drag text-zinc-400"
             onClick={onCollapse}
           >
             <PanelLeftClose className="h-4 w-4" />
@@ -121,6 +124,7 @@ export function Sidebar({
             variant="ghost"
             size="icon-sm"
             aria-label="关闭侧栏"
+            className="window-no-drag"
             onClick={onClose}
           >
             <X className="h-4 w-4" />

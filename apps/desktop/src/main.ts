@@ -10,6 +10,8 @@ import { isValidBrowserBounds } from "./browserSecurity.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.resolve(__dirname, "../../server/dist/index.js");
 const PRELOAD_ENTRY = path.join(__dirname, "preload.cjs");
+const APP_NAME = "Kloud Work";
+const APP_ICON = path.resolve(__dirname, "../../web/dist/kloud-logo.png");
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
 let serverOrigin: string | null = null;
@@ -77,6 +79,9 @@ function createWindow(origin: string): BrowserWindow {
     height: 900,
     minWidth: 960,
     minHeight: 640,
+    title: APP_NAME,
+    frame: false,
+    icon: APP_ICON,
     show: false,
     backgroundColor: "#111827",
     webPreferences: {
@@ -106,6 +111,9 @@ function createWindow(origin: string): BrowserWindow {
   void window.loadURL(origin);
   browserViews = new ElectronBrowserViews(window);
   ipcMain.removeHandler("cca-select-folder");
+  ipcMain.removeHandler("cca-window-minimize");
+  ipcMain.removeHandler("cca-window-toggle-maximize");
+  ipcMain.removeHandler("cca-window-close");
   ipcMain.handle("cca-select-folder", async (event) => {
     if (event.sender !== window.webContents || !isMainRenderer(event.senderFrame?.url, origin)) {
       throw new Error("Unauthorized folder picker caller");
@@ -115,6 +123,25 @@ function createWindow(origin: string): BrowserWindow {
       title: "选择本地工作区",
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  const assertWindowControlCaller = (event: Electron.IpcMainInvokeEvent) => {
+    if (event.sender !== window.webContents || !isMainRenderer(event.senderFrame?.url, origin)) {
+      throw new Error("Unauthorized window control caller");
+    }
+  };
+  ipcMain.handle("cca-window-minimize", (event) => {
+    assertWindowControlCaller(event);
+    window.minimize();
+  });
+  ipcMain.handle("cca-window-toggle-maximize", (event) => {
+    assertWindowControlCaller(event);
+    if (window.isMaximized()) window.unmaximize();
+    else window.maximize();
+    return window.isMaximized();
+  });
+  ipcMain.handle("cca-window-close", (event) => {
+    assertWindowControlCaller(event);
+    window.close();
   });
   ipcMain.handle("cca-browser-attach", async (event, input: unknown) => {
     if (event.sender !== window.webContents || !isMainRenderer(event.senderFrame?.url, origin)) throw new Error("Unauthorized browser view caller");
@@ -165,13 +192,14 @@ app.on("activate", () => {
 });
 
 void app.whenReady().then(async () => {
+  app.setName(APP_NAME);
   configureDesktopEnvironment();
   if (!fs.existsSync(SERVER_ENTRY)) throw new Error(`Missing server artifact: ${SERVER_ENTRY}`);
   const origin = await startServer();
   mainWindow = createWindow(origin);
 }).catch(async (error: unknown) => {
   console.error("[desktop] startup failed", error);
-  await dialog.showMessageBox({ type: "error", title: "Cloud Coding Agent", message: "Unable to start Cloud Coding Agent", detail: error instanceof Error ? error.message : String(error) });
+  await dialog.showMessageBox({ type: "error", title: APP_NAME, message: `无法启动 ${APP_NAME}`, detail: error instanceof Error ? error.message : String(error) });
   await stopServer();
   app.exit(1);
 });

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
@@ -21,6 +22,10 @@ export default function App() {
   const user = useApp((s) => s.user);
   const localMode = useApp((s) => s.localMode);
   const authReady = useApp((s) => s.authReady);
+
+  useEffect(() => {
+    document.title = localMode ? "Kloud Work" : "Kloud Coding Agent";
+  }, [localMode]);
 
   if (!authReady) {
     return (

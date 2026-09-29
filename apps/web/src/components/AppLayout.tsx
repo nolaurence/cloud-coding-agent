@@ -6,6 +6,7 @@ import { useApp } from "../lib/store";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { BrandLogo } from "./BrandLogo";
+import { WindowControls } from "./WindowControls";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "cloud-coding-agent:sidebar-collapsed";
 
@@ -23,6 +24,7 @@ export function AppLayout() {
   const workspacePanelOpen = useApp((s) => s.workspacePanelOpen);
   const setWorkspacePanelOpen = useApp((s) => s.setWorkspacePanelOpen);
   const setShareDialogOpen = useApp((s) => s.setShareDialogOpen);
+  const localMode = useApp((s) => s.localMode);
   const panelPlacement = useApp((s) => s.panelPlacement);
   const setPanelPlacement = useApp((s) => s.setPanelPlacement);
   const location = useLocation();
@@ -43,7 +45,8 @@ export function AppLayout() {
     ? decodeURIComponent(threadPathMatch[1])
     : undefined;
   const routeThread = threads.find((thread) => thread.id === routeThreadId);
-  const mobileTitle = routeThread?.title ?? "Kloud Coding Agent";
+  const appName = localMode ? "Kloud Work" : "Kloud Coding Agent";
+  const mobileTitle = routeThread?.title ?? appName;
   const canManageThread = routeThread?.access === "owner";
 
   useEffect(() => {
@@ -74,9 +77,10 @@ export function AppLayout() {
   }, []);
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-background">
+    <div className="relative flex h-dvh overflow-hidden bg-background">
       {sidebarCollapsed ? (
         <div className="hidden shrink-0 md:block">
+          <WindowControls show="mac" className="ml-3 mt-3" />
           <Button
             type="button"
             variant="ghost"
@@ -109,7 +113,11 @@ export function AppLayout() {
         </SheetContent>
       </Sheet>
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <WindowControls
+        show="windows"
+        className="fixed right-1 top-1 z-50"
+      />
+      <main className="relative flex min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-200 px-3 md:hidden dark:border-zinc-800">
           <Button
             type="button"

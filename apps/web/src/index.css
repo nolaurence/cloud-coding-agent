@@ -117,6 +117,91 @@ button:disabled,
   cursor: default;
 }
 
+/* Frameless Electron windows need explicit hit-test regions for dragging. */
+.window-drag-region {
+  -webkit-app-region: drag;
+}
+
+.window-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.window-controls-mac {
+  padding: 0.15rem 0;
+}
+
+.window-control-mac {
+  display: inline-flex;
+  width: 0.8rem;
+  height: 0.8rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 9999px;
+  padding: 0;
+  color: rgb(38 38 38 / 0.72);
+  box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.22), 0 0.5px 1px rgb(0 0 0 / 0.18);
+}
+
+.window-control-mac svg {
+  width: 0.55rem;
+  height: 0.55rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  stroke-width: 2.75;
+}
+
+.window-controls-mac:hover .window-control-mac svg,
+.window-control-mac:focus-visible svg {
+  opacity: 0.85;
+}
+
+.window-control-close {
+  background: #ff5f57;
+}
+
+.window-control-minimize {
+  background: #febc2e;
+}
+
+.window-control-maximize {
+  background: #28c840;
+}
+
+.window-controls-windows {
+  padding: 0.15rem;
+}
+
+.window-control-windows {
+  display: inline-flex;
+  width: 2.25rem;
+  height: 1.9rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.window-control-windows:hover,
+.window-control-windows:focus-visible {
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+  color: var(--foreground);
+}
+
+.window-control-windows-close:hover,
+.window-control-windows-close:focus-visible {
+  background: #c42b1c;
+  color: white;
+}
+
+.window-control-windows svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  stroke-width: 1.75;
+}
+
 .mono {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }

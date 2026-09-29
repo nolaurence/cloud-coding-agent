@@ -11,5 +11,10 @@ contextBridge.exposeInMainWorld("ccaDesktop", Object.freeze({
   platform: process.platform,
   localMode: true,
   selectFolder: () => ipcRenderer.invoke("cca-select-folder") as Promise<string | null>,
+  windowControls: Object.freeze({
+    minimize: () => ipcRenderer.invoke("cca-window-minimize") as Promise<void>,
+    toggleMaximize: () => ipcRenderer.invoke("cca-window-toggle-maximize") as Promise<boolean>,
+    close: () => ipcRenderer.invoke("cca-window-close") as Promise<void>,
+  }),
   browser,
 }));
