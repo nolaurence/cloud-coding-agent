@@ -193,6 +193,7 @@ app.on("activate", () => {
 
 void app.whenReady().then(async () => {
   app.setName(APP_NAME);
+  if (process.platform === "darwin") app.dock?.setIcon(APP_ICON);
   configureDesktopEnvironment();
   if (!fs.existsSync(SERVER_ENTRY)) throw new Error(`Missing server artifact: ${SERVER_ENTRY}`);
   const origin = await startServer();
