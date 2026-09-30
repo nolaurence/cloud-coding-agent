@@ -2,13 +2,13 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowLeft, ArrowLeftRight, FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { resolveThreadModel, resolveThreadModelProviderId } from "@cca/protocol";
-import type { AgentMode, ModelRef } from "@cca/protocol";
+import type { ModelRef, RuntimeMode } from "@cca/protocol";
 import { useApp, useThreadState } from "../lib/store";
 import { threadComposerDraftKey } from "../lib/composerDrafts";
 import { ChatView } from "../components/ChatView";
 import { Composer } from "../components/Composer";
-import { ModelPicker } from "../components/ModelPicker";
-import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
+import { ModelReasoningPicker } from "../components/ModelReasoningPicker";
+import { RuntimeModePicker } from "../components/RuntimeModePicker";
 import { RightPanel } from "../components/RightPanel";
 import { RightPanelResizeHandle } from "../components/RightPanelResizeHandle";
 import { ThreadShareDialog } from "../components/ThreadShareDialog";
@@ -33,7 +33,7 @@ export function ThreadPage() {
   const interrupt = useApp((s) => s.interrupt);
   const compactContext = useApp((s) => s.compactContext);
   const setThreadModel = useApp((s) => s.setThreadModel);
-  const setThreadAgentMode = useApp((s) => s.setThreadAgentMode);
+  const setThreadRuntimeMode = useApp((s) => s.setThreadRuntimeMode);
   const panelOpen = useApp((s) => s.workspacePanelOpen);
   const setPanelOpen = useApp((s) => s.setWorkspacePanelOpen);
   const panelPlacement = useApp((s) => s.panelPlacement);
@@ -58,7 +58,7 @@ export function ThreadPage() {
   const modelRequestRef = useRef(0);
   const modelProviderId = resolveThreadModelProviderId(thread, settings?.defaultModel);
   const effectiveModel = resolveThreadModel(thread, settings?.defaultModel);
-  const agentMode = thread?.agentMode ?? "standard";
+  const runtimeMode = thread?.runtimeMode ?? "auto";
   const panelMaxWidth = useMemo(() => {
     if (layoutWidth === 0) return RIGHT_PANEL_DEFAULT_WIDTH;
     return Math.max(
@@ -98,18 +98,16 @@ export function ThreadPage() {
     }
   };
 
-  const onAgentModeChange = async (mode: AgentMode) => {
-    if (!threadId || switchingMode || switchingModel || state.running || mode === agentMode) {
-      return false;
+  const onRuntimeModeChange = async (mode: RuntimeMode) => {
+    if (!threadId || switchingMode || switchingModel || state.running || mode === runtimeMode) {
+      return;
     }
     setSwitchingMode(true);
     setModelError("");
     try {
-      await setThreadAgentMode(threadId, mode);
-      return true;
+      await setThreadRuntimeMode(threadId, mode);
     } catch (error) {
       setModelError(error instanceof Error ? error.message : "切换会话模式失败");
-      return false;
     } finally {
       setSwitchingMode(false);
     }
@@ -251,24 +249,22 @@ export function ThreadPage() {
                       onCompact={() => compactContext(threadId)}
                       footerError={canManageThread ? modelError : undefined}
                       footerControls={canManageThread ? (
-                        <>
-                          <ModelPicker
-                            value={effectiveModel}
-                            onChange={(ref) => void onModelChange(ref)}
-                            disabled={state.running || switchingModel || switchingMode}
-                            lockedProviderId={modelProviderId}
-                          />
-                          <ReasoningEffortPicker
-                            compact
-                            model={effectiveModel}
-                            disabled={state.running || switchingModel || switchingMode}
-                            agentMode={agentMode}
-                            onAgentModeChange={onAgentModeChange}
-                            onChange={(reasoningEffort) => {
-                              if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
-                            }}
-                          />
-                        </>
+                        <ModelReasoningPicker
+                          value={effectiveModel}
+                          onChange={(ref) => void onModelChange(ref)}
+                          onReasoningChange={(reasoningEffort) => {
+                            if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
+                          }}
+                          disabled={state.running || switchingModel || switchingMode}
+                          lockedProviderId={modelProviderId}
+                        />
+                      ) : undefined}
+                      permissionControl={canManageThread ? (
+                        <RuntimeModePicker
+                          value={runtimeMode}
+                          onChange={onRuntimeModeChange}
+                          disabled={state.running || switchingModel || switchingMode}
+                        />
                       ) : undefined}
                     />
                   </div>

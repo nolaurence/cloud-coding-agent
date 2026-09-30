@@ -26,6 +26,7 @@ import type {
   ModelRef,
   ReasoningEffort,
   ResourceScope,
+  RuntimeMode,
   SubagentActivity,
   SubagentMessage,
   ThreadEvent,
@@ -650,6 +651,7 @@ export class CopilotManager {
       sessionId: thread.id,
       legacySession: thread.runtime !== "codex",
       agentMode: thread.agentMode ?? "standard",
+      runtimeMode: thread.runtimeMode ?? "auto",
       deniedPaths: workspaceSandboxDeniedPaths(project.path),
       streaming: true,
       includeSubAgentStreamingEvents: true,
@@ -1867,6 +1869,40 @@ export class CopilotManager {
       store.upsertThread(thread);
       console.warn("[cca] switch agent mode failed thread=" + threadId + " mode=" + nextMode, error);
       throw new Error("切换会话模式失败,请重试");
+    } finally {
+      if (rt.reconfiguring === reconfiguring) rt.reconfiguring = null;
+      this.scheduleDetach(rt, true);
+    }
+  }
+
+  async setThreadRuntimeMode(threadId: string, nextMode: RuntimeMode): Promise<void> {
+    await this.assertThreadEditable(threadId);
+    const thread = store.getThread(threadId);
+    if (!thread) throw new Error("会话不存在");
+    if ((thread.runtimeMode ?? "auto") === nextMode) return;
+
+    const rt = this.threads.get(threadId);
+    if (rt?.running) throw new Error("当前任务运行中,请等待完成后再切换权限模式");
+    if (rt?.compacting) throw new Error("上下文正在压缩,请等待完成后再切换权限模式");
+    if (rt?.reconfiguring) throw new Error("会话模式正在切换,请稍候");
+
+    store.upsertThread({ ...thread, runtimeMode: nextMode });
+    if (!rt) return;
+
+    this.clearDetachTimer(rt);
+    const reconfiguring = (async () => {
+      const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
+      rt.session = null;
+      rt.sessionActorId = "";
+      await session?.disconnect();
+    })();
+    rt.reconfiguring = reconfiguring;
+    try {
+      await reconfiguring;
+    } catch (error) {
+      store.upsertThread(thread);
+      console.warn("[cca] switch runtime mode failed thread=" + threadId + " mode=" + nextMode, error);
+      throw new Error("切换权限模式失败,请重试");
     } finally {
       if (rt.reconfiguring === reconfiguring) rt.reconfiguring = null;
       this.scheduleDetach(rt, true);

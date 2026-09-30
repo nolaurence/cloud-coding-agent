@@ -4,11 +4,35 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { object, text, type JsonObject } from "./llmGateway.js";
 
+type CodexTarget = { packageName: string; triple: string };
+
+function bundledCodexTarget(): CodexTarget {
+  const targets: Record<string, CodexTarget> = {
+    "win32-x64": { packageName: "@openai/codex-win32-x64", triple: "x86_64-pc-windows-msvc" },
+    "win32-arm64": { packageName: "@openai/codex-win32-arm64", triple: "aarch64-pc-windows-msvc" },
+    "darwin-x64": { packageName: "@openai/codex-darwin-x64", triple: "x86_64-apple-darwin" },
+    "darwin-arm64": { packageName: "@openai/codex-darwin-arm64", triple: "aarch64-apple-darwin" },
+    "linux-x64": { packageName: "@openai/codex-linux-x64", triple: "x86_64-unknown-linux-musl" },
+    "linux-arm64": { packageName: "@openai/codex-linux-arm64", triple: "aarch64-unknown-linux-musl" },
+  };
+  const target = targets[`${process.platform}-${process.arch}`];
+  if (!target) throw new Error(`Unsupported Codex platform: ${process.platform} (${process.arch})`);
+  return target;
+}
+
 export function codexCommand(): { command: string; prefix: string[] } {
   if (process.env.CCA_CODEX_PATH) return { command: process.env.CCA_CODEX_PATH, prefix: [] };
   const require = createRequire(import.meta.url);
-  const loader = path.join(path.dirname(require.resolve("@openai/codex/package.json")), "bin", "codex.js");
-  return { command: process.execPath, prefix: [loader.replace(/app\.asar([\\/])/, "app.asar.unpacked$1")] };
+  const target = bundledCodexTarget();
+  const packageJson = require.resolve(`${target.packageName}/package.json`);
+  const executable = path.join(
+    path.dirname(packageJson),
+    "vendor",
+    target.triple,
+    "bin",
+    process.platform === "win32" ? "codex.exe" : "codex",
+  );
+  return { command: executable.replace(/app\.asar([\\/])/, "app.asar.unpacked$1"), prefix: [] };
 }
 
 export class CodexRpc {
@@ -27,7 +51,12 @@ export class CodexRpc {
   }
   async start(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
     const binary = codexCommand();
-    this.process = spawn(binary.command, [...binary.prefix, "app-server", "--listen", "stdio://"], { cwd, env: { ...env, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}) }, stdio: "pipe" });
+    this.process = spawn(binary.command, [...binary.prefix, "app-server", "--listen", "stdio://"], {
+      cwd,
+      env,
+      stdio: "pipe",
+      windowsHide: true,
+    });
     const child = this.process;
     this.exit = new Promise((resolve) => child.once("close", () => resolve()));
     child.once("error", (error) => this.fail(error));

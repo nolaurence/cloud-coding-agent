@@ -3,9 +3,9 @@ import {
   ArrowUp,
   AtSign,
   FileText,
-  ImagePlus,
   Loader2,
   Minimize2,
+  Plus,
   Sparkles,
   Square,
   X,
@@ -158,6 +158,7 @@ export function Composer({
   onCompact,
   autoFocus,
   placeholder,
+  permissionControl,
   footerControls,
   footerError,
 }: {
@@ -174,6 +175,7 @@ export function Composer({
   onCompact?: () => ContextCompactionResult | Promise<ContextCompactionResult>;
   autoFocus?: boolean;
   placeholder?: string;
+  permissionControl?: ReactNode;
   footerControls?: ReactNode;
   footerError?: string;
 }) {
@@ -584,7 +586,7 @@ export function Composer({
           aria-label="消息内容"
           disabled={submitting || compacting}
           rows={1}
-          className="block min-h-20 w-full resize-none overflow-y-auto bg-transparent px-4 pt-3.5 pb-2 text-sm leading-6 outline-none placeholder:text-zinc-400 disabled:opacity-60"
+          className="block min-h-24 w-full resize-none overflow-y-auto bg-transparent px-5 pt-4 pb-2 text-[15px] leading-6 outline-none placeholder:text-zinc-400 disabled:opacity-60"
           placeholder={placeholder ?? "输入消息"}
           value={text}
           onChange={(event) => {
@@ -625,11 +627,9 @@ export function Composer({
           </div>
         )}
 
-        <div className="flex min-h-11 flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2.5 pb-2.5">
+        <div className="flex min-h-11 flex-wrap items-center gap-x-2 gap-y-1 px-2.5 pb-2.5">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 max-[359px]:basis-full">
-            {footerControls && (
-              <div className="flex min-w-0 flex-wrap items-center gap-1">{footerControls}</div>
-            )}
+            {permissionControl}
             <input
               ref={imageInputRef}
               type="file"
@@ -649,7 +649,7 @@ export function Composer({
               onClick={() => imageInputRef.current?.click()}
               disabled={busy || images.length >= MAX_IMAGES}
             >
-              <ImagePlus className="h-4 w-4" />
+              <Plus className="h-4 w-4" />
             </button>
             <button
               type="button"
@@ -672,6 +672,8 @@ export function Composer({
             {threadId && <ContextUsageIndicator usage={contextUsage ?? null} />}
           </div>
 
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            {footerControls}
           {running && onInterrupt ? (
             <button
               type="button"
@@ -705,6 +707,7 @@ export function Composer({
               )}
             </button>
           )}
+          </div>
         </div>
       </div>
     </div>

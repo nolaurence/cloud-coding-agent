@@ -260,7 +260,7 @@ export class BrowserManager implements BrowserController {
 
   private launch(command: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
     const name = path.basename(command);
-    const child = spawn(command, args, { env, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(command, args, { env, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
     this.processes.set(child, name);
     child.stderr?.on("data", (chunk) => {
       const message = String(chunk).trim();

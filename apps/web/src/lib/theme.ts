@@ -13,6 +13,7 @@ export const THEME_OPTIONS: readonly { value: ThemePreference; label: string }[]
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 const LIGHT_BACKGROUND = "#ffffff";
 const DARK_BACKGROUND = "#09090b";
+const DARK_TITLE_BAR_BACKGROUND = "#181818";
 
 interface ThemeSnapshot {
   preference: ThemePreference;
@@ -59,6 +60,10 @@ function syncBrowserTheme(resolved: ResolvedTheme): void {
   document
     .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
     ?.setAttribute("content", background);
+  window.ccaDesktop?.titleBarOverlay?.({
+    color: resolved === "dark" ? DARK_TITLE_BAR_BACKGROUND : LIGHT_BACKGROUND,
+    symbolColor: resolved === "dark" ? "#f4f4f5" : "#18181b",
+  });
 }
 
 export function applyTheme(preference: ThemePreference, suppressTransitions = false): void {

@@ -37,7 +37,7 @@
   "build": {
     "appId": "com.github.cloud-coding-agent",
     "productName": "Kloud Work",
-    "icon": "apps/web/public/kloud-logo.png",
+    "icon": "apps/web/public/kloud-taskbar.png",
     "asar": true,
     "directories": {
       "output": "release"

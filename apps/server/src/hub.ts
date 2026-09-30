@@ -8,6 +8,7 @@ import type {
   ConnectorStatus,
   ModelOption,
   ModelRef,
+  RuntimeMode,
   ServerMessage,
   ShellState,
   ThreadAccess,
@@ -30,6 +31,7 @@ import {
   DEFAULT_MODEL_PROVIDER_ID,
   flattenModels,
   isAgentMode,
+  isRuntimeMode,
   isReasoningEffort,
   normalizeContextWindowTokens,
   normalizeModelRefReasoning,
@@ -617,6 +619,9 @@ export class Hub {
               throw new Error("会话模式无效");
             }
             if (msg.agentMode === "ultra") throw new Error("Codex 暂不支持 Ultra 子代理模式");
+            if (msg.runtimeMode !== undefined && !isRuntimeMode(msg.runtimeMode)) {
+              throw new Error("权限模式无效");
+            }
             const requestedModel = msg.model ?? store.settings.defaultModel;
             let model = requestedModel;
             if (requestedModel) {
@@ -655,6 +660,7 @@ export class Hub {
               model,
               modelProviderId: model?.providerId ?? DEFAULT_MODEL_PROVIDER_ID,
               agentMode: msg.agentMode ?? "standard",
+              runtimeMode: msg.runtimeMode ?? "auto",
               userId: conn.user.username,
               createdAt: Date.now(),
               updatedAt: Date.now(),
@@ -750,6 +756,16 @@ export class Hub {
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
           if (!isAgentMode(msg.agentMode)) throw new Error("会话模式无效");
           await this.manager.setThreadAgentMode(msg.threadId, msg.agentMode);
+          this.broadcastShell();
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "thread.setRuntimeMode": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          if (!isRuntimeMode(msg.runtimeMode)) throw new Error("权限模式无效");
+          await this.manager.setThreadRuntimeMode(msg.threadId, msg.runtimeMode);
           this.broadcastShell();
           this.reply(conn, msg.id);
           break;

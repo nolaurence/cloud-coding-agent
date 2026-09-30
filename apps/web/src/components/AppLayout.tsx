@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { BrandLogo } from "./BrandLogo";
 import { WindowControls } from "./WindowControls";
+import { cn } from "../lib/utils";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "cloud-coding-agent:sidebar-collapsed";
 
@@ -48,6 +49,7 @@ export function AppLayout() {
   const appName = localMode ? "Kloud Work" : "Kloud Coding Agent";
   const mobileTitle = routeThread?.title ?? appName;
   const canManageThread = routeThread?.access === "owner";
+  const desktopLocalMode = localMode && Boolean(window.ccaDesktop?.windowControls);
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -77,9 +79,18 @@ export function AppLayout() {
   }, []);
 
   return (
-    <div className="relative flex h-dvh overflow-hidden bg-background">
+    <div className={cn(
+      "relative flex h-dvh overflow-hidden bg-background",
+      desktopLocalMode && "pt-8",
+    )}>
+      {desktopLocalMode && (
+        <div
+          className="window-drag-region pointer-events-none fixed inset-x-0 top-0 z-40 h-8"
+          aria-hidden="true"
+        />
+      )}
       {sidebarCollapsed ? (
-        <div className="hidden shrink-0 md:block">
+        <div className="relative z-50 hidden shrink-0 md:block">
           <WindowControls show="mac" className="ml-3 mt-3" />
           <Button
             type="button"
@@ -94,7 +105,7 @@ export function AppLayout() {
           </Button>
         </div>
       ) : (
-        <div className="m-[10px] hidden min-h-0 shrink-0 md:block">
+        <div className="relative z-50 m-[10px] hidden min-h-0 shrink-0 md:block">
           <Sidebar onCollapse={toggleSidebarCollapsed} />
         </div>
       )}
@@ -113,10 +124,6 @@ export function AppLayout() {
         </SheetContent>
       </Sheet>
 
-      <WindowControls
-        show="windows"
-        className="fixed right-1 top-1 z-50"
-      />
       <main className="relative flex min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-200 px-3 md:hidden dark:border-zinc-800">
           <Button

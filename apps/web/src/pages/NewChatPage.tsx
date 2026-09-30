@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { FolderOpen, FolderPlus, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import type { AgentMode, ModelRef, TurnAttachment } from "@cca/protocol";
+import type { AgentMode, ModelRef, RuntimeMode, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { NEW_CHAT_DRAFT_KEY } from "../lib/composerDrafts";
 import { BrandLogo } from "../components/BrandLogo";
 import { Composer } from "../components/Composer";
-import { ModelPicker } from "../components/ModelPicker";
-import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
+import { ModelReasoningPicker } from "../components/ModelReasoningPicker";
+import { RuntimeModePicker } from "../components/RuntimeModePicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -28,7 +28,8 @@ export function NewChatPage() {
   const navigate = useNavigate();
   const [projectId, setProjectId] = useState<string>("");
   const [model, setModel] = useState<ModelRef | undefined>(undefined);
-  const [agentMode, setAgentMode] = useState<AgentMode>("standard");
+  const agentMode: AgentMode = "standard";
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>("auto");
   const [creating, setCreating] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
   const [selectedFolder, setSelectedFolder] = useState("");
@@ -41,7 +42,7 @@ export function NewChatPage() {
     if (!effectiveProjectId || creating) return;
     setCreating(true);
     try {
-      const thread = await createThread(effectiveProjectId, effectiveModel, agentMode, {
+      const thread = await createThread(effectiveProjectId, effectiveModel, agentMode, runtimeMode, {
         text,
         attachments,
       });
@@ -154,19 +155,17 @@ export function NewChatPage() {
               autoFocus
               placeholder="输入编码任务"
               footerControls={
-                <>
-                  <ModelPicker value={effectiveModel} onChange={setModel} disabled={creating} />
-                  <ReasoningEffortPicker
-                    compact
-                    model={effectiveModel}
-                    disabled={creating}
-                    agentMode={agentMode}
-                    onAgentModeChange={setAgentMode}
-                    onChange={(reasoningEffort) => {
-                      if (effectiveModel) setModel({ ...effectiveModel, reasoningEffort });
-                    }}
-                  />
-                </>
+                <ModelReasoningPicker
+                  value={effectiveModel}
+                  onChange={setModel}
+                  disabled={creating}
+                  onReasoningChange={(reasoningEffort) => {
+                    if (effectiveModel) setModel({ ...effectiveModel, reasoningEffort });
+                  }}
+                />
+              }
+              permissionControl={
+                <RuntimeModePicker value={runtimeMode} onChange={setRuntimeMode} disabled={creating} />
               }
             />
           </>

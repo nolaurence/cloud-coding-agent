@@ -11,7 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.resolve(__dirname, "../../server/dist/index.js");
 const PRELOAD_ENTRY = path.join(__dirname, "preload.cjs");
 const APP_NAME = "Kloud Work";
-const APP_ICON = path.resolve(__dirname, "../../web/dist/kloud-logo.png");
+const APP_ICON = path.resolve(__dirname, "../../web/dist/kloud-taskbar.png");
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
 let serverOrigin: string | null = null;
@@ -81,6 +81,10 @@ function createWindow(origin: string): BrowserWindow {
     minHeight: 640,
     title: APP_NAME,
     frame: false,
+    titleBarStyle: "hidden",
+    ...(process.platform === "win32"
+      ? { titleBarOverlay: { color: "#181818", symbolColor: "#f4f4f5", height: 32 } }
+      : {}),
     icon: APP_ICON,
     show: false,
     backgroundColor: "#111827",
@@ -114,6 +118,7 @@ function createWindow(origin: string): BrowserWindow {
   ipcMain.removeHandler("cca-window-minimize");
   ipcMain.removeHandler("cca-window-toggle-maximize");
   ipcMain.removeHandler("cca-window-close");
+  ipcMain.removeAllListeners("cca-window-titlebar-overlay");
   ipcMain.handle("cca-select-folder", async (event) => {
     if (event.sender !== window.webContents || !isMainRenderer(event.senderFrame?.url, origin)) {
       throw new Error("Unauthorized folder picker caller");
@@ -129,6 +134,13 @@ function createWindow(origin: string): BrowserWindow {
       throw new Error("Unauthorized window control caller");
     }
   };
+  ipcMain.on("cca-window-titlebar-overlay", (event, input: unknown) => {
+    if (process.platform !== "win32" || event.sender !== window.webContents || !isMainRenderer(event.senderFrame?.url, origin)) return;
+    if (!input || typeof input !== "object") return;
+    const value = input as { color?: unknown; symbolColor?: unknown };
+    if (typeof value.color !== "string" || typeof value.symbolColor !== "string") return;
+    window.setTitleBarOverlay({ color: value.color, symbolColor: value.symbolColor, height: 32 });
+  });
   ipcMain.handle("cca-window-minimize", (event) => {
     assertWindowControlCaller(event);
     window.minimize();

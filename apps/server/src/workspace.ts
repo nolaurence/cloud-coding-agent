@@ -339,6 +339,7 @@ function trackedDiffPatch(root: string): Promise<{ patch: string; truncated: boo
     const child = spawn("git", ["diff", "--no-ext-diff", "--no-color", "HEAD", "--"], {
       cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
     let patch = "";
     let stderr = "";

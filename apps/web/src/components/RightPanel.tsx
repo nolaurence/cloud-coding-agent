@@ -24,6 +24,7 @@ import { GitPanel } from "./workspace/GitPanel";
 import { TerminalPanel } from "./workspace/TerminalPanel";
 import "./workspace/workspace.css";
 import { shouldShowNativeBrowser } from "../lib/browserVisibility";
+import { documentKindForPath, type DocumentKind } from "../lib/documentPreview";
 import type { ImagePreviewTarget } from "../lib/imagePreview";
 import { ImagePreviewPanel } from "./ImagePreviewPanel";
 import { DocumentPanel } from "./workspace/DocumentPanel";
@@ -32,6 +33,7 @@ type StaticPanelTab = "browser" | "terminal" | "files" | "diff" | "context" | "w
 
 type PanelTab =
   | { id: StaticPanelTab; kind: "static"; label: string; icon: typeof Globe2 }
+  | { id: string; kind: "document"; label: string; icon: typeof Globe2; projectId: string; path: string; documentKind: DocumentKind }
   | { id: string; kind: "image"; label: string; icon: typeof Globe2; image: ImagePreviewTarget };
 
 const panelOptions: {
@@ -78,6 +80,24 @@ export function RightPanel({
     setActiveTab(tabId);
   };
 
+  const openDocumentPreview = (path: string) => {
+    if (!projectId) return;
+    const documentKind = documentKindForPath(path);
+    if (!documentKind) return;
+    const tabId = `document:${projectId}:${path}`;
+    const icon = documentKind === "word" ? FileText : documentKind === "excel" ? FileSpreadsheet : Presentation;
+    const label = fileName(path);
+    setOpenTabs((current) => {
+      const existing = current.find((tab) => tab.id === tabId);
+      if (existing?.kind === "document" && existing.label === label) return current;
+      if (existing?.kind === "document") {
+        return current.map((tab) => tab.id === tabId ? { ...tab, label, icon, path, projectId, documentKind } : tab);
+      }
+      return [...current, { id: tabId, kind: "document", label, icon, path, projectId, documentKind }];
+    });
+    setActiveTab(tabId);
+  };
+
   useEffect(() => {
     if (!imageToOpen) return;
     const tabId = `image:${imageToOpen.threadId}:${imageToOpen.id}`;
@@ -110,6 +130,9 @@ export function RightPanel({
 
   const renderPanel = (tab: PanelTab) => {
     if (tab.kind === "image") return <ImagePreviewPanel image={tab.image} />;
+    if (tab.kind === "document") {
+      return <DocumentPanel projectId={tab.projectId} kind={tab.documentKind} filePath={tab.path} />;
+    }
     switch (tab.id) {
       case "browser":
         return <BrowserPanel threadId={threadId} visible={shouldShowNativeBrowser(panelVisible, activeTab)} />;
@@ -122,6 +145,7 @@ export function RightPanel({
             threadId={threadId}
             draftOwner={draftOwner}
             editable={canManageWorkspace}
+            onOpenPreview={openDocumentPreview}
           />
         ) : <Empty text="项目不存在" />;
       case "diff":
@@ -271,6 +295,10 @@ function PanelEmptyState({ onSelect }: { onSelect: (tab: StaticPanelTab) => void
 
 function Empty({ text }: { text: string }) {
   return <div className="flex h-full items-center justify-center p-6 text-sm text-zinc-500">{text}</div>;
+}
+
+function fileName(filePath: string) {
+  return filePath.split("/").filter(Boolean).at(-1) ?? filePath;
 }
 
 function BrowserPanel({ threadId, visible }: { threadId: string; visible: boolean }) {

@@ -139,6 +139,13 @@ export function isAgentMode(value: unknown): value is AgentMode {
   return typeof value === "string" && AGENT_MODES.includes(value as AgentMode);
 }
 
+export const RUNTIME_MODES = ["approval-required", "auto", "full-access"] as const;
+export type RuntimeMode = (typeof RUNTIME_MODES)[number];
+
+export function isRuntimeMode(value: unknown): value is RuntimeMode {
+  return typeof value === "string" && RUNTIME_MODES.includes(value as RuntimeMode);
+}
+
 export function resolveModelContextWindowTokens(
   settings: AppSettings,
   model: ModelRef | undefined,
@@ -234,6 +241,7 @@ export interface ThreadMeta {
   model?: ModelRef;
   modelProviderId?: string;
   agentMode?: AgentMode;
+  runtimeMode?: RuntimeMode;
   userId?: string;
   createdAt: number;
   updatedAt: number;
@@ -387,7 +395,16 @@ export interface WordDocumentPreview {
 export interface SpreadsheetDocumentPreview {
   kind: "excel";
   path: string;
-  sheets: Array<{ name: string; rows: string[][] }>;
+  sheets: Array<{
+    name: string;
+    rows: string[][];
+    images?: Array<{
+      row: number;
+      column: number;
+      dataUrl: string;
+      alt?: string;
+    }>;
+  }>;
 }
 
 export interface PresentationDocumentPreview {
@@ -595,11 +612,13 @@ export type ClientMessage =
       projectId: string;
       model?: ModelRef;
       agentMode?: AgentMode;
+      runtimeMode?: RuntimeMode;
       initialTurn?: TurnInput;
     }
   | { id: string; type: "thread.delete"; threadId: string }
   | { id: string; type: "thread.setModel"; threadId: string; model: ModelRef }
   | { id: string; type: "thread.setAgentMode"; threadId: string; agentMode: AgentMode }
+  | { id: string; type: "thread.setRuntimeMode"; threadId: string; runtimeMode: RuntimeMode }
   | { id: string; type: "thread.subscribe"; threadId: string }
   | { id: string; type: "thread.unsubscribe"; threadId: string }
   | { id: string; type: "thread.share.get"; threadId: string }

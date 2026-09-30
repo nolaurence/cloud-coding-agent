@@ -22,6 +22,7 @@ import type {
   Workspace,
   ProviderModelDiscoveryConfig,
   RegistrationPolicy,
+  RuntimeMode,
   ServerMessage,
   ShellState,
   SkillInfo,
@@ -238,11 +239,13 @@ interface AppState {
     projectId: string,
     model?: ModelRef,
     agentMode?: AgentMode,
+    runtimeMode?: RuntimeMode,
     initialTurn?: TurnInput,
   ) => Promise<ThreadMeta>;
   deleteThread: (threadId: string) => Promise<void>;
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
   setThreadAgentMode: (threadId: string, agentMode: AgentMode) => Promise<void>;
+  setThreadRuntimeMode: (threadId: string, runtimeMode: RuntimeMode) => Promise<void>;
   openThread: (threadId: string) => Promise<void>;
   closeThread: (threadId: string) => Promise<void>;
   sendMessage: (threadId: string, text: string, attachments?: TurnAttachment[]) => Promise<void>;
@@ -754,12 +757,13 @@ export const useApp = create<AppState>((set, get) => {
       await request({ type: "workspace.remove", projectId });
     },
 
-    createThread: async (projectId, model, agentMode, initialTurn) => {
+    createThread: async (projectId, model, agentMode, runtimeMode, initialTurn) => {
       const created = await request<ThreadCreateResult>({
         type: "thread.create",
         projectId,
         model,
         agentMode,
+        runtimeMode,
         initialTurn,
       });
       const { initialTurnAccepted, ...thread } = created;
@@ -821,6 +825,15 @@ export const useApp = create<AppState>((set, get) => {
       set((state) => ({
         threads: state.threads.map((thread) =>
           thread.id === threadId ? { ...thread, agentMode } : thread,
+        ),
+      }));
+    },
+
+    setThreadRuntimeMode: async (threadId, runtimeMode) => {
+      await request({ type: "thread.setRuntimeMode", threadId, runtimeMode });
+      set((state) => ({
+        threads: state.threads.map((thread) =>
+          thread.id === threadId ? { ...thread, runtimeMode } : thread,
         ),
       }));
     },

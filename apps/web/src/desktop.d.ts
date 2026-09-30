@@ -10,6 +10,7 @@ declare global {
         toggleMaximize(): Promise<boolean>;
         close(): Promise<void>;
       };
+      titleBarOverlay?(options: { color: string; symbolColor: string }): void;
       browser: {
         attach(threadId: string, ticket: string, bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
         updateBounds(threadId: string, bounds: { x: number; y: number; width: number; height: number }): void;

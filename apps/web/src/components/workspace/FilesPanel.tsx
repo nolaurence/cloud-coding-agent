@@ -25,6 +25,7 @@ import type {
   ProjectFileWriteResult,
 } from "@cca/protocol";
 import { request } from "../../lib/client";
+import { documentKindForPath } from "../../lib/documentPreview";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { FileSaveState, ProjectFileEditorHandle } from "./ProjectFileEditor";
@@ -41,6 +42,7 @@ interface FilesPanelProps {
   threadId: string;
   draftOwner: string;
   editable: boolean;
+  onOpenPreview?: (path: string) => void;
 }
 
 function errorMessage(reason: unknown, fallback: string) {
@@ -122,7 +124,7 @@ function SaveIndicator({ state, onRetry }: { state: FileSaveState; onRetry: () =
   );
 }
 
-export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesPanelProps) {
+export function FilesPanel({ projectId, threadId, draftOwner, editable, onOpenPreview }: FilesPanelProps) {
   const projectRef = useRef(projectId);
   projectRef.current = projectId;
   const editorRef = useRef<ProjectFileEditorHandle | null>(null);
@@ -237,6 +239,10 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
   }, [projectId, query, searchRefresh]);
 
   const openFile = useCallback(async (path: string) => {
+    if (documentKindForPath(path) && onOpenPreview) {
+      onOpenPreview(path);
+      return;
+    }
     const requestProject = projectId;
     const requestId = ++previewRequestRef.current;
     setSelectedPath(path);
@@ -259,7 +265,7 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
         setPreviewLoading(false);
       }
     }
-  }, [projectId]);
+  }, [onOpenPreview, projectId]);
 
   const toggleDirectory = async (path: string) => {
     if (expanded.has(path)) {

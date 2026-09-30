@@ -16,5 +16,8 @@ contextBridge.exposeInMainWorld("ccaDesktop", Object.freeze({
     toggleMaximize: () => ipcRenderer.invoke("cca-window-toggle-maximize") as Promise<boolean>,
     close: () => ipcRenderer.invoke("cca-window-close") as Promise<void>,
   }),
+  titleBarOverlay: (options: { color: string; symbolColor: string }) => {
+    ipcRenderer.send("cca-window-titlebar-overlay", options);
+  },
   browser,
 }));

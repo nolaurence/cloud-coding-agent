@@ -413,6 +413,20 @@ function CompletedTurn({
       {userEntries.map((entry) => (
         <UserMessage key={entry.id} message={entry.message} />
       ))}
+      {hasCollapsibleEntries && (
+        <div className="border-b border-border/60 pb-2 pt-1">
+          <button
+            type="button"
+            aria-expanded={expanded}
+            data-scroll-anchor-ignore
+            onClick={() => onToggleTurn(turnId)}
+            className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-xs text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+          >
+            <span>{durationLabel}</span>
+            {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          </button>
+        </div>
+      )}
       {processSegments.map((segment) => {
         const first = segment[0];
         if (!first) return null;
@@ -436,24 +450,6 @@ function CompletedTurn({
           />
         );
       })}
-      {hasCollapsibleEntries && (
-        <div className="border-b border-border/60 pb-2 pt-1">
-          <button
-            type="button"
-            aria-expanded={expanded}
-            data-scroll-anchor-ignore
-            onClick={() => onToggleTurn(turnId)}
-            className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-xs text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-          >
-            <span>{durationLabel}</span>
-            {expanded ? (
-              <ChevronDown className="size-3.5" />
-            ) : (
-              <ChevronRight className="size-3.5" />
-            )}
-          </button>
-        </div>
-      )}
       {terminalAssistant && <AssistantMessage message={terminalAssistant.message} />}
     </section>
   );
@@ -475,6 +471,13 @@ function RunningTurn({
   onOpenSubagent: (subagentId: string) => void;
 }) {
   const hasLive = Boolean(live.text || live.reasoning);
+  const userEntries = entries.filter(
+    (entry): entry is Extract<ChatTimelineEntry, { kind: "message" }> =>
+      entry.kind === "message" && entry.message.role === "user",
+  );
+  const processEntries = entries.filter(
+    (entry) => !(entry.kind === "message" && entry.message.role === "user"),
+  );
   const liveMessage: ChatMessage = {
     id: "live-assistant-message",
     role: "assistant",
@@ -488,13 +491,19 @@ function RunningTurn({
   return (
     <section className="flex flex-col gap-3">
       <ProcessEntries
-        entries={entries}
+        entries={userEntries}
+        expandedWorkGroups={expandedWorkGroups}
+        onToggleWorkGroup={onToggleWorkGroup}
+        onOpenSubagent={onOpenSubagent}
+      />
+      <WorkingIndicator startedAt={startedAt ?? turnStartedAt(entries)} />
+      <ProcessEntries
+        entries={processEntries}
         expandedWorkGroups={expandedWorkGroups}
         onToggleWorkGroup={onToggleWorkGroup}
         onOpenSubagent={onOpenSubagent}
       />
       {hasLive && <AssistantMessage message={liveMessage} streaming showMeta={false} />}
-      <WorkingIndicator startedAt={startedAt ?? turnStartedAt(entries)} />
     </section>
   );
 }

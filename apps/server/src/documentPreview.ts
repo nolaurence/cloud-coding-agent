@@ -22,6 +22,78 @@ function xmlEntry(files: Record<string, Uint8Array>, name: string): string {
   return data ? strFromU8(data) : "";
 }
 
+function findZipEntry(files: Record<string, Uint8Array>, name: string): string | undefined {
+  if (files[name]) return name;
+  const lowerName = name.toLowerCase();
+  return Object.keys(files).find((entry) => entry.toLowerCase() === lowerName);
+}
+
+function xmlAttributes(value: string): Map<string, string> {
+  const attributes = new Map<string, string>();
+  for (const match of value.matchAll(/([A-Za-z_][\w:.-]*)\s*=\s*(["'])(.*?)\2/g)) {
+    attributes.set(match[1] ?? "", decodeXml(match[3] ?? ""));
+  }
+  return attributes;
+}
+
+function resolveZipPath(source: string, target: string): string {
+  const normalizedTarget = target.replace(/\\/g, "/");
+  if (normalizedTarget.startsWith("/")) return path.posix.normalize(normalizedTarget).replace(/^\/+/, "");
+  return path.posix.normalize(path.posix.join(path.posix.dirname(source), normalizedTarget)).replace(/^\.\//, "");
+}
+
+function parseRelationships(xml: string): Map<string, string> {
+  const relationships = new Map<string, string>();
+  for (const match of xml.matchAll(/<Relationship\b([^>]*?)(?:\/?>)/gi)) {
+    const attributes = xmlAttributes(match[1] ?? "");
+    const id = attributes.get("Id");
+    const target = attributes.get("Target");
+    if (id && target) relationships.set(id, target);
+  }
+  return relationships;
+}
+
+function imageDataUrl(data: Uint8Array, entryName: string): string {
+  const extension = path.posix.extname(entryName).toLowerCase();
+  const mimeType = extension === ".jpg" || extension === ".jpeg"
+    ? "image/jpeg"
+    : extension === ".gif"
+      ? "image/gif"
+      : extension === ".webp"
+        ? "image/webp"
+        : extension === ".svg"
+          ? "image/svg+xml"
+          : "image/png";
+  return `data:${mimeType};base64,${Buffer.from(data).toString("base64")}`;
+}
+
+function parseCellImages(files: Record<string, Uint8Array>): Map<string, { dataUrl: string; alt?: string }> {
+  const partName = Object.keys(files).find((name) => /^xl\/cellimages\d*\.xml$/i.test(name));
+  if (!partName) return new Map();
+  const xml = xmlEntry(files, partName);
+  const relsName = `${path.posix.dirname(partName)}/_rels/${path.posix.basename(partName)}.rels`;
+  const relationshipsEntry = findZipEntry(files, relsName);
+  const relationships = parseRelationships(relationshipsEntry ? xmlEntry(files, relationshipsEntry) : "");
+  const imageById = new Map<string, { dataUrl: string; alt?: string }>();
+
+  for (const match of xml.matchAll(/<(?:[A-Za-z_][\w.-]*:)?cellImage\b[^>]*>[\s\S]*?<\/(?:[A-Za-z_][\w.-]*:)?cellImage>/gi)) {
+    const imageXml = match[0] ?? "";
+    const embedId = imageXml.match(/\br:embed\s*=\s*["']([^"']+)["']/i)?.[1];
+    const target = embedId ? relationships.get(embedId) : undefined;
+    const entryName = target ? findZipEntry(files, resolveZipPath(partName, target)) : undefined;
+    const data = entryName ? files[entryName] : undefined;
+    if (!data || !entryName) continue;
+
+    const ids = new Set<string>();
+    for (const id of imageXml.matchAll(/\bID_[A-Za-z0-9_-]+\b/g)) ids.add(id[0]);
+    const alt = imageXml.match(/\b(?:descr|title)\s*=\s*["']([^"']+)["']/i)?.[1];
+    const resolved = { dataUrl: imageDataUrl(data, entryName), ...(alt ? { alt: decodeXml(alt) } : {}) };
+    for (const id of ids) imageById.set(id, resolved);
+  }
+
+  return imageById;
+}
+
 function xmlText(xml: string, tag: string): string[] {
   const values: string[] = [];
   const pattern = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "g");
@@ -50,14 +122,21 @@ function parseSharedStrings(files: Record<string, Uint8Array>): string[] {
 
 function cellValue(cell: string, sharedStrings: string[]): string {
   const type = cell.match(/\bt="([^"]+)"/)?.[1];
+  const formula = xmlText(cell, "f")[0];
+  if (formula && /\bDISPIMG\s*\(/i.test(formula)) return `=${formula}`;
   const raw = xmlText(cell, "v")[0] ?? "";
   if (type === "s") return sharedStrings[Number(raw)] ?? raw;
   if (type === "inlineStr") return xmlText(cell, "t").join("");
   return decodeXml(raw);
 }
 
+function cellImageId(cell: string): string | undefined {
+  const formula = xmlText(cell, "f")[0] ?? "";
+  return decodeXml(formula).match(/\bDISPIMG\s*\(\s*["'](ID_[A-Za-z0-9_-]+)["']/i)?.[1];
+}
+
 function columnIndex(reference: string): number {
-  const letters = reference.match(/^[A-Z]+/i)?.[0]?.toUpperCase() ?? "A";
+  const letters = reference.match(/^\$?([A-Z]+)/i)?.[1]?.toUpperCase() ?? "A";
   let result = 0;
   for (const letter of letters) result = result * 26 + letter.charCodeAt(0) - 64;
   return Math.max(0, result - 1);
@@ -65,6 +144,7 @@ function columnIndex(reference: string): number {
 
 function parseExcel(files: Record<string, Uint8Array>, relativePath: string): SpreadsheetDocumentPreview {
   const sharedStrings = parseSharedStrings(files);
+  const cellImages = parseCellImages(files);
   const workbook = xmlEntry(files, "xl/workbook.xml");
   const names = [...workbook.matchAll(/<sheet\b[^>]*\bname="([^"]+)"[^>]*\br:id="([^"]+)"[^>]*\/>/g)]
     .map((match) => ({ name: decodeXml(match[1] ?? "工作表"), relId: match[2] ?? "" }));
@@ -80,18 +160,31 @@ function parseExcel(files: Record<string, Uint8Array>, relativePath: string): Sp
     sheets: sheets.map((sheet, index) => {
       const target = relationTargets.get(sheet.relId) ?? `xl/worksheets/sheet${index + 1}.xml`;
       const xml = xmlEntry(files, target.startsWith("xl/") ? target : `xl/${target}`);
-      const rows = [...xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].map((rowMatch) => {
-        const cells: string[] = [];
-        for (const cellMatch of (rowMatch[1] ?? "").matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+      const images: NonNullable<SpreadsheetDocumentPreview["sheets"][number]["images"]> = [];
+      const rows: string[][] = [];
+      const rowPattern = /<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/gi;
+      for (const rowMatch of xml.matchAll(rowPattern)) {
+        const rowAttributes = rowMatch[1] ?? "";
+        const declaredRow = Number(xmlAttributes(rowAttributes).get("r"));
+        const rowIndex = Number.isInteger(declaredRow) && declaredRow > 0 ? declaredRow - 1 : rows.length;
+        const cells = rows[rowIndex] ?? [];
+        const rowXml = rowMatch[2] ?? "";
+        for (const cellMatch of rowXml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/gi)) {
           const attributes = cellMatch[1] ?? "";
-          const value = cellValue(`${cellMatch[0]}`, sharedStrings);
-          const index = columnIndex(attributes.match(/\br="([A-Z]+\d+)"/)?.[1] ?? "A1");
-          while (cells.length <= index) cells.push("");
-          cells[index] = value;
+          const cellXml = cellMatch[0] ?? "";
+          const image = cellImageId(cellXml);
+          const reference = xmlAttributes(attributes).get("r") ?? "A1";
+          const column = columnIndex(reference);
+          while (cells.length <= column) cells.push("");
+          cells[column] = image && cellImages.has(image) ? "" : cellValue(cellXml, sharedStrings);
+          if (image) {
+            const resolved = cellImages.get(image);
+            if (resolved) images.push({ row: rowIndex, column, ...resolved });
+          }
         }
-        return cells;
-      });
-      return { name: sheet.name, rows };
+        rows[rowIndex] = cells;
+      }
+      return { name: sheet.name, rows: rows.map((row) => row ?? []), ...(images.length > 0 ? { images } : {}) };
     }),
   };
 }
