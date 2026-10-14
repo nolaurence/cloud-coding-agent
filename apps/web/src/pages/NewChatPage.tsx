@@ -6,8 +6,7 @@ import { useApp } from "../lib/store";
 import { NEW_CHAT_DRAFT_KEY } from "../lib/composerDrafts";
 import { BrandLogo } from "../components/BrandLogo";
 import { Composer } from "../components/Composer";
-import { ModelPicker } from "../components/ModelPicker";
-import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
+import { ComposerModelPicker } from "../components/ComposerModelPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -152,21 +151,15 @@ export function NewChatPage() {
               running={creating}
               onSend={(text, attachments) => onSend(text, attachments)}
               autoFocus
-              placeholder="输入编码任务"
+              placeholder="描述你的编码任务，@ 引用文件，/ 使用技能"
               footerControls={
-                <>
-                  <ModelPicker value={effectiveModel} onChange={setModel} disabled={creating} />
-                  <ReasoningEffortPicker
-                    compact
-                    model={effectiveModel}
-                    disabled={creating}
-                    agentMode={agentMode}
-                    onAgentModeChange={setAgentMode}
-                    onChange={(reasoningEffort) => {
-                      if (effectiveModel) setModel({ ...effectiveModel, reasoningEffort });
-                    }}
-                  />
-                </>
+                <ComposerModelPicker
+                  value={effectiveModel}
+                  onChange={setModel}
+                  disabled={creating}
+                  agentMode={agentMode}
+                  onAgentModeChange={setAgentMode}
+                />
               }
             />
           </>

@@ -1,0 +1,406 @@
+.composer-surface {
+  border: 1px solid color-mix(in srgb, var(--foreground) 15%, var(--card));
+  border-radius: 20px;
+  background: var(--card);
+  box-shadow: 0 4px 20px rgb(17 24 39 / 4%), 0 1px 3px rgb(17 24 39 / 3%);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.composer-surface:focus-within {
+  border-color: color-mix(in srgb, var(--foreground) 28%, var(--card));
+  box-shadow: 0 4px 20px rgb(17 24 39 / 6%), 0 1px 3px rgb(17 24 39 / 4%);
+}
+
+.composer-surface.is-dragging {
+  border-color: #3b82f6;
+  background: color-mix(in srgb, #3b82f6 6%, var(--card));
+}
+
+.composer-icon-button {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--muted-foreground);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.composer-icon-button:hover:not(:disabled),
+.composer-icon-button[data-state="open"] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.composer-icon-button:focus-visible,
+.composer-model-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.composer-popover {
+  z-index: 60;
+  max-width: calc(100vw - 24px);
+  max-height: var(--radix-popover-content-available-height, var(--radix-dropdown-menu-content-available-height));
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 10%);
+  outline: none;
+  transform-origin: var(--radix-popover-content-transform-origin, var(--radix-dropdown-menu-content-transform-origin));
+  animation: composer-popover-enter 140ms ease-out;
+}
+
+.composer-action-menu {
+  width: 300px;
+  padding: 7px;
+}
+
+.composer-menu-heading {
+  padding: 7px 9px 5px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.composer-action-item {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  outline: none;
+  cursor: pointer;
+}
+
+.composer-action-item[data-highlighted] {
+  background: var(--accent);
+}
+
+.composer-action-item[data-disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.composer-action-item > svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+
+.composer-action-item > span {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-action-item strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.composer-action-item small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+
+.composer-model-trigger {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 280px;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  border-radius: 15px;
+  padding: 0 8px;
+  font-size: 12px;
+  transition: background-color 120ms ease;
+}
+
+.composer-model-trigger:hover:not(:disabled), .composer-model-trigger[data-state="open"] {
+  background: var(--accent);
+}
+
+.composer-model-trigger:disabled {
+  opacity: 0.5;
+}
+
+.composer-model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-model-effort {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+
+.composer-model-panel {
+  width: 256px;
+  padding: 12px;
+}
+
+.composer-panel-view {
+  animation: composer-popover-enter 140ms ease-out;
+}
+
+.composer-reasoning-heading {
+  position: relative;
+  display: flex;
+  min-height: 22px;
+  align-items: center;
+  justify-content: center;
+}
+
+.composer-reasoning-heading strong {
+  color: #3b82f6;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.dark .composer-reasoning-heading strong {
+  color: #60a5fa;
+}
+
+.composer-reasoning-heading button {
+  position: absolute;
+  right: 0;
+  display: flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--muted-foreground);
+}
+
+.composer-reasoning-heading button:hover:not(:disabled) {
+  background: var(--accent);
+}
+
+.composer-model-choice {
+  display: flex;
+  max-width: 100%;
+  min-height: 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  margin: 0 auto;
+  border-radius: 5px;
+  padding: 0 4px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.composer-model-choice > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-model-choice:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.composer-model-back {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 5px;
+  padding: 2px 0 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.composer-model-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 8px;
+  color: var(--muted-foreground);
+}
+
+.composer-model-search:focus-within {
+  border-color: var(--ring);
+}
+
+.composer-model-search input {
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+  outline: none;
+}
+
+.composer-model-list {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.composer-model-option {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 7px;
+  padding: 6px 9px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.composer-model-option > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-model-option:hover:not(:disabled), .composer-model-option:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+.composer-model-panel button:disabled {
+  opacity: 0.4;
+}
+
+.composer-model-empty {
+  padding: 12px 4px;
+  color: var(--muted-foreground);
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+
+.composer-reasoning-range {
+  position: relative;
+  display: flex;
+  height: 28px;
+  align-items: center;
+  margin-top: 12px;
+  touch-action: none;
+  user-select: none;
+  cursor: pointer;
+}
+
+.composer-reasoning-track {
+  position: relative;
+  display: block;
+  height: 24px;
+  flex: 1;
+  border-radius: 12px;
+  background: var(--muted);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 6%);
+}
+
+.composer-reasoning-range[data-disabled] {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.composer-reasoning-fill {
+  position: absolute;
+  height: 100%;
+  border-radius: inherit;
+  background: #3b82f6;
+  pointer-events: none;
+}
+
+.composer-reasoning-marks {
+  position: absolute;
+  inset: 0 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.composer-reasoning-marks > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--foreground) 20%, transparent);
+}
+
+.composer-reasoning-thumb {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
+}
+
+.composer-reasoning-thumb:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+
+.composer-reasoning-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 9px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.composer-mode-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding: 10px 2px 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.composer-mode-note > :last-child {
+  margin-left: auto;
+  font-size: 10px;
+}
+
+
+@keyframes composer-popover-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-popover, .composer-panel-view {
+    animation: none;
+  }
+
+  .composer-reasoning-fill, .composer-reasoning-thumb {
+    transition: none;
+  }
+
+}

@@ -7,8 +7,7 @@ import { useApp, useThreadState } from "../lib/store";
 import { threadComposerDraftKey } from "../lib/composerDrafts";
 import { ChatView } from "../components/ChatView";
 import { Composer } from "../components/Composer";
-import { ModelPicker } from "../components/ModelPicker";
-import { ReasoningEffortPicker } from "../components/ReasoningEffortPicker";
+import { ComposerModelPicker } from "../components/ComposerModelPicker";
 import { RightPanel } from "../components/RightPanel";
 import { RightPanelResizeHandle } from "../components/RightPanelResizeHandle";
 import { ThreadShareDialog } from "../components/ThreadShareDialog";
@@ -251,24 +250,15 @@ export function ThreadPage() {
                       onCompact={() => compactContext(threadId)}
                       footerError={canManageThread ? modelError : undefined}
                       footerControls={canManageThread ? (
-                        <>
-                          <ModelPicker
-                            value={effectiveModel}
-                            onChange={(ref) => void onModelChange(ref)}
-                            disabled={state.running || switchingModel || switchingMode}
-                            lockedProviderId={modelProviderId}
-                          />
-                          <ReasoningEffortPicker
-                            compact
-                            model={effectiveModel}
-                            disabled={state.running || switchingModel || switchingMode}
-                            agentMode={agentMode}
-                            onAgentModeChange={onAgentModeChange}
-                            onChange={(reasoningEffort) => {
-                              if (effectiveModel) void onModelChange({ ...effectiveModel, reasoningEffort });
-                            }}
-                          />
-                        </>
+                        <ComposerModelPicker
+                          value={effectiveModel}
+                          onChange={(ref) => void onModelChange(ref)}
+                          disabled={state.running || switchingMode}
+                          updating={switchingModel}
+                          lockedProviderId={modelProviderId}
+                          agentMode={agentMode}
+                          onAgentModeChange={onAgentModeChange}
+                        />
                       ) : undefined}
                     />
                   </div>

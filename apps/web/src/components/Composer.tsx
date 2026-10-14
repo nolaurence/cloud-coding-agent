@@ -1,21 +1,24 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   ArrowUp,
-  AtSign,
   FileText,
+  FolderSearch,
   ImagePlus,
   Loader2,
   Minimize2,
+  Plus,
   Sparkles,
   Square,
   X,
 } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { buildFileMentionPayload } from "../lib/composerDrafts";
 import { uploadImage } from "../lib/client";
 import type { ContextCompactionResult, ContextUsage, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import "./composer.css";
 
 interface Trigger {
   kind: "file" | "slash";
@@ -31,7 +34,7 @@ interface CompletionItem {
 }
 
 const actionButtonClass =
-  "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-white transition-[background-color,color,transform] hover:bg-zinc-800 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:bg-zinc-200 disabled:text-zinc-400 max-[359px]:ml-auto dark:bg-white dark:text-black dark:hover:bg-zinc-200 dark:focus-visible:ring-offset-zinc-900 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-400";
+  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-black text-white transition-[background-color,color,transform] hover:bg-zinc-800 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:bg-zinc-200 disabled:text-zinc-400 dark:bg-white dark:text-black dark:hover:bg-zinc-200 dark:focus-visible:ring-offset-zinc-900 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-400";
 
 const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const MAX_IMAGES = 4;
@@ -68,7 +71,7 @@ function ContextUsageIndicator({ usage }: { usage: ContextUsage | null }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className="flex h-8 w-8 shrink-0 cursor-default items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500"
+          className="flex h-7 w-7 shrink-0 cursor-default items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500"
           role="img"
           aria-label={label}
           tabIndex={0}
@@ -194,8 +197,11 @@ export function Composer({
   const [submitNotice, setSubmitNotice] = useState("");
   const [images, setImages] = useState<PendingImage[]>([]);
   const [draggingImage, setDraggingImage] = useState(false);
+  const [contentMenuOpen, setContentMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const focusAfterMenuRef = useRef(false);
+  const completionId = useId();
 
   const project = projects.find((candidate) => candidate.id === projectId);
   const busy = running || submitting || compacting;
@@ -446,6 +452,7 @@ export function Composer({
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) return;
     if (popupVisible && items.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -457,7 +464,7 @@ export function Composer({
         setActiveIndex((index) => (index - 1 + items.length) % items.length);
         return;
       }
-      if (event.key === "Enter" || event.key === "Tab") {
+      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey) {
         event.preventDefault();
         const item = items[activeIndex];
         if (item) applyItem(item.key);
@@ -478,7 +485,12 @@ export function Composer({
   return (
     <div className="relative" data-thread-id={threadId}>
       {popupVisible && (
-        <div className="absolute bottom-full left-0 z-50 mb-2 max-h-72 w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+        <div
+          id={completionId}
+          role="listbox"
+          aria-label={trigger.kind === "file" ? "引用文件" : "命令与技能"}
+          className="absolute bottom-full left-0 z-50 mb-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-border bg-popover p-1.5 shadow-lg"
+        >
           <div className="flex items-center gap-2 px-2 py-1.5 text-[11px] font-medium text-zinc-500">
             {trigger.kind === "file" ? (
               <>
@@ -495,6 +507,9 @@ export function Composer({
             <button
               type="button"
               key={`${item.kind}-${item.key}`}
+              id={`${completionId}-${index}`}
+              role="option"
+              aria-selected={index === activeIndex}
               className={cn(
                 "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs",
                 index === activeIndex
@@ -532,11 +547,11 @@ export function Composer({
 
       <div
         className={cn(
-          "rounded-2xl border border-zinc-300 bg-white shadow-[0_12px_32px_-20px_rgba(0,0,0,0.28),0_3px_10px_-7px_rgba(0,0,0,0.2)] transition-colors focus-within:border-zinc-500 dark:border-border dark:bg-card dark:shadow-[0_12px_32px_-20px_rgba(0,0,0,0.65),0_3px_10px_-7px_rgba(0,0,0,0.4)] dark:focus-within:border-zinc-500",
-          draggingImage && "border-blue-500 bg-blue-50/50 dark:border-blue-400 dark:bg-blue-950/20",
+          "composer-surface relative",
+          draggingImage && "is-dragging",
         )}
         onDragEnter={(event) => {
-          if ([...event.dataTransfer.items].some((item) => item.type.startsWith("image/"))) {
+          if (!submitting && !compacting && [...event.dataTransfer.items].some((item) => item.type.startsWith("image/"))) {
             event.preventDefault();
             setDraggingImage(true);
           }
@@ -552,11 +567,11 @@ export function Composer({
         onDrop={(event) => {
           event.preventDefault();
           setDraggingImage(false);
-          addImages(event.dataTransfer.files);
+          if (!submitting && !compacting) addImages(event.dataTransfer.files);
         }}
       >
         {images.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto px-4 pt-3">
+          <div className="flex gap-2 overflow-x-auto px-4 pt-4 pb-1">
             {images.map((image) => (
               <div className="group relative h-16 w-16 shrink-0" key={image.id}>
                 <img
@@ -582,10 +597,13 @@ export function Composer({
           ref={textareaRef}
           autoFocus={autoFocus}
           aria-label="消息内容"
+          aria-autocomplete="list"
+          aria-controls={popupVisible ? completionId : undefined}
+          aria-activedescendant={popupVisible && items[activeIndex] ? `${completionId}-${activeIndex}` : undefined}
           disabled={submitting || compacting}
           rows={1}
-          className="block min-h-20 w-full resize-none overflow-y-auto bg-transparent px-4 pt-3.5 pb-2 text-sm leading-6 outline-none placeholder:text-zinc-400 disabled:opacity-60"
-          placeholder={placeholder ?? "输入消息"}
+          className="block min-h-[76px] w-full resize-none overflow-y-auto bg-transparent px-4 pt-3.5 pb-2 text-sm leading-6 outline-none placeholder:text-muted-foreground/70 disabled:opacity-60"
+          placeholder={placeholder ?? "输入消息，@ 引用文件，/ 使用技能"}
           value={text}
           onChange={(event) => {
             setComposerDraft(draftKey, event.target.value);
@@ -604,8 +622,9 @@ export function Composer({
             }
           }}
           onClick={updateTrigger}
+          onFocus={() => setContentMenuOpen(false)}
           onKeyUp={(event) => {
-            if (!["Enter", "ArrowDown", "ArrowUp", "Tab"].includes(event.key)) updateTrigger();
+            if (!["Enter", "Escape", "ArrowDown", "ArrowUp", "Tab"].includes(event.key)) updateTrigger();
           }}
         />
 
@@ -625,86 +644,133 @@ export function Composer({
           </div>
         )}
 
-        <div className="flex min-h-11 flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2.5 pb-2.5">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 max-[359px]:basis-full">
-            {footerControls && (
-              <div className="flex min-w-0 flex-wrap items-center gap-1">{footerControls}</div>
-            )}
+        <div className="flex min-h-11 items-center justify-between gap-1 px-2.5 pb-2.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1">
             <input
               ref={imageInputRef}
               type="file"
               accept="image/jpeg,image/png,image/gif,image/webp"
               multiple
+              aria-label="上传图片"
               className="hidden"
               onChange={(event) => {
                 if (event.target.files) addImages(event.target.files);
                 event.target.value = "";
               }}
             />
-            <button
-              type="button"
-              aria-label="添加图片"
-              title="添加图片"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-              onClick={() => imageInputRef.current?.click()}
-              disabled={busy || images.length >= MAX_IMAGES}
-            >
-              <ImagePlus className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              aria-label="引用文件"
-              title="引用文件"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-              onClick={() => insertTrigger("@")}
-            >
-              <AtSign className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              aria-label="打开命令和技能菜单"
-              title="命令和技能"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-              onClick={() => insertTrigger("/")}
-            >
-              <Sparkles className="h-4 w-4" />
-            </button>
-            {threadId && <ContextUsageIndicator usage={contextUsage ?? null} />}
+            <DropdownMenu.Root open={contentMenuOpen} onOpenChange={setContentMenuOpen}>
+              <DropdownMenu.Trigger asChild>
+                <button
+                  type="button"
+                  aria-label="添加内容"
+                  title="添加图片、文件引用或技能"
+                  className="composer-icon-button"
+                  disabled={submitting || compacting}
+                >
+                  <Plus className="size-[18px]" aria-hidden="true" />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  className="composer-popover composer-action-menu"
+                  side="top"
+                  align="start"
+                  sideOffset={12}
+                  collisionPadding={12}
+                  aria-label="添加内容"
+                  onCloseAutoFocus={(event) => {
+                    if (focusAfterMenuRef.current) {
+                      event.preventDefault();
+                      focusAfterMenuRef.current = false;
+                      textareaRef.current?.focus();
+                    }
+                  }}
+                >
+                  <DropdownMenu.Label className="composer-menu-heading">添加内容</DropdownMenu.Label>
+                  <DropdownMenu.Item
+                    className="composer-action-item"
+                    disabled={images.length >= MAX_IMAGES}
+                    onSelect={() => {
+                      focusAfterMenuRef.current = true;
+                      imageInputRef.current?.click();
+                    }}
+                  >
+                    <ImagePlus aria-hidden="true" />
+                    <span>
+                      <strong>添加图片</strong>
+                      <small>选择、粘贴或拖入图片，最多 4 张</small>
+                    </span>
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Label className="composer-menu-heading">工作区与技能</DropdownMenu.Label>
+                  <DropdownMenu.Item
+                    className="composer-action-item"
+                    disabled={!projectId}
+                    onSelect={() => {
+                      focusAfterMenuRef.current = true;
+                      insertTrigger("@");
+                    }}
+                  >
+                    <FolderSearch aria-hidden="true" />
+                    <span>
+                      <strong>引用工作区文件</strong>
+                      <small>使用 @ 搜索并添加文件上下文</small>
+                    </span>
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    className="composer-action-item"
+                    onSelect={() => {
+                      focusAfterMenuRef.current = true;
+                      insertTrigger("/");
+                    }}
+                  >
+                    <Sparkles aria-hidden="true" />
+                    <span>
+                      <strong>插入技能或命令</strong>
+                      <small>使用 / 选择技能或压缩上下文</small>
+                    </span>
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+            {footerControls && <div className="ml-auto flex min-w-0 items-center gap-1">{footerControls}</div>}
           </div>
 
-          {running && onInterrupt ? (
-            <button
-              type="button"
-              aria-label="停止任务"
-              title="停止任务"
-              className={actionButtonClass}
-              onClick={() => void stop()}
-              disabled={interrupting}
-              aria-busy={interrupting}
-            >
-              {interrupting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Square className="h-3.5 w-3.5 fill-current" />
-              )}
-            </button>
-          ) : (
-            <button
-              type="button"
-              aria-label="发送消息"
-              title="发送消息"
-              className={actionButtonClass}
-              onClick={() => void submit()}
-              disabled={(!text.trim() && images.length === 0) || busy}
-              aria-busy={submitting || compacting}
-            >
-              {submitting || compacting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <ArrowUp className="h-5 w-5 stroke-[2.5]" />
-              )}
-            </button>
-          )}
+          <div className="flex shrink-0 items-center gap-1">
+            {threadId && <ContextUsageIndicator usage={contextUsage ?? null} />}
+            {running && onInterrupt ? (
+              <button
+                type="button"
+                aria-label="停止任务"
+                title="停止任务"
+                className={actionButtonClass}
+                onClick={() => void stop()}
+                disabled={interrupting}
+                aria-busy={interrupting}
+              >
+                {interrupting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Square className="h-3.5 w-3.5 fill-current" />
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                aria-label="发送消息"
+                title="发送消息"
+                className={actionButtonClass}
+                onClick={() => void submit()}
+                disabled={(!text.trim() && images.length === 0) || busy}
+                aria-busy={submitting || compacting}
+              >
+                {submitting || compacting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ArrowUp className="h-4 w-4 stroke-[2.5]" />
+                )}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
