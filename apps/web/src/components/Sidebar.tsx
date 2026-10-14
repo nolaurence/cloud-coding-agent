@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
-  FolderGit2,
+  Folder,
   FolderOpen,
   FolderPlus,
   Eye,
@@ -9,12 +9,9 @@ import {
   LogOut,
   MessageSquare,
   MessagesSquare,
-  Package,
   PanelLeftClose,
-  Plus,
-  Settings,
   ShieldCheck,
-  Sparkles,
+  SquarePen,
   Trash2,
   User,
   WifiOff,
@@ -25,7 +22,6 @@ import { cn } from "../lib/utils";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { BrandLogo } from "./BrandLogo";
-import { WindowControls } from "./WindowControls";
 import {
   Dialog,
   DialogContent,
@@ -97,9 +93,8 @@ export function Sidebar({
   };
 
   return (
-    <aside className="flex h-full w-full shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:w-[17rem] md:rounded-lg md:border md:shadow-md md:shadow-zinc-950/10 dark:border-zinc-800 dark:md:shadow-black/30 dark:bg-zinc-900">
-      <div className="window-drag-region flex h-12 items-center gap-2 px-4">
-        <WindowControls show="mac" />
+    <aside className="flex h-full w-full shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:w-[17rem] dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="window-drag-region flex h-12 shrink-0 items-center gap-2 px-4">
         <BrandLogo className="h-6 w-6" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">{appName}</span>
         {!connected && (
@@ -132,62 +127,39 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="px-3 pb-2">
+      <div className="px-2 pb-2">
         <Button
-          variant="outline"
-          className="w-full justify-start bg-white dark:bg-zinc-950"
+          variant="ghost"
+          className="w-full justify-start font-normal text-foreground"
           onClick={() => {
             navigate("/");
             onNavigate?.();
           }}
         >
-          <Plus className="h-4 w-4" /> 新会话
+          <SquarePen className="h-4 w-4" /> 新聊天
         </Button>
         <Button
           variant="ghost"
-          className="mt-1 w-full justify-start text-muted-foreground"
+          className="w-full justify-start text-muted-foreground"
           onClick={() => setAddOpen(true)}
         >
           <FolderPlus className="h-4 w-4" /> 创建工作区
         </Button>
-        {user?.role === "admin" && (
-          <Link
-            to="/skills"
-            onClick={onNavigate}
-            className={cn(
-              buttonVariants({ variant: location.pathname === "/skills" ? "secondary" : "ghost" }),
-              "mt-1 w-full justify-start",
-              location.pathname !== "/skills" && "text-muted-foreground",
-            )}
-          >
-            <Sparkles className="h-4 w-4" /> 技能
-          </Link>
-        )}
-        {user?.role === "admin" && (
-          <Link
-            to="/plugins"
-            onClick={onNavigate}
-            className={cn(
-              buttonVariants({ variant: location.pathname === "/plugins" ? "secondary" : "ghost" }),
-              "mt-1 w-full justify-start",
-              location.pathname !== "/plugins" && "text-muted-foreground",
-            )}
-          >
-            <Package className="h-4 w-4" /> 扩展工具
-          </Link>
-        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+        <div className="px-2 py-1 text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+          项目
+        </div>
         {projects.length === 0 && (
           <div className="px-2 py-6 text-center text-xs text-zinc-500">
             暂无工作区
           </div>
         )}
         {projects.map((project) => (
-          <div key={project.id} className="mt-3">
+          <div key={project.id} className="mt-1">
             <div className="group flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-              <FolderGit2 className="h-3.5 w-3.5 shrink-0" />
+              <Folder className="h-3.5 w-3.5 shrink-0" />
               <span className="min-w-0 flex-1 truncate">
                 {project.name}
               </span>
@@ -289,7 +261,7 @@ export function Sidebar({
       </div>
 
       <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
-        <div className="mb-1 flex items-center gap-2 rounded-md px-2 py-1.5">
+        <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
           <User className="h-4 w-4 shrink-0 text-zinc-400" />
           <span className="min-w-0 flex-1 truncate text-sm">{localMode ? "本地工作区" : user?.username}</span>
           {user?.role === "admin" && (
@@ -314,20 +286,6 @@ export function Sidebar({
             </Button>
           )}
         </div>
-        <Link
-          to="/settings/general"
-          onClick={onNavigate}
-          className={cn(
-            buttonVariants({
-              variant: location.pathname.startsWith("/settings") ? "secondary" : "ghost",
-              size: "default",
-            }),
-            "w-full justify-start",
-            !location.pathname.startsWith("/settings") && "text-muted-foreground",
-          )}
-        >
-          <Settings className="h-4 w-4" /> 设置
-        </Link>
       </div>
 
       <Dialog

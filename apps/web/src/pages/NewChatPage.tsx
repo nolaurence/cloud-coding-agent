@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FolderOpen, FolderPlus, Loader2 } from "lucide-react";
+import { Folder, FolderOpen, FolderPlus, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { AgentMode, ModelRef, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
@@ -35,6 +35,8 @@ export function NewChatPage() {
 
   const effectiveProjectId = projectId || projects[0]?.id || "";
   const effectiveModel = model ?? settings?.defaultModel;
+  const effectiveProjectName =
+    projects.find((project) => project.id === effectiveProjectId)?.name ?? "";
 
   const onSend = async (text: string, attachments: TurnAttachment[]) => {
     if (!effectiveProjectId || creating) return;
@@ -72,7 +74,11 @@ export function NewChatPage() {
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center py-10">
         <div className="mb-6 text-center">
           <BrandLogo className="mx-auto mb-3 h-10 w-10" />
-          <h1 className="text-xl font-semibold">今天要处理什么？</h1>
+          <h1 className="text-xl font-semibold">
+            {projects.length > 0 && effectiveProjectName
+              ? `我们应该在${effectiveProjectName}中做些什么？`
+              : "今天要处理什么？"}
+          </h1>
         </div>
         {projects.length === 0 ? (
           <form
@@ -127,13 +133,17 @@ export function NewChatPage() {
           </form>
         ) : (
           <>
-            <div className="mb-3 flex flex-wrap items-center justify-center gap-2">
+            <div className="mb-2 flex items-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
+              <Folder className="h-4 w-4 shrink-0 text-zinc-500" />
               <Select
                 disabled={creating}
                 value={effectiveProjectId}
                 onValueChange={setProjectId}
               >
-                <SelectTrigger className="w-full sm:w-44" aria-label="选择工作区">
+                <SelectTrigger
+                  className="h-8 w-full min-w-0 border-0 bg-transparent p-0 shadow-none focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
+                  aria-label="选择工作区"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

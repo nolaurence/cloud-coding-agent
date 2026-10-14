@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { ArrowLeftRight, Menu, PanelLeftOpen, PanelRightOpen, Share2, WifiOff } from "lucide-react";
+import { ArrowLeftRight, Menu, PanelRightOpen, Share2, WifiOff } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
+import { NavRail } from "./NavRail";
 import { Sidebar } from "./Sidebar";
 import { useApp } from "../lib/store";
 import { Button } from "@/components/ui/button";
@@ -78,38 +79,30 @@ export function AppLayout() {
 
   return (
     <div className="relative flex h-dvh overflow-hidden bg-background">
-      {sidebarCollapsed ? (
-        <div className="hidden shrink-0 md:block">
-          <WindowControls show="mac" className="ml-3 mt-3" />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="显示会话侧边栏"
-            title="显示会话侧边栏 (⌘B)"
-            className="ml-[10px] mt-[10px] text-muted-foreground"
-            onClick={toggleSidebarCollapsed}
-          >
-            <PanelLeftOpen className="h-4 w-4" />
-          </Button>
-        </div>
-      ) : (
-        <div className="m-[10px] hidden min-h-0 shrink-0 md:block">
-          <Sidebar onCollapse={toggleSidebarCollapsed} />
-        </div>
-      )}
+      <div className="hidden h-full min-h-0 shrink-0 md:flex">
+        <NavRail
+          sidebarCollapsed={sidebarCollapsed}
+          onExpandSidebar={toggleSidebarCollapsed}
+        />
+        {!sidebarCollapsed && <Sidebar onCollapse={toggleSidebarCollapsed} />}
+      </div>
 
       <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
         <SheetContent
           side="left"
           showCloseButton={false}
-          className="w-[min(85vw,18rem)] max-w-none gap-0 p-0 md:hidden sm:max-w-none"
+          className="w-[min(92vw,23rem)] max-w-none gap-0 p-0 md:hidden sm:max-w-none"
         >
           <SheetTitle className="sr-only">导航</SheetTitle>
-          <Sidebar
-            onNavigate={() => setSidebarOpen(false)}
-            onClose={() => setSidebarOpen(false)}
-          />
+          <div className="flex h-full min-h-0">
+            <NavRail onNavigate={() => setSidebarOpen(false)} />
+            <div className="min-w-0 flex-1">
+              <Sidebar
+                onNavigate={() => setSidebarOpen(false)}
+                onClose={() => setSidebarOpen(false)}
+              />
+            </div>
+          </div>
         </SheetContent>
       </Sheet>
 
