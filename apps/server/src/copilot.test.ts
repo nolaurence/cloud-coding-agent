@@ -1719,7 +1719,7 @@ test("rejects a thread whose owner does not own its workspace", async (t) => {
 });
 
 
-test("only the selected provider's GPT Image catalog enables image generation", async (t) => {
+test("configured GPT Image providers enable image generation independently of the chat provider", async (t) => {
   for (const configuration of ["none", "other-provider", "selected-provider", "anthropic", "similar-name"] as const) {
     await t.test(configuration, async (t) => {
       const threadId = randomUUID();
@@ -1737,9 +1737,15 @@ test("only the selected provider's GPT Image catalog enables image generation", 
       const manager = new CopilotManager(() => client as unknown as CopilotClient);
       t.after(() => manager.shutdown());
       await manager.subscribe(threadId, "admin");
-      const config = client.createdConfigs[0] as { imageGenerationModel?: string; imageGenerationOwnerId?: string };
-      assert.equal(config.imageGenerationModel, configuration === "selected-provider" ? "gpt-image-1.5" : undefined);
-      assert.equal(config.imageGenerationOwnerId, configuration === "selected-provider" ? "admin" : undefined);
+      const config = client.createdConfigs[0] as { imageGenerationModel?: string; imageGenerationOwnerId?: string; imageGenerationProvider?: { baseUrl: string; model: string } };
+      const expectedModel = configuration === "selected-provider" ? "gpt-image-1.5" : configuration === "other-provider" ? "gpt-image-1" : undefined;
+      assert.equal(config.imageGenerationModel, expectedModel);
+      assert.equal(config.imageGenerationOwnerId, expectedModel ? "admin" : undefined);
+      assert.deepEqual(config.imageGenerationProvider, expectedModel ? {
+        baseUrl: configuration === "selected-provider" ? "https://example.com/v1" : "https://other.example.com/v1",
+        apiKey: undefined,
+        model: expectedModel,
+      } : undefined);
     });
   }
 });

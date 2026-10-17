@@ -43,6 +43,7 @@ import { createAgentResourceTools } from "./agentResources.js";
 import { effectiveMcpServers } from "./mcpServers.js";
 import { enabledSkillDirectories } from "./skills.js";
 import { getUserRole } from "./auth.js";
+import { selectImageGenerationProvider } from "./imageGeneration.js";
 
 interface ThreadRuntime {
   threadId: string;
@@ -699,9 +700,6 @@ export class CopilotManager {
         config.modelCapabilities = modelCapabilitiesFor(settings, modelRef);
       }
       if (providerConfig) {
-        const imageGenerationModel = providerConfig.type === "openai"
-          ? providerConfig.models.find((candidate) => /^gpt-image(?:-|$)/i.test(candidate.id.trim()))?.id.trim()
-          : undefined;
         config.provider = {
           type: providerConfig.type,
           baseUrl: providerConfig.baseUrl.trim(),
@@ -717,11 +715,13 @@ export class CopilotManager {
             ? { azure: { apiVersion: providerConfig.azureApiVersion ?? "2024-10-21" } }
             : {}),
         };
-        if (imageGenerationModel) {
-          config.imageGenerationModel = imageGenerationModel;
-          config.imageGenerationOwnerId = ownerId;
-        }
       }
+    }
+    const imageProvider = selectImageGenerationProvider(settings.providers, modelProviderId);
+    if (imageProvider) {
+      config.imageGenerationProvider = imageProvider;
+      config.imageGenerationModel = imageProvider.model;
+      config.imageGenerationOwnerId = ownerId;
     }
     return config;
   }

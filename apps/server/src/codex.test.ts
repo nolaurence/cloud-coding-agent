@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import type { SessionEvent } from "@github/copilot-sdk";
-import { object, array, chatToResponses, type JsonObject } from "./llmGateway.js";
+import { object, array, chatToResponses, responsesToChat, type JsonObject } from "./llmGateway.js";
 
 // This test drives the pinned native binary, not a substitute RPC implementation.
 test("native Codex uses Chat gateway, executes a platform tool, persists and resumes", { timeout: 90_000 }, async (t) => {
@@ -33,7 +33,8 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const request = object(JSON.parse(Buffer.concat(chunks).toString()));
       received.push(request);
-      if (req.url === "/v1/images/generations") {
+      if (req.url === "/images-provider/v1/images/generations") {
+        assert.equal(req.headers.authorization, "Bearer image-provider-key");
         assert.equal(request.model, "gpt-image-1.5");
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ data: [{ b64_json: imageBase64 }] }));
@@ -43,16 +44,20 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
         const nativeResponses = req.url === "/v1/responses";
         const history = array(nativeResponses ? request.input : request.messages).map(object);
         const alreadyGenerated = nativeResponses
-          ? history.some((item) => item.type === "image_generation_call")
-          : history.some((item) => Array.isArray(item.content) && item.content.map(object).some((part) => part.type === "image_url"));
-        const tools = array(request.tools).map(object);
-        assert.ok(tools.some((tool) => nativeResponses ? tool.type === "image_generation" && tool.model === "gpt-image-1.5" : tool.function && object(tool.function).name === "image_generation"), JSON.stringify(tools.map((tool) => ({ type: tool.type, name: tool.function ? object(tool.function).name : tool.name }))));
+          ? history.some((item) => item.type === "function_call_output" && item.call_id === "call_image")
+          : history.some((item) => item.role === "tool" && item.tool_call_id === "call_image");
+        const translated = nativeResponses ? responsesToChat(request) : undefined;
+        const tools = array(translated ? translated.body.tools : request.tools).map(object);
+        const imageTool = tools.find((tool) => String(object(tool.function).name).includes("cca_imagegen") && String(object(tool.function).name).endsWith("image_gen"));
+        const searchTool = tools.find((tool) => object(tool.function).name === "tool_search");
+        assert.ok(imageTool || searchTool, JSON.stringify(tools));
         if (!alreadyGenerated) {
-          const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_image", function: { name: "image_generation", arguments: '{"prompt":"A cat"}' } }] }, finish_reason: "tool_calls" }] };
+          const name = imageTool ? object(imageTool.function).name : "tool_search";
+          const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: imageTool ? "call_image" : "call_search", function: { name, arguments: imageTool ? '{"prompt":"A cat"}' : '{"query":"+cca_imagegen","limit":1}' } }] }, finish_reason: "tool_calls" }] };
           res.setHeader("content-type", "text/event-stream");
           if (nativeResponses) {
             const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode("data: " + JSON.stringify(chunk) + "\n\ndata: [DONE]\n\n")); controller.close(); } });
-            await chatToResponses(body, String(request.model), new Set(), (event) => res.write("event: " + event.type + "\ndata: " + JSON.stringify(event) + "\n\n"), async () => ({ result: imageBase64 }));
+            await chatToResponses(body, String(request.model), new Set(), (event) => res.write("event: " + event.type + "\ndata: " + JSON.stringify(event) + "\n\n"), undefined, translated);
             res.end();
           } else res.end("data: " + JSON.stringify(chunk) + "\n\ndata: [DONE]\n\n");
           return;
@@ -182,11 +187,16 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   assert.equal((await native.sendAndWait("Native Responses", 10_000))?.data.content, "native Responses works");
   await client.deleteSession(native.sessionId);
   const { readStoredImage, removeUploadedImages } = await import("./uploads.js");
-  for (const wireApi of ["responses", "completions"] as const) {
-    await t.test("native image generation with " + wireApi, async () => {
-      const imageConfig = { ...config, sessionId: randomUUID(), imageGenerationModel: "gpt-image-1.5", imageGenerationOwnerId: "image-test-user", provider: { ...config.provider, wireApi } };
+  for (const { wireApi, resumeExisting } of (["responses", "completions"] as const).flatMap((wireApi) => [false, true].map((resumeExisting) => ({ wireApi, resumeExisting })))) {
+    await t.test("discoverable imagegen tool with " + wireApi + (resumeExisting ? " on an existing thread" : " on a new thread"), async () => {
+      const imageConfig = { ...config, sessionId: randomUUID(), imageGenerationModel: "gpt-image-1.5", imageGenerationOwnerId: "image-test-user", imageGenerationProvider: { baseUrl: "http://127.0.0.1:" + address.port + "/images-provider/v1", apiKey: "image-provider-key", model: "gpt-image-1.5" }, provider: { ...config.provider, wireApi } };
+      const initial = await client.createSession({ ...imageConfig, ...(resumeExisting ? { imageGenerationModel: undefined, imageGenerationProvider: undefined } : {}) });
+      if (resumeExisting) {
+        await initial.sendAndWait("Prepare an existing conversation", 15_000);
+        await initial.disconnect();
+      }
       generateImageMode = true;
-      const imageSession = await client.createSession(imageConfig);
+      const imageSession = resumeExisting ? await client.resumeSession(initial.sessionId, imageConfig) : initial;
       await imageSession.sendAndWait("Generate an image of a cat", 15_000);
       generateImageMode = false;
       const imageEvents = await imageSession.getEvents();

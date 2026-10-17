@@ -35,7 +35,12 @@ function contentParts(value: unknown): JsonObject[] {
   });
 }
 
-export function responsesToChat(request: JsonObject): { body: JsonObject; customTools: Set<string>; imageGeneration: boolean } {
+interface ToolTranslation {
+  toolSearch: boolean;
+  toolNames: Map<string, { name: string; namespace: string }>;
+}
+
+export function responsesToChat(request: JsonObject): { body: JsonObject; customTools: Set<string>; imageGeneration: boolean } & ToolTranslation {
   if (request.previous_response_id) throw new Error("previous_response_id is not supported; send the complete input history");
   const messages: JsonObject[] = [];
   let reasoningContent: string | undefined;
@@ -46,13 +51,28 @@ export function responsesToChat(request: JsonObject): { body: JsonObject; custom
   };
   if (request.instructions) messages.push({ role: "system", content: text(request.instructions) });
   const input = typeof request.input === "string" ? [{ role: "user", content: request.input }] : array(request.input ?? []);
-  const tools = array(request.tools ?? []);
+  const tools = [...array(request.tools ?? [])];
+  const toolSearch = tools.some((raw) => object(raw).type === "tool_search");
+  if (toolSearch) for (const raw of input) {
+    const item = object(raw);
+    if (item.type === "tool_search_output") tools.push(...array(item.tools ?? []));
+  }
   const customTools = new Set<string>();
+  const toolNames: ToolTranslation["toolNames"] = new Map();
+  const callableName = (name: string, namespace?: string) => namespace ? namespace + "__" + name : name;
   let imageGeneration = false;
-  const chatTools = tools.map((raw) => {
+  const translateTools = (items: unknown[], namespace?: string): JsonObject[] => items.flatMap<JsonObject>((raw): JsonObject | JsonObject[] => {
     const tool = object(raw);
+    if (tool.type === "namespace") return translateTools(array(tool.tools), text(tool.name));
+    if (tool.type === "tool_search") {
+      if (tool.execution !== "client") throw new Error("Hosted tool search is not supported by Chat Completions");
+      return { type: "function", function: { name: "tool_search", description: tool.description, parameters: tool.parameters } };
+    }
+    if (tool.type === "function" || tool.type === "custom") text(tool.name);
+    const name = typeof tool.name === "string" ? callableName(tool.name, namespace) : "";
+    if (namespace && name) toolNames.set(name, { name: text(tool.name), namespace });
     if (tool.type === "function") return { type: "function", function: {
-      name: text(tool.name), description: tool.description, parameters: tool.parameters ?? { type: "object", properties: {} },
+      name, description: tool.description, parameters: tool.parameters ?? { type: "object", properties: {} },
       ...(tool.strict !== undefined ? { strict: tool.strict } : {}),
     } };
     if (tool.type === "image_generation") {
@@ -64,7 +84,6 @@ export function responsesToChat(request: JsonObject): { body: JsonObject; custom
       } };
     }
     if (tool.type === "custom") {
-      const name = text(tool.name);
       customTools.add(name);
       return { type: "function", function: { name,
         description: String(tool.description ?? "") + "\nThis compatibility API exposes a JSON function, overriding freeform transport instructions above. Put the complete raw tool input in the input string; never put JSON wrappers or Markdown fences inside that string.",
@@ -73,6 +92,7 @@ export function responsesToChat(request: JsonObject): { body: JsonObject; custom
     }
     throw new Error("Unsupported Responses tool: " + String(tool.type));
   });
+  const chatTools = [...new Map(translateTools(tools).map((tool) => [object(tool.function).name, tool])).values()];
   for (const raw of input) {
     const item = object(raw);
     if (item.type !== "function_call_output" && item.type !== "custom_tool_call_output") flushToolImages();
@@ -81,9 +101,9 @@ export function responsesToChat(request: JsonObject): { body: JsonObject; custom
       if (summary) reasoningContent = (reasoningContent ?? "") + summary;
       continue;
     }
-    if (item.type === "function_call" || item.type === "custom_tool_call") {
-      const call = { id: text(item.call_id), type: "function", function: { name: text(item.name),
-        arguments: item.type === "custom_tool_call" ? JSON.stringify({ input: text(item.input) }) : text(item.arguments) } };
+    if (item.type === "function_call" || item.type === "custom_tool_call" || item.type === "tool_search_call") {
+      const call = { id: text(item.call_id), type: "function", function: { name: item.type === "tool_search_call" ? "tool_search" : callableName(text(item.name), typeof item.namespace === "string" ? item.namespace : undefined),
+        arguments: item.type === "custom_tool_call" ? JSON.stringify({ input: text(item.input) }) : item.type === "tool_search_call" ? JSON.stringify(item.arguments) : text(item.arguments) } };
       const previous = messages.at(-1);
       if (previous?.role === "assistant") {
         previous.tool_calls = [...array(previous.tool_calls ?? []), call];
@@ -91,6 +111,8 @@ export function responsesToChat(request: JsonObject): { body: JsonObject; custom
       }
       else messages.push({ role: "assistant", content: null, tool_calls: [call], ...(reasoningContent ? { reasoning_content: reasoningContent } : {}) });
       reasoningContent = undefined;
+    } else if (item.type === "tool_search_output") {
+      messages.push({ role: "tool", tool_call_id: text(item.call_id), content: JSON.stringify({ tools: item.tools }) });
     } else if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
       const parts = contentParts(item.output);
       const images = parts.filter((part) => part.type === "image_url");
@@ -120,8 +142,8 @@ export function responsesToChat(request: JsonObject): { body: JsonObject; custom
   let toolChoice = request.tool_choice;
   if (toolChoice && typeof toolChoice === "object") {
     const choice = object(toolChoice);
-    if (!["function", "custom", "image_generation"].includes(String(choice.type))) throw new Error("Unsupported tool_choice");
-    toolChoice = { type: "function", function: { name: choice.type === "image_generation" ? "image_generation" : text(choice.name) } };
+    if (!["function", "custom", "image_generation", "tool_search"].includes(String(choice.type))) throw new Error("Unsupported tool_choice");
+    toolChoice = { type: "function", function: { name: choice.type === "image_generation" || choice.type === "tool_search" ? choice.type : callableName(text(choice.name), typeof choice.namespace === "string" ? choice.namespace : undefined) } };
   }
   const body: JsonObject = { model: text(request.model), messages, stream: true, stream_options: { include_usage: true } };
   if (chatTools.length) body.tools = chatTools;
@@ -141,7 +163,7 @@ export function responsesToChat(request: JsonObject): { body: JsonObject; custom
       else throw new Error("Unsupported output format");
     }
   }
-  return { body, customTools, imageGeneration };
+  return { body, customTools, imageGeneration, toolSearch, toolNames };
 }
 
 export async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
@@ -178,6 +200,7 @@ export async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator
 export async function chatToResponses(
   body: ReadableStream<Uint8Array>, model: string, customTools: Set<string>, emit: (event: JsonObject) => unknown,
   generateImage?: (argumentsValue: JsonObject) => Promise<JsonObject>,
+  toolTranslation?: ToolTranslation,
 ): Promise<JsonObject> {
   const id = "resp_" + randomUUID();
   const created = Math.floor(Date.now() / 1000);
@@ -266,8 +289,15 @@ export async function chatToResponses(
       await event("response.image_generation_call.completed", { item_id: state.item.id, output_index: state.index });
       continue;
     }
+    if (state.name === "tool_search" && toolTranslation?.toolSearch) {
+      Object.assign(state.item, { type: "tool_search_call", execution: "client", call_id: state.callId, status: "in_progress", arguments: {} });
+      await event("response.output_item.added", { output_index: state.index, item: { ...state.item } });
+      Object.assign(state.item, { status: "completed", arguments: object(JSON.parse(state.args)) });
+      continue;
+    }
     const custom = customTools.has(state.name);
-    Object.assign(state.item, { type: custom ? "custom_tool_call" : "function_call", name: state.name, call_id: state.callId, status: "in_progress", [custom ? "input" : "arguments"]: "" });
+    const original = toolTranslation?.toolNames.get(state.name);
+    Object.assign(state.item, { type: custom ? "custom_tool_call" : "function_call", name: original?.name ?? state.name, ...(original ? { namespace: original.namespace } : {}), call_id: state.callId, status: "in_progress", [custom ? "input" : "arguments"]: "" });
     await event("response.output_item.added", { output_index: state.index, item: { ...state.item } });
     const value = custom ? text(object(JSON.parse(state.args)).input) : state.args;
     if (!custom) object(JSON.parse(value));
@@ -326,11 +356,6 @@ export async function startLlmGateway(provider: GatewayProvider, onImageGenerati
       let translated: ReturnType<typeof responsesToChat> | undefined;
       try {
         request = object(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-        if (provider.type === "openai" && provider.imageGenerationModel && /^gpt-image(?:-|$)/i.test(provider.imageGenerationModel) &&
-          Array.isArray(request.tools) && request.tool_choice !== "none" && req.url === "/responses" &&
-          !request.tools.some((raw) => object(raw).type === "image_generation")) {
-          request.tools.push({ type: "image_generation" });
-        }
         if (Array.isArray(request.tools)) request.tools = request.tools.map((raw) => {
           const tool = object(raw);
           if (tool.type !== "image_generation") return tool;
@@ -423,7 +448,7 @@ export async function startLlmGateway(provider: GatewayProvider, onImageGenerati
           const payload = object(JSON.parse(Buffer.concat(imageChunks).toString("utf8")));
           const image = object(array(payload.data)[0]);
           return { result: text(image.b64_json), revised_prompt: typeof image.revised_prompt === "string" ? image.revised_prompt : prompt };
-        } : undefined);
+        } : undefined, translated);
         if (!streaming) { res.writeHead(200, { "content-type": "application/json" }); res.write(JSON.stringify(result)); }
         res.end();
       } catch {

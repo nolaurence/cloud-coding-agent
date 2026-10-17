@@ -146,9 +146,9 @@ docker compose -f docker-compose-prod.yml up -d --build
 
 ### Codex 模型接入与兼容范围
 
-推荐在「设置 → 模型服务」添加 OpenAI 兼容服务,Base URL 填 API 根路径(例如含 `/v1`),选择 `completions` 或 `responses`,再设置默认模型。Chat 上游必须支持 `stream: true` 和 function tool calling;网关转换文字、图片输入、推理增量、并行工具调用和工具结果,并把 Codex 的 free-form `apply_patch` 包装成带 `input` 字符串的 JSON 函数参数。工具参数截断或流异常会报错,不会伪装成成功。手动压缩使用 Codex 的本地摘要流程,不伪造远程加密压缩结果。
+推荐在「设置 → 模型服务」添加 OpenAI 兼容服务,Base URL 填 API 根路径(例如含 `/v1`),选择 `completions` 或 `responses`,再设置默认模型。Chat 上游必须支持 `stream: true` 和 function tool calling;网关转换文字、图片输入、推理增量、并行工具调用和工具结果,并把 Codex 的 free-form `apply_patch` 包装成带 `input` 字符串的 JSON 函数参数。兼容 Codex 的客户端 `tool_search`、搜索返回的 MCP 工具和命名空间调用。工具参数截断或流异常会报错,不会伪装成成功。手动压缩使用 Codex 的本地摘要流程,不伪造远程加密压缩结果。
 
-图片生成使用 Codex 原生的 `image_generation` 工具,仅当当前会话的 OpenAI 提供商模型列表中含有 `gpt-image` 或 `gpt-image-*` 模型时启用,使用列表中第一个匹配的模型。Responses 协议使用上游原生生图工具;Chat Completions 协议通过同一提供商的 `/images/generations` 接口生成新图片。生成结果作为助手图片附件保存,支持聊天内预览、刷新恢复和 QQ 私聊/群聊/频道原生图片回传;单张图片限制 10 MB,计入现有图片存储额度。
+图片生成通过 Codex 原生 MCP 工具通道注册 `cca_imagegen.image_gen`,新会话和恢复的旧会话均可发现并调用。仅当已配置的 OpenAI 提供商中存在 `gpt-image` 或 `gpt-image-*` 模型时启用;优先使用当前聊天提供商,否则按配置顺序选择第一个有 GPT Image 模型的提供商,并使用该提供商列表中第一个匹配的模型。生图通过所选提供商的 `/images/generations` 接口执行,使用服务端已有凭据,无需在运行环境配置额外的 `OPENAI_API_KEY` 或确认 CLI 回退;当前入口仅支持生成新图片。生成结果作为助手图片附件保存,支持聊天内预览、刷新恢复和 QQ 私聊/群聊/频道原生图片回传;单张图片限制 10 MB,计入现有图片存储额度。
 
 不保证所有 OpenAI 兼容服务的扩展字段兼容;暂不支持依赖 `previous_response_id` 的服务端状态、原生 Anthropic、跨协议加密推理历史、Copilot 插件市场和 Ultra 子代理模式。扩展请使用现有 Skill/MCP 管理。自动提交信息通过自定义模型服务执行纯文本请求,不开放工具;原生 Codex 账号暂需手动填写提交信息。上游 API key 保留在服务端网关,子进程仅持有会话级随机网关凭证;本地网关不对外发布端口。
 

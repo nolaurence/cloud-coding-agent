@@ -188,3 +188,31 @@ test("gateway gates native image tools and routes Chat image calls to the config
     }
   }
 });
+
+
+test("client tool search loads namespaced tools and preserves their native call identity", async () => {
+  const searchTool = { type: "tool_search", execution: "client", parameters: { type: "object", properties: { query: { type: "string" } } } };
+  const first = responsesToChat({ model: "chat", input: "Generate a puppy", tools: [searchTool] });
+  const search = await chatToResponses(stream([
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "search_1", function: { name: "tool_search", arguments: '{"query":"+cca_imagegen"}' } }] }, finish_reason: "tool_calls" }] }, "[DONE]",
+  ]), "chat", first.customTools, () => {}, undefined, first);
+  const searchCall = (search.output as JsonObject[])[0]!;
+  assert.equal(searchCall.type, "tool_search_call");
+  assert.equal(searchCall.execution, "client");
+  assert.deepEqual(searchCall.arguments, { query: "+cca_imagegen" });
+  const loaded = { type: "namespace", name: "mcp__cca_imagegen", tools: [{ type: "function", name: "image_gen", parameters: { type: "object", properties: { prompt: { type: "string" } } } }] };
+  const second = responsesToChat({ model: "chat", tools: [searchTool], input: [
+    searchCall, { type: "tool_search_output", execution: "client", call_id: "search_1", tools: [loaded] },
+  ] });
+  const imageTool = (second.body.tools as JsonObject[]).find((entry) => object(entry.function).name === "mcp__cca_imagegen__image_gen");
+  assert.ok(imageTool);
+  assert.deepEqual((second.body.messages as JsonObject[]).map((message) => message.role), ["assistant", "tool"]);
+  const generated = await chatToResponses(stream([
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "image_1", function: { name: "mcp__cca_imagegen__image_gen", arguments: '{"prompt":"A puppy"}' } }] }, finish_reason: "tool_calls" }] }, "[DONE]",
+  ]), "chat", second.customTools, () => {}, undefined, second);
+  const imageCall = (generated.output as JsonObject[])[0]!;
+  assert.equal(imageCall.name, "image_gen");
+  assert.equal(imageCall.namespace, "mcp__cca_imagegen");
+  const replay = responsesToChat({ model: "chat", tools: [loaded], input: [imageCall] });
+  assert.equal(object((object((replay.body.messages as JsonObject[])[0]).tool_calls as JsonObject[])[0]!.function).name, "mcp__cca_imagegen__image_gen");
+});
