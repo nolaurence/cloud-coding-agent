@@ -169,6 +169,16 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   await assert.rejects(failedCompact.rpc.history.compact(), /503|upstream/i);
   assert.equal(failedCompact.runtimeDisconnected, true);
   failUpstream = false;
+  await t.test("resume recovers a torn event journal tail from the database", async () => {
+    const journalPath = path.join(root, "data", "codex-home", id, "cca-events.jsonl");
+    const lines = fs.readFileSync(journalPath, "utf8").split("\n").filter(Boolean);
+    // 模拟追加写入被中断:末行只剩半条 JSON 记录
+    fs.writeFileSync(journalPath, lines.slice(0, -1).join("\n") + "\n" + lines.at(-1)!.slice(0, 40));
+    const torn = await client.resumeSession(id, config);
+    assert.ok((await torn.getEvents()).some((event) => event.type === "assistant.message"));
+    assert.equal((await torn.getEvents()).length, lines.length);
+    await torn.disconnect();
+  });
   const afterFailedCompact = await client.resumeSession(id, config);
   assert.equal((await afterFailedCompact.sendAndWait("Continue after failed compaction", 10_000))?.data.content, "Codex integration works");
   await afterFailedCompact.disconnect();

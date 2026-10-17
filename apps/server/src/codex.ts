@@ -50,11 +50,19 @@ function prepareHome(home: string) {
 }
 function readEvents(file: string): SessionEvent[] {
   if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => {
-    const parsed = object(JSON.parse(line));
-    text(parsed.type); text(parsed.id); text(parsed.timestamp); object(parsed.data);
-    return parsed as SessionEvent;
-  });
+  const events: SessionEvent[] = [];
+  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+    if (!line) continue;
+    try {
+      const parsed = object(JSON.parse(line));
+      text(parsed.type); text(parsed.id); text(parsed.timestamp); object(parsed.data);
+      events.push(parsed as SessionEvent);
+    } catch {
+      // 追加写入被中断时日志末行可能只有半条记录,跳过它而不是让整个会话无法打开
+      console.error("[cca] skipped a corrupted event journal line", file);
+    }
+  }
+  return events;
 }
 
 class ArchivedSession implements AgentSession {
@@ -147,11 +155,19 @@ export class CodexSession implements AgentSession {
       const mapping = object(JSON.parse(fs.readFileSync(mappingPath, "utf8")));
       if (text(mapping.cwd) !== this.cwd) throw new Error("Codex session workspace mismatch");
       this.threadId = text(mapping.threadId);
-      this.events = readEvents(path.join(this.home, "cca-events.jsonl"));
+      const journal = readEvents(path.join(this.home, "cca-events.jsonl"));
+      // 日志可能因写入中断丢掉部分记录,因此数据库中的持久历史是权威来源,日志只用于补回数据库尚未写入的事件
+      const positions = new Map(journal.map((event, index) => [event.id, index]));
+      let previous = -1;
+      for (const value of stored) {
+        const position = positions.get(value.id);
+        if (position === undefined) continue;
+        if (position <= previous) throw new Error("Codex event journal disagrees with database history; restore a consistent session backup");
+        previous = position;
+      }
+      const storedIds = new Set(stored.map((value) => value.id));
+      this.events = [...stored, ...journal.filter((event) => !storedIds.has(event.id))];
     } else if (fs.existsSync(mappingPath)) throw new Error("Codex session already exists");
-    if (stored.some((value, index) => this.events[index]?.id !== value.id)) {
-      throw new Error("Codex event journal disagrees with database history; restore a consistent session backup");
-    }
     for (let index = stored.length; index < this.events.length; index++) this.eventStore.append(this.events[index]!, index + 1);
     await this.eventStore.flush();
     const overrides: JsonObject = {
