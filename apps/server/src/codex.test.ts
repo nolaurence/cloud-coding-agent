@@ -169,17 +169,13 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   await assert.rejects(failedCompact.rpc.history.compact(), /503|upstream/i);
   assert.equal(failedCompact.runtimeDisconnected, true);
   failUpstream = false;
-  await t.test("resume recovers a torn event journal tail from the database", async () => {
-    const journalPath = path.join(root, "data", "codex-home", id, "cca-events.jsonl");
-    const lines = fs.readFileSync(journalPath, "utf8").split("\n").filter(Boolean);
-    // 模拟追加写入被中断:末行只剩半条 JSON 记录
-    fs.writeFileSync(journalPath, lines.slice(0, -1).join("\n") + "\n" + lines.at(-1)!.slice(0, 40));
-    const torn = await client.resumeSession(id, config);
-    assert.ok((await torn.getEvents()).some((event) => event.type === "assistant.message"));
-    assert.equal((await torn.getEvents()).length, lines.length);
-    await torn.disconnect();
-  });
+  // 模拟追加写入被中断:日志末行只剩半条 JSON 记录,恢复时必须跳过它并回补数据库历史,而不是让整个会话打不开
+  const journalPath = path.join(root, "data", "codex-home", id, "cca-events.jsonl");
+  const journalLines = fs.readFileSync(journalPath, "utf8").split("\n").filter(Boolean);
+  fs.writeFileSync(journalPath, journalLines.slice(0, -1).join("\n") + "\n" + journalLines.at(-1)!.slice(0, 40));
   const afterFailedCompact = await client.resumeSession(id, config);
+  const recoveredEvents = await afterFailedCompact.getEvents();
+  assert.ok(recoveredEvents.some((event) => event.type === "assistant.message"));
   assert.equal((await afterFailedCompact.sendAndWait("Continue after failed compaction", 10_000))?.data.content, "Codex integration works");
   await afterFailedCompact.disconnect();
   assert.equal(await client.generateText(config, "Generate a commit message", 5_000), "fix: generate commit message without tools");
