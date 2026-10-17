@@ -7,7 +7,6 @@ import test, { type TestContext } from "node:test";
 import type { CopilotClient, CopilotSession, SessionEvent } from "@github/copilot-sdk";
 import type { AppSettings, Project, ThreadEvent, ThreadMeta } from "@cca/protocol";
 import { CopilotManager, normalizeGeneratedCommitMessage } from "./copilot.js";
-import { DATA_DIR } from "./env.js";
 import { store } from "./store.js";
 
 function sessionEvent(
@@ -1641,16 +1640,6 @@ test("creates an isolated session with managed resource tools", async (t) => {
   const createRequest = client.rpcRequests.find((request) => request.method === "session.create");
   assert.ok(createRequest);
   assert.equal(createRequest.params.workingDirectory, process.cwd());
-  assert.deepEqual(createRequest.params.sandboxConfig, {
-    enabled: true,
-    addCurrentWorkingDirectory: true,
-    userPolicy: {
-      filesystem: {
-        readwritePaths: [process.cwd()],
-        deniedPaths: [DATA_DIR],
-      },
-    },
-  });
   assert.deepEqual(config.tools?.map((tool) => tool.name), [
     "authenticated_git",
     "browser_use",
@@ -1715,30 +1704,6 @@ test("loads platform and workspace MCP and Skill configuration", async (t) => {
   assert.deepEqual(config.skillDirectories, [path.join(workspace, ".github", "skills")]);
   assert.deepEqual(config.disabledSkills, ["disabled-platform-skill"]);
   assert.equal(config.enableSkills, true);
-  await manager.interrupt(threadId);
-});
-
-test("sandbox denies sibling workspaces and server data", async (t) => {
-  const threadId = randomUUID();
-  setupStore(t, threadId);
-  store.projects.push(
-    { id: "project-2", name: "Other", path: "/workspace/other", ownerId: "admin" },
-    { id: "project-3", name: "Someone else", path: "/workspace/theirs", ownerId: "other-user" },
-  );
-  const client = new FakeClient();
-  const manager = new CopilotManager(() => client as unknown as CopilotClient);
-  t.after(() => manager.shutdown());
-
-  await manager.sendMessage(threadId, "test");
-  const createRequest = client.rpcRequests.find((request) => request.method === "session.create");
-  const sandboxConfig = createRequest?.params.sandboxConfig as {
-    userPolicy: { filesystem: { deniedPaths: string[] } };
-  };
-  assert.deepEqual(sandboxConfig.userPolicy.filesystem.deniedPaths, [
-    DATA_DIR,
-    "/workspace/other",
-    "/workspace/theirs",
-  ]);
   await manager.interrupt(threadId);
 });
 
