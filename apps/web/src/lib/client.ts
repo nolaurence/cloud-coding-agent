@@ -111,7 +111,28 @@ type ClientMessageNoId = ClientMessage extends infer T
     : never
   : never;
 
-export function request<T = unknown>(msg: ClientMessageNoId, timeoutMs?: number): Promise<T> {
+// 首次进入或断线重连时 socket 可能仍在 CONNECTING,此时不应立即报错,而是等待连接建立
+const CONNECT_TIMEOUT_MS = 15_000;
+
+function waitForConnection(timeoutMs: number): Promise<void> {
+  if (socket && socket.readyState === WebSocket.OPEN) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      connectionListeners.delete(listener);
+      if (error) reject(error);
+      else resolve();
+    };
+    const listener = (connected: boolean) => {
+      if (connected) finish();
+    };
+    const timer = setTimeout(() => finish(new Error("未连接到服务器")), timeoutMs);
+    connectionListeners.add(listener);
+  });
+}
+
+export async function request<T = unknown>(msg: ClientMessageNoId, timeoutMs?: number): Promise<T> {
+  await waitForConnection(CONNECT_TIMEOUT_MS);
   return new Promise<T>((resolve, reject) => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       reject(new Error("未连接到服务器"));
