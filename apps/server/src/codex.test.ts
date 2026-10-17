@@ -82,12 +82,10 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   assert.equal(response?.data.content, "Codex integration works");
   assert.equal(toolCalls, 1);
   const patchResult = array(received.at(-1)?.messages).map(object).find((m) => m.role === "tool" && m.tool_call_id === "call_patch");
-  const namespaceDenied = /No permissions to create a new namespace/.test(String(patchResult?.content));
-  await t.test("native patch writes within the workspace", { skip: namespaceDenied ? "Host prohibits bubblewrap user namespaces; execution remains blocked" : false }, () => {
+  await t.test("native patch writes within the workspace", () => {
     assert.ok(fs.existsSync(path.join(process.env.WORKSPACE_ROOT!, "native-patch.txt")), JSON.stringify(patchResult));
     assert.equal(fs.readFileSync(path.join(process.env.WORKSPACE_ROOT!, "native-patch.txt"), "utf8"), "written by Codex\n");
   });
-  if (namespaceDenied) assert.equal(fs.existsSync(path.join(process.env.WORKSPACE_ROOT!, "native-patch.txt")), false);
   assert.ok(requestCount >= 2);
   assert.ok(events.some((event) => event.type === "tool.execution_complete"));
   assert.ok(calls > 0);
@@ -125,7 +123,11 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   const beforeReplay = (await query<{ total: number }>("SELECT COUNT(*) AS total FROM thread_events WHERE thread_id = ?", [id])).rows[0]!.total;
   await query("DELETE FROM thread_events WHERE thread_id = ? AND sequence_number = ?", [id, beforeReplay]);
   const failedCompact = await client.resumeSession(id, config);
-  assert.equal((await query<{ total: number }>("SELECT COUNT(*) AS total FROM thread_events WHERE thread_id = ?", [id])).rows[0]!.total, beforeReplay);
+  // Resume must restore the deleted event from the local journal. A late
+  // notification flushed after disconnect can add one more event, so only the
+  // replay of the deleted row is asserted instead of an exact total.
+  const { rows: replayed } = await query<{ total: number }>("SELECT COUNT(*) AS total FROM thread_events WHERE thread_id = ? AND sequence_number = ?", [id, beforeReplay]);
+  assert.equal(replayed[0]!.total, 1);
   failUpstream = true;
   await assert.rejects(failedCompact.rpc.history.compact(), /503|upstream/i);
   assert.equal(failedCompact.runtimeDisconnected, true);

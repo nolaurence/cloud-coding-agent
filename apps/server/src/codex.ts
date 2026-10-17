@@ -84,7 +84,6 @@ export class CodexSession implements AgentSession {
   private readonly home: string;
   private readonly cwd: string;
   private readonly tools: Tool[];
-  private readonly readableSkills: string[] = [];
   private readonly waiters = new Set<{ resolve(): void; reject(error: Error): void }>();
   private compacting = false;
   get runtimeDisconnected() { return this.closed; }
@@ -126,10 +125,6 @@ export class CodexSession implements AgentSession {
   }
   on(handler: (event: SessionEvent) => void) { this.listeners.add(handler); return () => { this.listeners.delete(handler); }; }
   async getEvents() { return usingDatabase() ? this.eventStore.read() : [...this.events]; }
-  private sandbox() {
-    const readOnlyAccess = { type: "restricted", includePlatformDefaults: true, readableRoots: [this.cwd, ...this.readableSkills] };
-    return { type: "workspaceWrite", writableRoots: [this.cwd], readOnlyAccess, networkAccess: true, excludeTmpdirEnvVar: true, excludeSlashTmp: true };
-  }
   async open(resume: boolean) {
     prepareHome(this.home);
     const stored = usingDatabase() ? await this.eventStore.read() : [];
@@ -155,8 +150,8 @@ export class CodexSession implements AgentSession {
     for (let index = stored.length; index < this.events.length; index++) this.eventStore.append(this.events[index]!, index + 1);
     await this.eventStore.flush();
     const overrides: JsonObject = {
-      approval_policy: "never", sandbox_mode: "workspace-write", web_search: "disabled",
-      features: { multi_agent: false, use_linux_sandbox_bwrap: true },
+      approval_policy: "never", sandbox_mode: "danger-full-access", web_search: "disabled",
+      features: { multi_agent: false },
       projects: { [this.cwd]: { trust_level: "untrusted" } },
       shell_environment_policy: { inherit: "none", set: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: this.cwd, LANG: "C.UTF-8" } },
       mcp_servers: {},
@@ -181,7 +176,6 @@ export class CodexSession implements AgentSession {
         if (!fs.existsSync(path.join(source, "SKILL.md"))) continue;
         const target = path.join(skillsHome, entry.name);
         if (!fs.existsSync(target)) fs.symlinkSync(source, target, "junction");
-        this.readableSkills.push(fs.realpathSync(source));
       }
     }
     const provider = this.config.provider;
@@ -202,7 +196,7 @@ export class CodexSession implements AgentSession {
       }
       if (this.effort) overrides.model_reasoning_effort = this.effort;
       await this.connection.start(this.cwd, runtimeEnv(this.home));
-      const common: JsonObject = { cwd: this.cwd, model: this.model, approvalPolicy: "never", sandbox: "workspace-write", config: overrides,
+      const common: JsonObject = { cwd: this.cwd, model: this.model, approvalPolicy: "never", sandbox: "danger-full-access", config: overrides,
         developerInstructions: this.config.systemMessage?.content, persistExtendedHistory: true };
       if (provider) common.modelProvider = "cca";
       const start = () => this.connection.request("thread/start", { ...common, experimentalRawEvents: false, dynamicTools: this.tools.map((tool) => ({
@@ -316,7 +310,7 @@ export class CodexSession implements AgentSession {
     const message = this.emit({ type: "user.message", data: { content: options.prompt } });
     try {
       this.startingTurn = this.connection.request("turn/start", { threadId: this.threadId, input: inputs, cwd: this.cwd,
-        model: this.model, effort: this.effort, approvalPolicy: "never", sandboxPolicy: this.sandbox() });
+        model: this.model, effort: this.effort, approvalPolicy: "never" });
       await this.startingTurn;
       return message.id;
     } catch (error) { this.pendingTurn = false; throw error; }

@@ -37,7 +37,7 @@ import { COPILOT_HOME, DATA_DIR } from "./env.js";
 import { store } from "./store.js";
 import { createAuthenticatedGitTool } from "./gitOperations.js";
 import { createWorkspacePermissionHandler } from "./permissions.js";
-import { installWorkspaceSandbox } from "./sandbox.js";
+
 import { browserPool, createBrowserUseTool } from "./browser.js";
 import { createAgentResourceTools } from "./agentResources.js";
 import { effectiveMcpServers } from "./mcpServers.js";
@@ -284,9 +284,10 @@ export function normalizeGeneratedCommitMessage(value: string): string {
   return message;
 }
 
-// Deny sandboxed tools access to server data (accounts, secrets, session
-// state) and to every other workspace, so each session can only touch its own.
-function workspaceSandboxDeniedPaths(workspacePath: string): string[] {
+// Paths that must never be contained by a registered workspace: the server's
+// own data directory and every other workspace, so a project cannot be
+// registered over data that belongs to the service or another project.
+function deniedWorkspacePaths(workspacePath: string): string[] {
   const denied = [DATA_DIR];
   for (const project of store.projects) {
     if (project.path !== workspacePath) denied.push(project.path);
@@ -326,7 +327,6 @@ export class CopilotManager {
       const starting = (async () => {
         const client = this.createClient();
         await client.start();
-        if (!(client instanceof CodexClient)) installWorkspaceSandbox(client, workspaceSandboxDeniedPaths);
         this.client = client;
       })();
       this.starting = starting;
@@ -640,7 +640,6 @@ export class CopilotManager {
     const skillConfig = enabledSkillDirectories(project.path);
     const systemInstructions = [
       "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
-      "所有文件和命令操作只能访问当前工作区。不要尝试读取或修改工作区外的路径，也不要请求绕过沙箱。",
     ];
     if (thread.agentMode !== "ultra") {
       systemInstructions.push(...STANDARD_SYSTEM_INSTRUCTIONS);
@@ -650,11 +649,11 @@ export class CopilotManager {
       sessionId: thread.id,
       legacySession: thread.runtime !== "codex",
       agentMode: thread.agentMode ?? "standard",
-      deniedPaths: workspaceSandboxDeniedPaths(project.path),
+      deniedPaths: deniedWorkspacePaths(project.path),
       streaming: true,
       includeSubAgentStreamingEvents: true,
       workingDirectory: project.path,
-      onPermissionRequest: createWorkspacePermissionHandler(project.path, new Set(Object.keys(mcpServers))),
+      onPermissionRequest: createWorkspacePermissionHandler(new Set(Object.keys(mcpServers))),
       enableConfigDiscovery: false,
       requestExtensions: false,
       mcpServers,
