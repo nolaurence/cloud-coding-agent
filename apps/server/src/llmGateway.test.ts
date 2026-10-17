@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { responsesToChat, chatToResponses, sseData, startLlmGateway, type JsonObject } from "./llmGateway.js";
+import { object, responsesToChat, chatToResponses, sseData, startLlmGateway, type JsonObject } from "./llmGateway.js";
 
 function stream(chunks: unknown[]): ReadableStream<Uint8Array> {
   const bytes = new TextEncoder().encode(chunks.map((chunk) => "data: " + (typeof chunk === "string" ? chunk : JSON.stringify(chunk)) + "\r\n\r\n").join(""));
@@ -113,4 +113,78 @@ test("tool images remain visual inputs and parallel tool results stay adjacent",
   assert.equal(messages[0]?.reasoning_content, "inspect");
   assert.equal((messages[0]?.tool_calls as unknown[]).length, 2);
   assert.equal((messages[3]?.content as JsonObject[])[1]?.type, "image_url");
+});
+
+
+test("image generation tool and image history translate through Chat Completions", async () => {
+  const translated = responsesToChat({ model: "chat", input: [
+    { type: "image_generation_call", id: "ig_previous", status: "completed", result: "aW1hZ2U=", revised_prompt: "A cat" },
+  ], tools: [{ type: "image_generation" }], tool_choice: { type: "image_generation" } });
+  assert.equal(translated.imageGeneration, true);
+  assert.deepEqual(translated.body.tool_choice, { type: "function", function: { name: "image_generation" } });
+  const messages = translated.body.messages as JsonObject[];
+  assert.equal(messages[0]?.role, "assistant");
+  assert.equal((messages[1]?.content as JsonObject[])[1]?.type, "image_url");
+  const events: JsonObject[] = [];
+  const response = await chatToResponses(stream([
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_image", function: { name: "image_generation", arguments: '{"prompt":"A cat"}' } }] }, finish_reason: "tool_calls" }] }, "[DONE]",
+  ]), "chat", new Set(), (event) => events.push(event), async (args) => {
+    assert.equal(args.prompt, "A cat");
+    return { result: "aW1hZ2U=", revised_prompt: "A cat" };
+  });
+  assert.equal((response.output as JsonObject[])[0]?.type, "image_generation_call");
+  assert.equal((response.output as JsonObject[])[0]?.result, "aW1hZ2U=");
+  assert.ok(events.some((event) => event.type === "response.image_generation_call.in_progress"));
+  assert.equal(events.at(-1)?.type, "response.completed");
+});
+
+test("gateway gates native image tools and routes Chat image calls to the configured GPT Image model", async (t) => {
+  const requests: Array<{ url?: string; body: JsonObject; authorization?: string }> = [];
+  const upstream = createServer((req, res) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = object(JSON.parse(Buffer.concat(chunks).toString()));
+      requests.push({ url: req.url, body, authorization: req.headers.authorization });
+      if (req.url === "/v1/responses") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ id: "native_image" }));
+      } else if (req.url === "/v1/images/generations") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ data: [{ b64_json: "aW1hZ2U=" }] }));
+      } else {
+        res.setHeader("content-type", "text/event-stream");
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_image", function: { name: "image_generation", arguments: JSON.stringify({ prompt: "A cat" }) } }] }, finish_reason: "tool_calls" }] };
+        res.end("data: " + JSON.stringify(chunk) + "\n\ndata: [DONE]\n\n");
+      }
+    })().catch(() => res.destroy());
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => { upstream.closeAllConnections(); upstream.close(() => resolve()); }));
+  const address = upstream.address();
+  assert.ok(address && typeof address !== "string");
+  for (const wireApi of ["responses", "completions"] as const) {
+    for (const configured of [false, true]) {
+      const gateway = await startLlmGateway({ type: "openai", baseUrl: "http://127.0.0.1:" + address.port + "/v1", apiKey: "image-test-key", wireApi, ...(configured ? { imageGenerationModel: "gpt-image-1.5" } : {}) });
+      try {
+        const before = requests.length;
+        const response = await fetch(gateway.url + "/responses", {
+          method: "POST", headers: { authorization: "Bearer " + gateway.token, "content-type": "application/json" },
+          body: JSON.stringify({ model: "chat", input: "A cat", stream: false, tools: [{ type: "image_generation", model: "unconfigured-model" }] }),
+        });
+        assert.equal(response.status, configured ? 200 : 400);
+        if (!configured) { assert.equal(requests.length, before); continue; }
+        const result = object(await response.json());
+        assert.equal(requests.at(-1)?.authorization, "Bearer image-test-key");
+        if (wireApi === "responses") {
+          assert.equal((requests.at(-1)?.body.tools as JsonObject[])[0]?.model, "gpt-image-1.5");
+        } else {
+          assert.equal(requests.at(-1)?.url, "/v1/images/generations");
+          assert.equal(requests.at(-1)?.body.model, "gpt-image-1.5");
+          assert.equal(requests.at(-1)?.body.prompt, "A cat");
+          assert.equal((result.output as JsonObject[])[0]?.type, "image_generation_call");
+        }
+      } finally { await gateway.close(); }
+    }
+  }
 });

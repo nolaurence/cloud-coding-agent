@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { MessageOptions, ResumeSessionConfig, SessionConfig, SessionEvent, Tool } from "@github/copilot-sdk";
+import type { MessageAttachment } from "@cca/protocol";
 import type { AgentClient, AgentSession, AgentModelInfo } from "./agentRuntime.js";
 import { isReasoningEffort } from "@cca/protocol";
 import { COPILOT_HOME, DATA_DIR } from "./env.js";
@@ -10,13 +11,14 @@ import { ThreadEventStore, deleteThreadEvents } from "./threadEvents.js";
 import { CodexRpc } from "./codexRpc.js";
 import { array, object, startLlmGateway, text, type GatewayProvider, type JsonObject } from "./llmGateway.js";
 import { sanitizedCopilotRuntimeEnv } from "./runtimeEnv.js";
+import { IMAGE_EXTENSIONS, MAX_IMAGE_SIZE, hasImageSignature, storeUploadedImage } from "./uploads.js";
 
 const CODEX_HOME = path.join(DATA_DIR, "codex-home");
 const MAX_CONTEXT_OUTPUT_RESERVE_TOKENS = 16_000;
 export class SessionNotFoundError extends Error {}
 
-type Config = (SessionConfig | ResumeSessionConfig) & { legacySession?: boolean; agentMode?: "standard" | "ultra"; deniedPaths?: string[] };
-type EventInput = { [K in SessionEvent["type"]]: { type: K; data: Extract<SessionEvent, { type: K }>["data"]; agentId?: string; id?: string } }[SessionEvent["type"]];
+type Config = (SessionConfig | ResumeSessionConfig) & { legacySession?: boolean; agentMode?: "standard" | "ultra"; deniedPaths?: string[]; imageGenerationModel?: string; imageGenerationOwnerId?: string };
+type EventInput = { [K in SessionEvent["type"]]: { type: K; data: Extract<SessionEvent, { type: K }>["data"] & (K extends "assistant.message" ? { attachments?: MessageAttachment[] } : unknown); agentId?: string; id?: string } }[SessionEvent["type"]];
 function event(input: EventInput): SessionEvent {
   return { id: randomUUID(), parentId: null, timestamp: new Date().toISOString(), ...input } as SessionEvent;
 }
@@ -86,6 +88,7 @@ export class CodexSession implements AgentSession {
   private readonly tools: Tool[];
   private readonly waiters = new Set<{ resolve(): void; reject(error: Error): void }>();
   private compacting = false;
+  private imageGenerationItems = new Map<string, "running" | "complete">();
   get runtimeDisconnected() { return this.closed; }
   constructor(readonly sessionId: string, private readonly config: Config, private readonly release: () => void) {
     this.eventStore = new ThreadEventStore(sessionId, () => {
@@ -151,7 +154,7 @@ export class CodexSession implements AgentSession {
     await this.eventStore.flush();
     const overrides: JsonObject = {
       approval_policy: "never", sandbox_mode: "danger-full-access", web_search: "disabled",
-      features: { multi_agent: false },
+      features: { multi_agent: false, image_generation: Boolean(this.config.provider && this.config.imageGenerationModel) },
       projects: { [this.cwd]: { trust_level: "untrusted" } },
       shell_environment_policy: { inherit: "none", set: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: this.cwd, LANG: "C.UTF-8" } },
       mcp_servers: {},
@@ -181,8 +184,12 @@ export class CodexSession implements AgentSession {
     const provider = this.config.provider;
     try {
       if (provider) {
-        const gatewayProvider: GatewayProvider = { type: provider.type ?? "openai", baseUrl: provider.baseUrl, apiKey: provider.apiKey, wireApi: provider.wireApi, azure: provider.azure, reasoningEffort: String(this.config.reasoningEffort) === "max" ? "max" : undefined };
-        this.gateway = await startLlmGateway(gatewayProvider);
+        const gatewayProvider: GatewayProvider = { type: provider.type ?? "openai", baseUrl: provider.baseUrl, apiKey: provider.apiKey, wireApi: provider.wireApi, azure: provider.azure, imageGenerationModel: this.config.imageGenerationModel, reasoningEffort: String(this.config.reasoningEffort) === "max" ? "max" : undefined };
+        this.gateway = await startLlmGateway(gatewayProvider, this.config.imageGenerationModel ? (item) => {
+          const generated = { ...item, type: "imageGeneration" };
+          this.item(generated, false);
+          this.item(generated, true);
+        } : undefined);
         overrides.model_provider = "cca";
         overrides.model_providers = { cca: { name: "CCA", base_url: this.gateway.url, wire_api: "responses", experimental_bearer_token: this.gateway.token, supports_websockets: false, request_max_retries: 0, stream_max_retries: 0 } };
       }
@@ -275,6 +282,26 @@ export class CodexSession implements AgentSession {
       if (done) this.emit({ type: "assistant.message", data: { messageId: id, content: text(item.text) } });
       return;
     }
+    if (item.type === "imageGeneration") {
+      const previous = this.imageGenerationItems.get(id);
+      if (previous === "complete" || (!done && previous === "running")) return;
+      this.imageGenerationItems.set(id, done ? "complete" : "running");
+      if (!done) {
+        this.emit({ type: "tool.execution_start", data: { toolCallId: id, toolName: "image_generation", arguments: {} } });
+      } else {
+        try {
+          if (item.status !== "completed") throw new Error("图片生成未完成");
+          const attachment = this.saveGeneratedImage(item);
+          this.emit({ type: "tool.execution_complete", data: { toolCallId: id, success: true, result: { content: attachment.displayName } } });
+          this.emit({ type: "assistant.message", data: { messageId: "image-" + id, content: "", attachments: [attachment] } });
+        } catch (error) {
+          const message = "生成图片保存失败：" + (error instanceof Error ? error.message : "未知错误");
+          this.emit({ type: "tool.execution_complete", data: { toolCallId: id, success: false, error: { message } } });
+          this.emit({ type: "session.error", data: { errorType: "image_generation", message } });
+        }
+      }
+      return;
+    }
     if (item.type === "userMessage") return;
     if (item.type === "contextCompaction") return;
     const names: Record<string, string> = { commandExecution: "bash", fileChange: "apply_patch", mcpToolCall: String(item.tool), dynamicToolCall: String(item.tool), collabAgentToolCall: String(item.tool), webSearch: "web_search", imageView: "view_image" };
@@ -287,6 +314,19 @@ export class CodexSession implements AgentSession {
       const success = item.status !== "failed" && item.status !== "declined" && item.success !== false && !(typeof item.exitCode === "number" && item.exitCode !== 0);
       this.emit({ type: "tool.execution_complete", data: { toolCallId: id, success, result: { content: typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : JSON.stringify(item).slice(0, 16000) } } });
     }
+  }
+  private saveGeneratedImage(item: JsonObject): MessageAttachment {
+    if (!this.config.imageGenerationModel || !this.config.imageGenerationOwnerId) throw new Error("当前提供商未启用 GPT Image 模型");
+    const result = text(item.result);
+    if (result.length > Math.ceil(MAX_IMAGE_SIZE / 3) * 4) throw new Error("单张图片不能超过 10 MB");
+    if (!result || !/^[A-Za-z0-9+/]+={0,2}$/.test(result)) throw new Error("图片内容不是有效的 Base64");
+    const buffer = Buffer.from(result, "base64");
+    const mimeType = (Object.keys(IMAGE_EXTENSIONS) as Array<keyof typeof IMAGE_EXTENSIONS>)
+      .find((candidate) => hasImageSignature(buffer, candidate));
+    if (!mimeType) throw new Error("图片格式不受支持");
+    const displayName = "生成图片" + IMAGE_EXTENSIONS[mimeType];
+    const stored = storeUploadedImage(this.config.imageGenerationOwnerId, buffer, mimeType, displayName);
+    return { id: stored.imageId, displayName, kind: "image", ownerId: this.config.imageGenerationOwnerId };
   }
   private complete(error?: Error, aborted = false) {
     this.turnId = undefined;

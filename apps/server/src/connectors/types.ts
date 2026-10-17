@@ -1,6 +1,7 @@
 import type {
   ConnectorConfig,
   ConnectorConnectionState,
+  MessageAttachment,
   TurnAttachment,
 } from "@cca/protocol";
 
@@ -27,7 +28,7 @@ export interface ConnectorClientCallbacks {
 export interface ConnectorClient {
   start(): Promise<void>;
   stop(): Promise<void>;
-  send(target: ConnectorTarget, text: string, replyToMessageId?: string): Promise<void>;
+  send(target: ConnectorTarget, text: string, replyToMessageId?: string, attachments?: MessageAttachment[]): Promise<void>;
 }
 
 export type ConnectorClientFactory = (

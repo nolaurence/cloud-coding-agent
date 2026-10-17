@@ -699,6 +699,9 @@ export class CopilotManager {
         config.modelCapabilities = modelCapabilitiesFor(settings, modelRef);
       }
       if (providerConfig) {
+        const imageGenerationModel = providerConfig.type === "openai"
+          ? providerConfig.models.find((candidate) => /^gpt-image(?:-|$)/i.test(candidate.id.trim()))?.id.trim()
+          : undefined;
         config.provider = {
           type: providerConfig.type,
           baseUrl: providerConfig.baseUrl.trim(),
@@ -714,6 +717,10 @@ export class CopilotManager {
             ? { azure: { apiVersion: providerConfig.azureApiVersion ?? "2024-10-21" } }
             : {}),
         };
+        if (imageGenerationModel) {
+          config.imageGenerationModel = imageGenerationModel;
+          config.imageGenerationOwnerId = ownerId;
+        }
       }
     }
     return config;
@@ -987,6 +994,7 @@ export class CopilotManager {
       }
       case "assistant.message": {
         const data = event.data;
+        const generatedAttachments = (data as typeof data & { attachments?: MessageAttachment[] }).attachments;
         if (event.agentId) {
           const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
           if (!data.content && !data.reasoningText) break;
@@ -1005,12 +1013,13 @@ export class CopilotManager {
           this.emitSubagent(rt, subagent);
           break;
         }
-        if (!data.content && !data.reasoningText) break;
+        if (!data.content && !data.reasoningText && !generatedAttachments?.length) break;
         const message: ChatMessage = {
           id: data.messageId,
           role: "assistant",
           text: data.content,
           reasoning: data.reasoningText,
+          ...(generatedAttachments?.length ? { attachments: generatedAttachments } : {}),
           turnId: rt.currentTurnId ?? data.turnId ?? "",
           createdAt: ts,
         };
@@ -1020,6 +1029,17 @@ export class CopilotManager {
         const index = rt.messages.findIndex((candidate) => candidate.id === message.id);
         if (index >= 0) rt.messages[index] = message;
         else rt.messages.push(message);
+        const thread = store.getThread(threadId);
+        if (thread && generatedAttachments?.length) {
+          store.upsertThread({
+            ...thread,
+            messageAttachments: {
+              ...thread.messageAttachments,
+              [message.id]: generatedAttachments,
+            },
+            updatedAt: ts,
+          });
+        }
         this.emit(threadId, { kind: "assistant.message", message });
         break;
       }
@@ -1395,13 +1415,16 @@ export class CopilotManager {
               });
               break;
             }
-            if (!data.content && !data.reasoningText) break;
+            const attachments = (data as typeof data & { attachments?: MessageAttachment[] }).attachments ??
+              store.getThread(rt.threadId)?.messageAttachments?.[data.messageId];
+            if (!data.content && !data.reasoningText && !attachments?.length) break;
             rt.pendingAssistant = null;
             rt.messages.push({
               id: data.messageId,
               role: "assistant",
               text: data.content,
               reasoning: data.reasoningText,
+              ...(attachments?.length ? { attachments } : {}),
               turnId,
               createdAt: ts,
             });

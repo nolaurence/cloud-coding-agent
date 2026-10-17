@@ -210,6 +210,8 @@ function AssistantMessage({
   streaming?: boolean;
   showMeta?: boolean;
 }) {
+  const { threadId, shareToken } = useContext(MessageContext);
+  const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
   return (
     <article
       className="assistant-message group/assistant min-w-0 px-1 py-0.5"
@@ -217,9 +219,16 @@ function AssistantMessage({
     >
       {message.reasoning && <ReasoningBlock text={message.reasoning} streaming={streaming} />}
       {message.text && <Markdown>{message.text}</Markdown>}
-      {showMeta && !streaming && message.text && (
+      {images.length > 0 && threadId && (
+        <div className={cn("my-2 grid max-w-2xl gap-2", images.length > 1 && "grid-cols-2")}>
+          {images.map((image) => (
+            <MessageImage key={image.id} id={image.id} name={image.displayName} threadId={threadId} shareToken={shareToken} />
+          ))}
+        </div>
+      )}
+      {showMeta && !streaming && (message.text || images.length > 0) && (
         <div className="mt-1.5 flex h-7 items-center gap-2 text-xs tabular-nums text-muted-foreground opacity-100 transition-opacity duration-200 sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
-          <CopyAction text={message.text} label="复制回复" className="h-6 w-6 text-muted-foreground" />
+          {message.text && <CopyAction text={message.text} label="复制回复" className="h-6 w-6 text-muted-foreground" />}
           <MessageTime at={message.createdAt} />
         </div>
       )}

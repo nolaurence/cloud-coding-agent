@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import type { ConnectorConfig } from "@cca/protocol";
+import type { ConnectorConfig, MessageAttachment } from "@cca/protocol";
 import type {
   ConnectorClient,
   ConnectorClientCallbacks,
@@ -10,6 +10,7 @@ import {
   IMAGE_EXTENSIONS,
   MAX_IMAGE_SIZE,
   hasImageSignature,
+  readStoredImage,
   removeUploadedImages,
   storeUploadedImage,
 } from "../uploads.js";
@@ -274,7 +275,7 @@ export class QQConnectorClient implements ConnectorClient {
     socket?.close(1000, "connector stopped");
   }
 
-  async send(target: ConnectorTarget, text: string, replyToMessageId?: string): Promise<void> {
+  async send(target: ConnectorTarget, text: string, replyToMessageId?: string, attachments: MessageAttachment[] = []): Promise<void> {
     if (target.platform !== "qq") throw new Error("QQ 连接器收到不匹配的发送目标");
     const path =
       target.kind === "private"
@@ -283,9 +284,37 @@ export class QQConnectorClient implements ConnectorClient {
           ? `/v2/groups/${encodeURIComponent(target.id)}/messages`
           : `/channels/${encodeURIComponent(target.id)}/messages`;
     let msgSeq = Math.floor(Math.random() * 1_000_000) + 1;
-    for (const content of chunks(text)) {
-      const body = createQQMarkdownMessage(target, content, msgSeq++, replyToMessageId);
-      await this.api(path, { method: "POST", body: JSON.stringify(body) });
+    if (text.trim()) {
+      for (const content of chunks(text)) {
+        const body = createQQMarkdownMessage(target, content, msgSeq++, replyToMessageId);
+        await this.api(path, { method: "POST", body: JSON.stringify(body) });
+      }
+    }
+    for (const attachment of attachments) {
+      if (attachment.kind !== "image") continue;
+      const ownerId = this.config.ownerId?.trim();
+      if (!ownerId || attachment.ownerId !== ownerId) throw new Error("QQ 图片附件所有者无效");
+      const buffer = readStoredImage(ownerId, attachment.id);
+      if (buffer.length > MAX_IMAGE_SIZE) throw new Error("单张图片不能超过 10 MB");
+      const mimeType = (Object.keys(IMAGE_EXTENSIONS) as Array<keyof typeof IMAGE_EXTENSIONS>)
+        .find((type) => hasImageSignature(buffer, type));
+      if (!mimeType) throw new Error("QQ 图片格式不受支持");
+      if (target.kind === "channel") {
+        const body = new FormData();
+        body.append("file_image", new Blob([new Uint8Array(buffer)], { type: mimeType }), attachment.displayName);
+        if (replyToMessageId) body.append("msg_id", replyToMessageId);
+        await this.api(path, { method: "POST", body });
+        continue;
+      }
+      const uploadPath = path.replace(/\/messages$/, "/files");
+      const uploaded = await this.api(uploadPath, {
+        method: "POST",
+        body: JSON.stringify({ file_type: 1, file_data: buffer.toString("base64"), srv_send_msg: false }),
+      }) as { file_info?: string };
+      if (!uploaded.file_info) throw new Error("QQ 图片上传失败：未返回文件信息");
+      const media: Record<string, unknown> = { msg_type: 7, msg_seq: msgSeq++, media: { file_info: uploaded.file_info } };
+      if (replyToMessageId) media.msg_id = replyToMessageId;
+      await this.api(path, { method: "POST", body: JSON.stringify(media) });
     }
   }
 
@@ -371,7 +400,7 @@ export class QQConnectorClient implements ConnectorClient {
       ...init,
       headers: {
         Accept: "application/json",
-        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(init.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
         Authorization: `QQBot ${token}`,
         "X-Union-Appid": this.config.appId,
         ...init.headers,

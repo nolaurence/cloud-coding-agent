@@ -1717,3 +1717,51 @@ test("rejects a thread whose owner does not own its workspace", async (t) => {
   await assert.rejects(manager.sendMessage(threadId, "test"), /会话与工作区所有者不匹配/);
   assert.equal(manager.isRunning(threadId), false);
 });
+
+
+test("only the selected provider's GPT Image catalog enables image generation", async (t) => {
+  for (const configuration of ["none", "other-provider", "selected-provider", "anthropic", "similar-name"] as const) {
+    await t.test(configuration, async (t) => {
+      const threadId = randomUUID();
+      setupStore(t, threadId);
+      store.threads[0]!.model = { providerId: "selected", modelId: "chat" };
+      store.settings.providers = [
+        { id: "selected", name: "Selected", type: configuration === "anthropic" ? "anthropic" : "openai", baseUrl: "https://example.com/v1", models: [
+          { id: "chat" },
+          ...(configuration === "selected-provider" || configuration === "anthropic" ? [{ id: "gpt-image-1.5" }] : []),
+          ...(configuration === "similar-name" ? [{ id: "not-gpt-image-1" }] : []),
+        ] },
+        { id: "other", name: "Other", type: "openai", baseUrl: "https://other.example.com/v1", models: configuration === "other-provider" ? [{ id: "gpt-image-1" }] : [] },
+      ];
+      const client = new FakeClient();
+      const manager = new CopilotManager(() => client as unknown as CopilotClient);
+      t.after(() => manager.shutdown());
+      await manager.subscribe(threadId, "admin");
+      const config = client.createdConfigs[0] as { imageGenerationModel?: string; imageGenerationOwnerId?: string };
+      assert.equal(config.imageGenerationModel, configuration === "selected-provider" ? "gpt-image-1.5" : undefined);
+      assert.equal(config.imageGenerationOwnerId, configuration === "selected-provider" ? "admin" : undefined);
+    });
+  }
+});
+
+test("assistant image-only messages are emitted, persisted and restored", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const attachment = { id: "generated.png", displayName: "生成图片.png", kind: "image" as const, ownerId: "admin" };
+  const imageEvent = sessionEvent("assistant.message", { messageId: "image-1", content: "", attachments: [attachment] });
+  const session = new FakeSession();
+  const manager = new CopilotManager(() => new FakeClient(session) as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  await manager.sendMessage(threadId, "生成图片");
+  session.emit(imageEvent);
+  const message = emitted.find((event) => event.kind === "assistant.message");
+  assert.deepEqual(message?.kind === "assistant.message" ? message.message.attachments : undefined, [attachment]);
+  assert.deepEqual(store.getThread(threadId)?.messageAttachments?.["image-1"], [attachment]);
+  const restored = new CopilotManager(() => new FakeClient(new FakeSession([imageEvent])) as unknown as CopilotClient);
+  t.after(() => restored.shutdown());
+  const snapshot = await restored.subscribe(threadId, "admin");
+  assert.equal(snapshot.kind, "snapshot");
+  assert.deepEqual(snapshot.kind === "snapshot" ? snapshot.messages[0]?.attachments : undefined, [attachment]);
+});

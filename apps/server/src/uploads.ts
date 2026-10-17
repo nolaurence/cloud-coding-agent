@@ -85,6 +85,11 @@ export function storeUploadedImage(
   };
 }
 
+export function readStoredImage(username: string, imageId: string): Buffer {
+  if (!IMAGE_ID_PATTERN.test(imageId)) throw new Error("图片标识无效");
+  return fs.readFileSync(path.join(uploadDirectory(username), imageId));
+}
+
 function isInside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative === "" ||

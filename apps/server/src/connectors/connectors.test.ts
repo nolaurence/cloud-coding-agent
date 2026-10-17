@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ConnectorConfig, Project, ThreadEvent, TurnAttachment } from "@cca/protocol";
+import type { ConnectorConfig, MessageAttachment, Project, ThreadEvent, TurnAttachment } from "@cca/protocol";
 import type { CopilotManager } from "../copilot.js";
 import { store } from "../store.js";
 import { ConnectorManager } from "./manager.js";
-import { removeUploadedImages } from "../uploads.js";
+import { removeUploadedImages, storeUploadedImage } from "../uploads.js";
 import type { InboundConnectorMessage, ConnectorClientCallbacks, ConnectorTarget } from "./types.js";
 import { normalizeFeishuMessage, parseFeishuText } from "./feishu.js";
 import { QQConnectorClient, createQQMarkdownMessage, fetchQQImage, getQQImageAttachments, normalizeQQMessage } from "./qq.js";
@@ -162,7 +162,8 @@ test("连接器会去重消息、复用映射会话并回传完整回复", async
   let callbacks: ConnectorClientCallbacks | undefined;
   let subscriptions = 0;
   let unsubscriptions = 0;
-  const sent: Array<{ target: ConnectorTarget; text: string }> = [];
+  const sent: Array<{ target: ConnectorTarget; text: string; attachments?: MessageAttachment[] }> = [];
+  const generatedImages: MessageAttachment[] = [{ id: "generated.png", displayName: "生成图片.png", kind: "image", ownerId: "admin" }];
   let receivedAttachments: TurnAttachment[] | undefined;
   const fakeManager = {
     onThreadEvent(next: typeof sink) { sink = next; },
@@ -172,7 +173,7 @@ test("连接器会去重消息、复用映射会话并回传完整回复", async
       receivedAttachments = attachments;
       sink?.(threadId, {
         kind: "assistant.message",
-        message: { id: "assistant-1", role: "assistant", text: "任务完成", turnId: "turn-1", createdAt: Date.now() },
+        message: { id: "assistant-1", role: "assistant", text: _text === "只返回图片" ? "" : "任务完成", attachments: generatedImages, turnId: "turn-1", createdAt: Date.now() },
       });
       sink?.(threadId, { kind: "turn.end", turnId: "turn-1" });
     },
@@ -194,7 +195,7 @@ test("连接器会去重消息、复用映射会话并回传完整回复", async
       return {
         async start() { nextCallbacks.onStatus("connected"); },
         async stop() {},
-        async send(target, text) { sent.push({ target, text }); },
+        async send(target, text, _replyTo, attachments) { sent.push({ target, text, attachments }); },
       };
     },
     feishu: () => { throw new Error("not used"); },
@@ -222,7 +223,9 @@ test("连接器会去重消息、复用映射会话并回传完整回复", async
   assert.equal(subscriptions, 1);
   assert.equal(unsubscriptions, 1);
   assert.deepEqual(receivedAttachments, message.attachments);
-  assert.deepEqual(sent, [{ target: message.target, text: "任务完成" }]);
+  assert.deepEqual(sent, [{ target: message.target, text: "任务完成", attachments: generatedImages }]);
+  await callbacks!.onMessage({ ...message, eventId: "event-2", messageId: "message-2", text: "只返回图片", attachments: undefined });
+  assert.deepEqual(sent[1], { target: message.target, text: "", attachments: generatedImages });
   await manager.shutdown();
 });
 
@@ -427,4 +430,48 @@ test("QQ group images and same-group quoted images reach the callback", async (t
   assert.match(replies[0]!, /无法获取/);
   await client["receiveMessage"]("GROUP_AT_MESSAGE_CREATE", { ...original, id: "denied", author: { member_openid: "denied" } });
   assert.equal(messages.length, 2);
+});
+
+
+test("QQ sends stored images as native media in private and group conversations and multipart in channels", async (t) => {
+  const ownerId = "qq-outgoing-images";
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ6sAAAAASUVORK5CYII=", "base64");
+  const stored = storeUploadedImage(ownerId, png, "image/png", "生成图片.png");
+  const attachment = { id: stored.imageId, displayName: "生成图片.png", kind: "image" as const, ownerId };
+  t.after(() => removeUploadedImages(ownerId, [stored]));
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new QQConnectorClient({
+    id: "qq-image-send", name: "QQ", platform: "qq", enabled: true, appId: "app", appSecret: "secret",
+    projectId: "project-1", model: { providerId: "provider", modelId: "chat" }, ownerId,
+  }, { async onMessage() {}, onStatus() {} }, async (input, init) => {
+    const url = String(input);
+    calls.push({ url, init });
+    return new Response(JSON.stringify(url.includes("getAppAccessToken") ? { access_token: "test-token", expires_in: 7200 } : url.endsWith("/files") ? { file_info: "image-info" } : { id: "sent" }));
+  });
+  for (const kind of ["private", "group"] as const) {
+    calls.length = 0;
+    await client.send({ platform: "qq", kind, id: "target" }, "图片已生成", "original", [attachment]);
+    const upload = calls.find((call) => call.url.endsWith("/files"));
+    const uploadBody = JSON.parse(String(upload?.init?.body));
+    assert.equal(uploadBody.file_data, png.toString("base64"));
+    assert.equal(uploadBody.file_type, 1);
+    assert.equal(uploadBody.srv_send_msg, false);
+    const sent = calls.filter((call) => call.url.endsWith("/messages")).map((call) => JSON.parse(String(call.init?.body)));
+    assert.equal(sent[0]?.msg_type, 2);
+    assert.equal(sent[1]?.msg_type, 7);
+    assert.equal(sent[1]?.media.file_info, "image-info");
+    assert.equal(sent[1]?.msg_id, "original");
+    assert.equal(sent[1]?.msg_seq, sent[0]?.msg_seq + 1);
+  }
+  calls.length = 0;
+  await client.send({ platform: "qq", kind: "channel", id: "channel" }, "", "original", [attachment]);
+  assert.equal(calls.length, 1);
+  const body = calls[0]?.init?.body;
+  assert.ok(body instanceof FormData);
+  assert.equal(body.get("msg_id"), "original");
+  const file = body.get("file_image");
+  assert.ok(file instanceof Blob);
+  assert.deepEqual(Buffer.from(await file.arrayBuffer()), png);
+  assert.equal((calls[0]?.init?.headers as Record<string,string>)["Content-Type"], undefined);
+  await assert.rejects(client.send({ platform: "qq", kind: "private", id: "target" }, "", "original", [{ ...attachment, ownerId: "someone-else" }]), /所有者无效/);
 });

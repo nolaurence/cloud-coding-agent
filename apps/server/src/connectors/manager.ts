@@ -4,6 +4,7 @@ import type {
   ConnectorConnectionState,
   ConnectorStatus,
   ModelRef,
+  MessageAttachment,
   ThreadEvent,
   ThreadMeta,
 } from "@cca/protocol";
@@ -29,11 +30,13 @@ interface RunningConnector {
 interface TurnOutcome {
   text?: string;
   error?: string;
+  attachments?: MessageAttachment[];
 }
 
 interface TurnWaiter {
   subscribed: boolean;
   messages: string[];
+  attachments: MessageAttachment[];
   resolve: (outcome: TurnOutcome) => void;
   timer: NodeJS.Timeout;
 }
@@ -251,10 +254,10 @@ export class ConnectorManager {
       }
       const outcome = await outcomePromise;
       if (outcome.error) throw new Error(outcome.error);
-      if (!outcome.text) throw new Error("Agent 未返回文本消息");
+      if (!outcome.text && !outcome.attachments?.length) throw new Error("Agent 未返回消息");
       const replyClient = this.compatibleClient(current.config.id, message.target.platform);
       if (!replyClient) throw new Error("连接器已停用或平台配置已变更");
-      await replyClient.send(message.target, outcome.text, message.messageId);
+      await replyClient.send(message.target, outcome.text ?? "", message.messageId, outcome.attachments);
     } catch (error) {
       if (!attachmentsAccepted) this.discardAttachments(attachmentOwnerId, message);
       const failure = `处理消息失败：${errorMessage(error)}`;
@@ -334,7 +337,7 @@ export class ConnectorManager {
       const timer = setTimeout(() => {
         this.finishWaiter(threadId, { error: "Agent 响应超时" });
       }, TURN_TIMEOUT_MS);
-      this.turnWaiters.set(threadId, { subscribed: false, messages: [], resolve, timer });
+      this.turnWaiters.set(threadId, { subscribed: false, messages: [], attachments: [], resolve, timer });
     });
   }
 
@@ -350,12 +353,16 @@ export class ConnectorManager {
   private onThreadEvent(threadId: string, event: ThreadEvent): void {
     const waiter = this.turnWaiters.get(threadId);
     if (!waiter) return;
-    if (event.kind === "assistant.message" && event.message.text.trim()) {
-      waiter.messages.push(event.message.text.trim());
+    if (event.kind === "assistant.message") {
+      if (event.message.text.trim()) waiter.messages.push(event.message.text.trim());
+      if (event.message.attachments?.length) waiter.attachments.push(...event.message.attachments);
     } else if (event.kind === "error") {
       this.finishWaiter(threadId, { error: event.message });
     } else if (event.kind === "turn.end") {
-      this.finishWaiter(threadId, { text: waiter.messages.join("\n\n").trim() });
+      this.finishWaiter(threadId, {
+        text: waiter.messages.join("\n\n").trim(),
+        attachments: waiter.attachments,
+      });
     }
   }
 }
