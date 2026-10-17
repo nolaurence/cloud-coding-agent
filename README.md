@@ -12,7 +12,7 @@
 - **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用
 - **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
 - **项目管理**:一个项目 = 服务器上的一个工作目录,会话在其 cwd 中执行
-- **工作区沙箱**:基于 Codex 原生沙箱(Linux 强制启用 bubblewrap 后端),原生文件/命令工具的写入仅限所属工作区,读取额外允许必要系统文件和已启用 Skill;禁止工作区覆盖服务数据或其他项目根目录,且禁止沙箱绕过。Linux 部署需要安装 bubblewrap(Docker 镜像已内置)并允许非特权用户命名空间
+- **工作区沙箱**:基于 Codex 原生沙箱,原生文件/命令工具的写入仅限所属工作区,读取额外允许必要系统文件和已启用 Skill;禁止工作区覆盖服务数据或其他项目根目录,且禁止沙箱绕过
 - **代码托管账户**:在「设置 → 通用」绑定 GitHub / Gitee,Agent 可使用当前用户的授权执行 clone、fetch、pull、push
 - **用户系统**:登录/注册;管理员由环境变量 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 创建,注册用户为普通用户;会话按用户隔离,管理员可见全部
 - **数据存储**:内置 SQLite 单文件部署,也可连接 MySQL,并兼容旧 JSON 数据迁移
@@ -153,4 +153,4 @@ docker compose -f docker-compose-prod.yml up -d --build
 
 也可使用 Codex 原生账号:在运行服务的系统用户下,将 `CODEX_HOME` 指向 `$CCA_DATA_DIR/codex-home` 后,执行 `node node_modules/@openai/codex/bin/codex.js login`。服务会在打开会话时同步该目录的认证信息,不使用旧 Copilot 登录态。修改/清除认证后应重启服务以关闭旧会话。可通过 `CCA_CODEX_PATH` 指定同版本 Codex 可执行文件。请勿把认证文件放到项目工作区。
 
-Linux 主机/容器必须允许 bubblewrap 创建用户命名空间;禁止该能力时文件修改和命令执行会明确失败,不会降级为无沙箱模式。不要通过关闭沙箱或 privileged 容器绕过限制。桌面平台还需在对应原生 runner 上确认 Codex 沙箱能力。
+Linux 主机/容器禁止沙箱能力时文件修改和命令执行会明确失败,不会降级为无沙箱模式。不要通过关闭沙箱或 privileged 容器绕过限制。桌面平台还需在对应原生 runner 上确认 Codex 沙箱能力。

@@ -156,7 +156,7 @@ export class CodexSession implements AgentSession {
     await this.eventStore.flush();
     const overrides: JsonObject = {
       approval_policy: "never", sandbox_mode: "workspace-write", web_search: "disabled",
-      features: { multi_agent: false, use_linux_sandbox_bwrap: true },
+      features: { multi_agent: false },
       projects: { [this.cwd]: { trust_level: "untrusted" } },
       shell_environment_policy: { inherit: "none", set: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: this.cwd, LANG: "C.UTF-8" } },
       mcp_servers: {},
