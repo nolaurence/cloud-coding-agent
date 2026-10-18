@@ -13,7 +13,7 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   process.env.CCA_DATA_DIR = path.join(root, "data");
   process.env.WORKSPACE_ROOT = path.join(root, "workspace");
   fs.mkdirSync(process.env.WORKSPACE_ROOT, { recursive: true });
-  const { CodexClient } = await import("./codex.js");
+  const { CodexClient, CodexSession } = await import("./codex.js");
   const { initDb, closeDb, query } = await import("./db.js");
   await initDb("sqlite::memory:");
   let calls = 0;
@@ -237,6 +237,23 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   await assert.rejects(legacy.rpc.history.compact(), /只读/);
   await client.deleteSession(legacyId);
   assert.equal(fs.existsSync(legacyDirectory), false);
+  await t.test("a full event journal cannot crash the runtime failure callback", async (t) => {
+    let released = false;
+    const failed = new CodexSession(randomUUID(), config, () => { released = true; });
+    const notifications: SessionEvent[] = [];
+    failed.on((event) => notifications.push(event));
+    const append = t.mock.method(fs, "appendFileSync", () => {
+      throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
+    });
+    try {
+      assert.doesNotThrow(() => failed.connection.onFailure(new Error("Codex exited: 1")));
+    } finally { append.mock.restore(); }
+    assert.equal(failed.runtimeDisconnected, true);
+    assert.ok(notifications.some((event) => event.type === "session.error" && event.data.errorType === "storage" && event.data.message.includes("磁盘空间")));
+    assert.ok(notifications.some((event) => event.type === "session.idle"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(released, true);
+  });
   await client.deleteSession(id);
   assert.equal(fs.existsSync(path.join(root, "data", "codex-home", id)), false);
   assert.deepEqual((await query("SELECT * FROM thread_events WHERE thread_id = ?", [id])).rows, []);

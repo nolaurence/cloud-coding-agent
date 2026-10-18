@@ -118,11 +118,25 @@ export class CodexSession implements AgentSession {
     this.connection.onNotification((method, params) => this.notification(method, params));
     this.connection.onRequest = (method, params) => this.toolRequest(method, params);
     this.connection.onFailure = (error) => {
+      let failure = error;
       try {
-        this.emit({ type: "session.error", data: { errorType: "codex", message: error.message } });
-        this.complete(error);
+        try {
+          this.emit({ type: "session.error", data: { errorType: "codex", message: error.message } });
+        } catch (cause) {
+          const code = (cause as NodeJS.ErrnoException | undefined)?.code;
+          failure = new Error(code === "ENOSPC" || code === "EDQUOT"
+            ? "服务端磁盘空间或存储配额不足，请释放空间后重新打开会话"
+            : "会话错误记录写入失败，请检查服务端存储后重新打开会话");
+          this.emit({ type: "session.error", data: { errorType: "storage", message: failure.message } }, false);
+        }
       } finally {
-        void this.disconnect().catch((cause: unknown) => console.error("[cca] Codex cleanup failed", cause));
+        try {
+          // A failed journal write must not prevent waiters and the UI from leaving
+          // the running state, or escape the child-process callback and crash Node.
+          this.complete(failure, false, false);
+        } finally {
+          void this.disconnect().catch((cause: unknown) => console.error("[cca] Codex cleanup failed", cause));
+        }
       }
     };
   }
@@ -368,10 +382,10 @@ export class CodexSession implements AgentSession {
     const stored = storeUploadedImage(this.config.imageGenerationOwnerId, buffer, mimeType, displayName);
     return { id: stored.imageId, displayName, kind: "image", ownerId: this.config.imageGenerationOwnerId };
   }
-  private complete(error?: Error, aborted = false) {
+  private complete(error?: Error, aborted = false, persist = true) {
     this.turnId = undefined;
     this.pendingTurn = false;
-    if (!this.compacting) this.emit({ type: "session.idle", data: { aborted } });
+    if (!this.compacting) this.emit({ type: "session.idle", data: { aborted } }, persist);
     for (const waiter of this.waiters) error || aborted ? waiter.reject(error ?? new Error("Codex turn interrupted")) : waiter.resolve();
     this.waiters.clear();
   }

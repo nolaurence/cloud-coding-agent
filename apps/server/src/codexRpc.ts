@@ -31,9 +31,21 @@ export class CodexRpc {
     const child = this.process;
     this.exit = new Promise((resolve) => child.once("close", () => resolve()));
     child.once("error", (error) => this.fail(error));
-    child.once("exit", (code, signal) => { if (!this.closing) this.fail(new Error("Codex exited: " + (signal ?? code))); });
-    // stderr can contain provider URLs and credentials. Never forward it to clients or logs.
-    child.stderr.resume();
+    let storageFull = false;
+    let stderrTail = "";
+    // Only classify known storage errors: stderr can contain credentials and must
+    // never be forwarded to clients or logs. Keep a bounded tail for split chunks.
+    child.stderr.on("data", (chunk: Buffer) => {
+      const output = stderrTail + chunk.toString("utf8");
+      storageFull ||= /no space left on device|disk quota exceeded|\bENOSPC\b|\bEDQUOT\b|os error (?:28|122)\b/i.test(output);
+      stderrTail = output.slice(-64);
+    });
+    // close follows stderr draining, including diagnostics written just before exit.
+    child.once("close", (code, signal) => {
+      if (!this.closing) this.fail(new Error(storageFull
+        ? "服务端磁盘空间或存储配额不足，请释放空间后重试"
+        : "Codex exited: " + (signal ?? code)));
+    });
     child.stdin.on("error", (error) => { if (!this.closing) this.fail(error); });
     const decoder = new StringDecoder("utf8");
     let pending = "";
