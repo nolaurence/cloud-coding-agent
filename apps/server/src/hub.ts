@@ -903,6 +903,9 @@ export class Hub {
         case "settings.update": {
           this.requireAdmin(conn);
           const prev = store.settings;
+          if (msg.settings.imageGenerationEnabled !== undefined && typeof msg.settings.imageGenerationEnabled !== "boolean") {
+            throw new Error("生图开关必须为布尔值");
+          }
           const modelProvidersChanged =
             JSON.stringify(prev.providers) !== JSON.stringify(msg.settings.providers);
           const mcpIds = new Set<string>();
@@ -912,7 +915,11 @@ export class Hub {
             mcpIds.add(normalized.id);
             return normalized;
           });
-          let nextSettings = { ...msg.settings, mcpServers };
+          let nextSettings = {
+            ...msg.settings,
+            imageGenerationEnabled: msg.settings.imageGenerationEnabled ?? prev.imageGenerationEnabled ?? true,
+            mcpServers,
+          };
           this.validateModelContextWindows(nextSettings);
           let modelOptions: ModelOption[] | undefined;
           if (nextSettings.defaultModel) {
@@ -950,6 +957,7 @@ export class Hub {
           nextSettings = { ...nextSettings, connectors: [...otherConnectors, ...connectors] };
           const providerChanged =
             modelProvidersChanged ||
+            (prev.imageGenerationEnabled !== false) !== nextSettings.imageGenerationEnabled ||
             JSON.stringify(prev.mcpServers) !== JSON.stringify(nextSettings.mcpServers) ||
             JSON.stringify(prev.disabledSkills) !== JSON.stringify(nextSettings.disabledSkills) ||
             JSON.stringify(prev.skillDirectories) !== JSON.stringify(nextSettings.skillDirectories);

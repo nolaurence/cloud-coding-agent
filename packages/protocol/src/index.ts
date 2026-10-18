@@ -118,6 +118,8 @@ export interface ConnectorStatus {
 export interface AppSettings {
   providers: ModelProviderConfig[];
   defaultModel?: ModelRef;
+  /** Defaults to true for existing configurations. */
+  imageGenerationEnabled?: boolean;
   connectors: ConnectorConfig[];
   mcpServers: McpServerConfig[];
   skillDirectories: string[];
@@ -709,6 +711,7 @@ export type ServerMessage =
 
 export const DEFAULT_SETTINGS: AppSettings = {
   providers: [],
+  imageGenerationEnabled: true,
   connectors: [],
   mcpServers: [],
   skillDirectories: [],

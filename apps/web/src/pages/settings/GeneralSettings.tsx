@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { useApp } from "../../lib/store";
 import { THEME_OPTIONS, useTheme, type ThemePreference } from "../../lib/theme";
 import { ModelPicker } from "../../components/ModelPicker";
 import { ReasoningEffortPicker } from "../../components/ReasoningEffortPicker";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -17,8 +19,23 @@ export function GeneralSettings() {
   const settings = useApp((s) => s.settings);
   const updateSettings = useApp((s) => s.updateSettings);
   const { theme, resolvedTheme, setTheme } = useTheme();
+  const [updatingImageGeneration, setUpdatingImageGeneration] = useState(false);
+  const [imageGenerationError, setImageGenerationError] = useState("");
 
   if (!settings) return null;
+
+  const setImageGenerationEnabled = async (imageGenerationEnabled: boolean) => {
+    if (updatingImageGeneration) return;
+    setUpdatingImageGeneration(true);
+    setImageGenerationError("");
+    try {
+      await updateSettings({ ...settings, imageGenerationEnabled });
+    } catch (error) {
+      setImageGenerationError(error instanceof Error ? error.message : "修改生图设置失败");
+    } finally {
+      setUpdatingImageGeneration(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -83,6 +100,30 @@ export function GeneralSettings() {
               />
             </div>
           </div>
+        </section>
+      )}
+
+      {user?.role === "admin" && (
+        <section>
+          <h2 className="mb-3 text-base font-semibold">图片生成</h2>
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
+            <div>
+              <label htmlFor="image-generation-enabled" className="text-sm">启用生图功能</label>
+              <div id="image-generation-description" className="text-xs text-zinc-500">
+                使用「模型」页配置的 GPT Image 模型生成图片，对所有会话生效。修改前请先停止正在运行的任务。
+              </div>
+            </div>
+            <Switch
+              id="image-generation-enabled"
+              aria-describedby="image-generation-description"
+              checked={settings.imageGenerationEnabled !== false}
+              disabled={updatingImageGeneration}
+              onCheckedChange={(checked) => void setImageGenerationEnabled(checked)}
+            />
+          </div>
+          {imageGenerationError && (
+            <p role="alert" className="mt-2 text-sm text-red-500">{imageGenerationError}</p>
+          )}
         </section>
       )}
 

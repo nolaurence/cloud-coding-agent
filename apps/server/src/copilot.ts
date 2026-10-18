@@ -717,7 +717,9 @@ export class CopilotManager {
         };
       }
     }
-    const imageProvider = selectImageGenerationProvider(settings.providers, modelProviderId);
+    const imageProvider = settings.imageGenerationEnabled !== false
+      ? selectImageGenerationProvider(settings.providers, modelProviderId)
+      : undefined;
     if (imageProvider) {
       config.imageGenerationProvider = imageProvider;
       config.imageGenerationModel = imageProvider.model;
@@ -2052,7 +2054,7 @@ export class CopilotManager {
     previousSettings: AppSettings = store.settings,
   ) {
     if ([...this.threads.values()].some((rt) => rt.running)) {
-      throw new Error("当前仍有任务运行,请停止或等待完成后再修改模型、MCP 或技能配置");
+      throw new Error("当前仍有任务运行,请停止或等待完成后再修改模型、生图、MCP 或技能配置");
     }
 
     for (const thread of [...store.threads]) {

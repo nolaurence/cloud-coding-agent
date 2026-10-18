@@ -1750,6 +1750,46 @@ test("configured GPT Image providers enable image generation independently of th
   }
 });
 
+test("image generation can be disabled and re-enabled for an existing session", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.settings.providers = [{
+    id: "images",
+    name: "Images",
+    type: "openai",
+    baseUrl: "https://images.example.com/v1",
+    models: [{ id: "gpt-image-1.5" }],
+  }];
+  const client = new FakeClient();
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(threadId, "admin");
+  assert.equal((client.createdConfigs[0] as { imageGenerationModel?: string }).imageGenerationModel, "gpt-image-1.5");
+
+  const disabledSettings = { ...store.settings, imageGenerationEnabled: false };
+  await manager.sendMessage(threadId, "running task");
+  await assert.rejects(manager.reconfigureOpenSessions(disabledSettings, store.settings), /当前仍有任务运行/);
+  assert.equal(client.session.disconnectCalls, 0);
+  await manager.interrupt(threadId);
+
+  for (const imageGenerationEnabled of [false, true]) {
+    const nextSettings = { ...store.settings, imageGenerationEnabled };
+    await manager.reconfigureOpenSessions(nextSettings, store.settings);
+    store.settings = nextSettings;
+    await manager.subscribe(threadId, "admin");
+    const config = client.resumedConfigs.at(-1) as {
+      imageGenerationModel?: string;
+      imageGenerationOwnerId?: string;
+      imageGenerationProvider?: { model: string };
+    };
+    assert.equal(config.imageGenerationModel, imageGenerationEnabled ? "gpt-image-1.5" : undefined);
+    assert.equal(config.imageGenerationOwnerId, imageGenerationEnabled ? "admin" : undefined);
+    assert.equal(config.imageGenerationProvider?.model, imageGenerationEnabled ? "gpt-image-1.5" : undefined);
+  }
+  assert.equal(client.session.disconnectCalls, 2);
+});
+
 test("assistant image-only messages are emitted, persisted and restored", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
