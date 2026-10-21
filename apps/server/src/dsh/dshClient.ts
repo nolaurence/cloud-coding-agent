@@ -32,11 +32,6 @@ import { store } from "../store.js";
 import { ThreadEventStore, deleteThreadEvents } from "../threadEvents.js";
 import { array, object, startLlmGateway, text } from "../llmGateway.js";
 import { sanitizedDshRuntimeEnv } from "../runtimeEnv.js";
-import {
-  AGENT_TOOLS_BRIDGE_TOKEN,
-  AGENT_TOOLS_SERVER_NAME,
-  agentToolsMcpUrl,
-} from "../mcpToolsServer.js";
 import { DshEventMapper } from "./dshEvents.js";
 import {
   credentialEnvName,
@@ -349,24 +344,6 @@ export class DshSession implements AgentSession {
           timeoutMs: server.timeout,
         });
       }
-    }
-    // 自定义工具（authenticated_git / browser_use / manage_*）经应用自身的 MCP 桥接入
-    const bridgeUrl = agentToolsMcpUrl();
-    if (bridgeUrl && (this.config.tools?.length ?? 0) > 0) {
-      rows.push({
-        id: "cca-agent-tools",
-        serverName: AGENT_TOOLS_SERVER_NAME,
-        config: {
-          transport: "streamable-http",
-          serverName: AGENT_TOOLS_SERVER_NAME,
-          url: bridgeUrl,
-          headers: {
-            authorization: "Bearer " + AGENT_TOOLS_BRIDGE_TOKEN,
-            "x-cca-thread-id": this.sessionId,
-          },
-        },
-        timeoutMs: 60_000,
-      });
     }
     return rows;
   }
