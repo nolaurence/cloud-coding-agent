@@ -141,6 +141,33 @@ export function isAgentMode(value: unknown): value is AgentMode {
   return typeof value === "string" && AGENT_MODES.includes(value as AgentMode);
 }
 
+export const PERMISSION_MODES = ["request", "auto", "full"] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+export function isPermissionMode(value: unknown): value is PermissionMode {
+  return typeof value === "string" && PERMISSION_MODES.includes(value as PermissionMode);
+}
+
+export type PermissionRequestKind = "command" | "file" | "permissions";
+
+export interface PermissionRequest {
+  requestId: string;
+  kind: PermissionRequestKind;
+  command?: string;
+  cwd?: string;
+  reason?: string;
+}
+
+export const PERMISSION_DECISIONS = ["accept", "decline"] as const;
+export type PermissionDecision = (typeof PERMISSION_DECISIONS)[number];
+
+export function isPermissionDecision(value: unknown): value is PermissionDecision {
+  return (
+    typeof value === "string" &&
+    PERMISSION_DECISIONS.includes(value as PermissionDecision)
+  );
+}
+
 export function resolveModelContextWindowTokens(
   settings: AppSettings,
   model: ModelRef | undefined,
@@ -236,6 +263,7 @@ export interface ThreadMeta {
   model?: ModelRef;
   modelProviderId?: string;
   agentMode?: AgentMode;
+  permissionMode?: PermissionMode;
   userId?: string;
   createdAt: number;
   updatedAt: number;
@@ -560,6 +588,7 @@ export type ThreadEvent =
       contextUsage?: ContextUsage;
       error?: string;
       live?: { text: string; reasoning: string; turnId: string; startedAt: number };
+      pendingPermission?: PermissionRequest;
     }
   | { kind: "turn.start"; turnId: string }
   | { kind: "turn.end"; turnId: string }
@@ -584,6 +613,8 @@ export type ThreadEvent =
       startedAt: number;
     }
   | { kind: "context.usage"; usage?: ContextUsage }
+  | { kind: "permission.request"; request: PermissionRequest }
+  | { kind: "permission.resolve"; requestId: string; decision: PermissionDecision }
   | { kind: "error"; message: string }
   | { kind: "title"; title: string };
 
@@ -597,11 +628,25 @@ export type ClientMessage =
       projectId: string;
       model?: ModelRef;
       agentMode?: AgentMode;
+      permissionMode?: PermissionMode;
       initialTurn?: TurnInput;
     }
   | { id: string; type: "thread.delete"; threadId: string }
   | { id: string; type: "thread.setModel"; threadId: string; model: ModelRef }
   | { id: string; type: "thread.setAgentMode"; threadId: string; agentMode: AgentMode }
+  | {
+      id: string;
+      type: "thread.setPermissionMode";
+      threadId: string;
+      permissionMode: PermissionMode;
+    }
+  | {
+      id: string;
+      type: "permission.respond";
+      threadId: string;
+      requestId: string;
+      decision: PermissionDecision;
+    }
   | { id: string; type: "thread.subscribe"; threadId: string }
   | { id: string; type: "thread.unsubscribe"; threadId: string }
   | { id: string; type: "thread.share.get"; threadId: string }

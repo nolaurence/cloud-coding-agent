@@ -1,5 +1,6 @@
 import { useMemo, useState, type KeyboardEvent } from "react";
 import {
+  Brain,
   ChevronDown,
   Eye,
   Globe2,
@@ -11,8 +12,9 @@ import {
 } from "lucide-react";
 import type { ToolActivity } from "@cca/protocol";
 import { cn } from "../lib/utils";
+import { Markdown } from "./Markdown";
 
-type ToolKind = "modify" | "read" | "search" | "command" | "web" | "other";
+type ToolKind = "reasoning" | "modify" | "read" | "search" | "command" | "web" | "other";
 
 const targetKeys = [
   "path",
@@ -58,6 +60,7 @@ function toolTarget(args: Record<string, unknown> | null): string | null {
 
 function toolKind(activity: ToolActivity): ToolKind {
   const name = activity.toolName.toLowerCase();
+  if (/(reason|think|thought)/.test(name)) return "reasoning";
   if (/(bash|shell|terminal|exec|command)/.test(name)) return "command";
   if (/(edit|write|create|patch|replace|insert|delete|rename|move|apply)/.test(name)) {
     return "modify";
@@ -69,6 +72,7 @@ function toolKind(activity: ToolActivity): ToolKind {
 }
 
 const labels: Record<ToolKind, string> = {
+  reasoning: "思考过程",
   modify: "编辑文件",
   read: "读取文件",
   search: "搜索代码",
@@ -79,6 +83,7 @@ const labels: Record<ToolKind, string> = {
 
 function ToolIcon({ kind, className }: { kind: ToolKind; className?: string }) {
   const iconClassName = cn("block size-4 shrink-0 stroke-[1.8] opacity-70", className);
+  if (kind === "reasoning") return <Brain className={iconClassName} />;
   if (kind === "modify") return <SquarePen className={iconClassName} />;
   if (kind === "read") return <Eye className={iconClassName} />;
   if (kind === "search") return <Search className={iconClassName} />;
@@ -105,6 +110,7 @@ function expandedBody(activity: ToolActivity): string | null {
 }
 
 function summaryLabel(kind: ToolKind, count: number): string {
+  if (kind === "reasoning") return `思考了 ${count} 次`;
   if (kind === "modify") return `更改了 ${count} 个文件`;
   if (kind === "read") return `读取了 ${count} 个文件`;
   if (kind === "search") return `搜索了 ${count} 次代码`;
@@ -138,6 +144,7 @@ function liveToolLabel(activity: ToolActivity): string {
   const kind = toolKind(activity);
   const args = parseArgs(activity.args);
   const target = toolTarget(args);
+  if (kind === "reasoning") return "正在思考";
   if (kind === "command") {
     const program = target?.trim().match(/^(?:cd\s+[^&;]+\s*&&\s*)?([\w./-]+)/)?.[1];
     return program ? `正在运行 ${program.split("/").at(-1)}` : "正在运行命令";
@@ -221,9 +228,13 @@ function ToolCallRow({
   const kind = toolKind(activity);
   const heading = labels[kind];
   const rawPreview = (target ?? activity.toolName).replace(/\s+/g, " ");
-  const displayText = rawPreview.toLowerCase() === heading.toLowerCase() ? heading : rawPreview;
+  const displayText =
+    kind === "reasoning" || rawPreview.toLowerCase() === heading.toLowerCase()
+      ? heading
+      : rawPreview;
+  const reasoningText = kind === "reasoning" ? (activity.result?.trim() ?? "") : "";
   const body = expandedBody(activity);
-  const canExpand = body !== null;
+  const canExpand = kind === "reasoning" ? Boolean(reasoningText) : body !== null;
   const failed = activity.status === "error";
   const showEntryIcon = !isExpandedToolGroupEntry || failed;
   const rowToggleProps = canExpand
@@ -298,15 +309,21 @@ function ToolCallRow({
           </span>
         </div>
       </div>
-      {expanded && canExpand && body ? (
+      {expanded && canExpand ? (
         <div
           className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
           onClick={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-secondary-label select-text">
-            {body}
-          </pre>
+          {kind === "reasoning" ? (
+            <div className="max-h-64 cursor-text overflow-auto text-muted-foreground/75 select-text">
+              <Markdown>{reasoningText}</Markdown>
+            </div>
+          ) : body ? (
+            <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-secondary-label select-text">
+              {body}
+            </pre>
+          ) : null}
         </div>
       ) : null}
     </div>

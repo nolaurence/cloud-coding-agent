@@ -30,6 +30,8 @@ import {
   DEFAULT_MODEL_PROVIDER_ID,
   flattenModels,
   isAgentMode,
+  isPermissionDecision,
+  isPermissionMode,
   isReasoningEffort,
   normalizeContextWindowTokens,
   normalizeModelRefReasoning,
@@ -617,6 +619,9 @@ export class Hub {
               throw new Error("会话模式无效");
             }
             if (msg.agentMode === "ultra") throw new Error("Codex 暂不支持 Ultra 子代理模式");
+            if (msg.permissionMode !== undefined && !isPermissionMode(msg.permissionMode)) {
+              throw new Error("权限模式无效");
+            }
             const requestedModel = msg.model ?? store.settings.defaultModel;
             let model = requestedModel;
             if (requestedModel) {
@@ -655,6 +660,7 @@ export class Hub {
               model,
               modelProviderId: model?.providerId ?? DEFAULT_MODEL_PROVIDER_ID,
               agentMode: msg.agentMode ?? "standard",
+              permissionMode: msg.permissionMode ?? "full",
               userId: conn.user.username,
               createdAt: Date.now(),
               updatedAt: Date.now(),
@@ -741,6 +747,25 @@ export class Hub {
           await deleteThreadShare(msg.threadId);
           store.deleteThread(msg.threadId);
           this.reconcileThreadClients(msg.threadId);
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "thread.setPermissionMode": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          if (!isPermissionMode(msg.permissionMode)) throw new Error("权限模式无效");
+          await this.manager.setThreadPermissionMode(msg.threadId, msg.permissionMode);
+          this.broadcastShell();
+          this.reply(conn, msg.id);
+          break;
+        }
+        case "permission.respond": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canInteract(conn, thread)) throw new Error("无权响应权限请求");
+          if (!isPermissionDecision(msg.decision)) throw new Error("权限响应无效");
+          this.manager.respondPermission(msg.threadId, msg.requestId, msg.decision);
           this.reply(conn, msg.id);
           break;
         }

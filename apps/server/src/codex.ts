@@ -2,7 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { MessageOptions, ResumeSessionConfig, SessionConfig, SessionEvent, Tool } from "@github/copilot-sdk";
-import type { MessageAttachment } from "@cca/protocol";
+import type {
+  MessageAttachment,
+  PermissionDecision,
+  PermissionMode,
+  PermissionRequest,
+} from "@cca/protocol";
 import type { AgentClient, AgentSession, AgentModelInfo } from "./agentRuntime.js";
 import { isReasoningEffort } from "@cca/protocol";
 import { COPILOT_HOME, DATA_DIR } from "./env.js";
@@ -19,7 +24,16 @@ const CODEX_HOME = path.join(DATA_DIR, "codex-home");
 const MAX_CONTEXT_OUTPUT_RESERVE_TOKENS = 16_000;
 export class SessionNotFoundError extends Error {}
 
-type Config = (SessionConfig | ResumeSessionConfig) & { legacySession?: boolean; agentMode?: "standard" | "ultra"; deniedPaths?: string[]; imageGenerationProvider?: ImageGenerationProvider; imageGenerationModel?: string; imageGenerationOwnerId?: string };
+type Config = (SessionConfig | ResumeSessionConfig) & {
+  legacySession?: boolean;
+  agentMode?: "standard" | "ultra";
+  deniedPaths?: string[];
+  imageGenerationProvider?: ImageGenerationProvider;
+  imageGenerationModel?: string;
+  imageGenerationOwnerId?: string;
+  permissionMode?: PermissionMode;
+  onCodexPermissionRequest?: (request: PermissionRequest) => Promise<PermissionDecision>;
+};
 type EventInput = { [K in SessionEvent["type"]]: { type: K; data: Extract<SessionEvent, { type: K }>["data"] & (K extends "assistant.message" ? { attachments?: MessageAttachment[] } : unknown); agentId?: string; id?: string } }[SessionEvent["type"]];
 function event(input: EventInput): SessionEvent {
   return { id: randomUUID(), parentId: null, timestamp: new Date().toISOString(), ...input } as SessionEvent;
@@ -31,6 +45,51 @@ function sessionPath(id: string): string {
 function configuredContextWindow(config: Config): number | undefined {
   const value = config.modelCapabilities?.limits?.max_context_window_tokens;
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+export function codexPermissionSettings(mode: PermissionMode | undefined) {
+  switch (mode) {
+    case "request":
+      return {
+        approvalPolicy: "on-request" as const,
+        sandbox: "workspace-write" as const,
+        approvalsReviewer: "user" as const,
+        sandboxPolicy: { type: "workspaceWrite", networkAccess: false } as JsonObject,
+      };
+    case "auto":
+      return {
+        approvalPolicy: "on-request" as const,
+        sandbox: "workspace-write" as const,
+        approvalsReviewer: "auto_review" as const,
+        sandboxPolicy: { type: "workspaceWrite", networkAccess: false } as JsonObject,
+      };
+    default:
+      return {
+        approvalPolicy: "never" as const,
+        sandbox: "danger-full-access" as const,
+        approvalsReviewer: "user" as const,
+        sandboxPolicy: { type: "dangerFullAccess" } as JsonObject,
+      };
+  }
+}
+
+function optionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function reasoningContent(item: JsonObject): string {
+  if (!Array.isArray(item.content)) return "";
+  return item.content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (part && typeof part === "object" && typeof (part as JsonObject).text === "string") {
+        return String((part as JsonObject).text);
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
 }
 
 function runtimeEnv(home: string): NodeJS.ProcessEnv {
@@ -91,6 +150,8 @@ export class CodexSession implements AgentSession {
   private imageServer: Awaited<ReturnType<typeof startImageGenerationServer>> | undefined;
   private model: string | undefined;
   private effort: string | undefined;
+  private permissionMode: PermissionMode;
+  private permissionHandler?: (request: PermissionRequest) => Promise<PermissionDecision>;
   private usage: { currentTokens: number; tokenLimit: number } | undefined;
   private events: SessionEvent[] = [];
   private readonly eventStore: ThreadEventStore;
@@ -100,6 +161,7 @@ export class CodexSession implements AgentSession {
   private readonly waiters = new Set<{ resolve(): void; reject(error: Error): void }>();
   private compacting = false;
   private imageGenerationItems = new Map<string, "running" | "complete">();
+  private rawReasoning = new Map<string, { text: string; started: boolean }>();
   private reconnectTask: Promise<void> | undefined;
   private commonConfig: JsonObject | undefined;
   private opened = false;
@@ -118,6 +180,8 @@ export class CodexSession implements AgentSession {
     }
     this.tools = config.tools ?? [];
     this.model = config.model;
+    this.permissionMode = config.permissionMode ?? "full";
+    this.permissionHandler = config.onCodexPermissionRequest;
     const effort: string | undefined = config.reasoningEffort;
     this.effort = config.agentMode === "ultra" ? "xhigh" : effort === "max" ? "xhigh" : effort;
   }
@@ -255,8 +319,12 @@ export class CodexSession implements AgentSession {
     } else if (fs.existsSync(mappingPath)) throw new Error("Codex session already exists");
     for (let index = stored.length; index < this.events.length; index++) this.eventStore.append(this.events[index]!, index + 1);
     await this.eventStore.flush();
+    const permission = codexPermissionSettings(this.permissionMode);
     const overrides: JsonObject = {
-      approval_policy: "never", sandbox_mode: "danger-full-access", web_search: "disabled",
+      approval_policy: permission.approvalPolicy,
+      sandbox_mode: permission.sandbox,
+      approvals_reviewer: permission.approvalsReviewer,
+      web_search: "disabled",
       // Custom providers use the registered image_gen MCP tool; the native
       // image extension is not exposed reliably for the cca model provider.
       features: { multi_agent: false, image_generation: false },
@@ -325,8 +393,9 @@ export class CodexSession implements AgentSession {
         );
       }
       if (this.effort) overrides.model_reasoning_effort = this.effort;
+      overrides.show_raw_agent_reasoning = true;
       await this.connection.start(this.cwd, runtimeEnv(this.home));
-      const common: JsonObject = { cwd: this.cwd, model: this.model, approvalPolicy: "never", sandbox: "danger-full-access", config: overrides,
+      const common: JsonObject = { cwd: this.cwd, model: this.model, approvalPolicy: permission.approvalPolicy, sandbox: permission.sandbox, approvalsReviewer: permission.approvalsReviewer, config: overrides,
         developerInstructions: [this.config.systemMessage?.content, ...(this.imageServer ? [
           "本会话已启用生图工具 mcp__cca_imagegen__image_gen（imagegen 技能所说的 image_gen 在此环境中的入口）。用户请求生成新图片时使用此工具;如果工具尚未出现在列表中,先用 tool_search 搜索 +cca_imagegen 加载工具,再调用。工具使用服务端配置的 GPT Image 提供商,凭据已配置,无需额外 OPENAI_API_KEY 或 CLI 回退确认。生成图片会自动作为助手附件显示,工具同时返回本地文件路径。此入口只支持生成新图片,不支持编辑参考图片。",
         ] : [])].filter(Boolean).join("\n"), persistExtendedHistory: true };
@@ -350,9 +419,49 @@ export class CodexSession implements AgentSession {
       this.opened = true;
     } catch (error) { await this.disconnect(); throw error; }
   }
+  private async permissionDecision(request: PermissionRequest): Promise<PermissionDecision> {
+    if (this.permissionMode === "full") return "accept";
+    if (!this.permissionHandler) return "decline";
+    try {
+      return await this.permissionHandler(request);
+    } catch (error) {
+      console.warn("[cca] Codex permission request failed", error);
+      return "decline";
+    }
+  }
+  private async approvalRequest(method: string, params: JsonObject): Promise<JsonObject> {
+    const itemId = optionalText(params.itemId) ?? randomUUID();
+    const requestId = optionalText(params.approvalId) ?? `${itemId}:${randomUUID()}`;
+    const reason = optionalText(params.reason);
+    if (method === "item/permissions/requestApproval") {
+      const decision = await this.permissionDecision({
+        requestId,
+        kind: "permissions",
+        cwd: optionalText(params.cwd) ?? this.cwd,
+        reason,
+      });
+      return decision === "accept"
+        ? { permissions: object(params.permissions), scope: "turn" }
+        : { permissions: {}, scope: "turn" };
+    }
+    const kind = method === "item/fileChange/requestApproval" ? "file" : "command";
+    const decision = await this.permissionDecision({
+      requestId,
+      kind,
+      ...(kind === "command" && optionalText(params.command) ? { command: optionalText(params.command) } : {}),
+      cwd: optionalText(params.cwd) ?? this.cwd,
+      reason,
+    });
+    return { decision };
+  }
   private async toolRequest(method: string, params: JsonObject): Promise<JsonObject> {
-    if (method === "item/commandExecution/requestApproval" || method === "item/fileChange/requestApproval") return { decision: "decline" };
-    if (method === "item/permissions/requestApproval") return { permissions: {}, scope: "turn" };
+    if (
+      method === "item/commandExecution/requestApproval" ||
+      method === "item/fileChange/requestApproval" ||
+      method === "item/permissions/requestApproval"
+    ) {
+      return this.approvalRequest(method, params);
+    }
     if (method !== "item/tool/call") throw new Error("Unsupported Codex request: " + method);
     if (params.threadId !== this.threadId || params.turnId !== this.turnId || this.closed) throw new Error("Tool call does not belong to the active session turn");
     const name = text(params.tool);
@@ -378,8 +487,10 @@ export class CodexSession implements AgentSession {
       if (!this.compacting) this.emit({ type: "assistant.turn_start", data: { turnId: this.turnId } });
     } else if (method === "item/agentMessage/delta") {
       this.emit({ type: "assistant.message_delta", data: { messageId: text(params.itemId), deltaContent: text(params.delta) } }, false);
-    } else if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
+    } else if (method === "item/reasoning/summaryTextDelta") {
       this.emit({ type: "assistant.reasoning_delta", data: { reasoningId: text(params.itemId), deltaContent: text(params.delta) } });
+    } else if (method === "item/reasoning/textDelta") {
+      this.appendRawReasoning(text(params.itemId), text(params.delta));
     } else if (method === "item/started" || method === "item/completed") {
       this.item(object(params.item), method === "item/completed");
     } else if (method === "thread/tokenUsage/updated") {
@@ -403,10 +514,49 @@ export class CodexSession implements AgentSession {
       this.complete(error, turn.status === "interrupted");
     }
   }
+  private appendRawReasoning(itemId: string, delta: string) {
+    if (!delta) return;
+    let state = this.rawReasoning.get(itemId);
+    if (!state) {
+      state = { text: "", started: false };
+      this.rawReasoning.set(itemId, state);
+    }
+    state.text += delta;
+    if (state.started) return;
+    state.started = true;
+    this.emit({
+      type: "tool.execution_start",
+      data: { toolCallId: `reasoning:${itemId}`, toolName: "reasoning", arguments: {} },
+    });
+  }
+  private completeRawReasoning(itemId: string, content: string) {
+    const state = this.rawReasoning.get(itemId);
+    const value = (content || state?.text || "").trim();
+    this.rawReasoning.delete(itemId);
+    if (!value) return;
+    if (!state?.started) {
+      this.emit({
+        type: "tool.execution_start",
+        data: { toolCallId: `reasoning:${itemId}`, toolName: "reasoning", arguments: {} },
+      });
+    }
+    this.emit({
+      type: "tool.execution_complete",
+      data: { toolCallId: `reasoning:${itemId}`, success: true, result: { content: value } },
+    });
+  }
   private item(item: JsonObject, done: boolean) {
     const id = text(item.id);
     if (item.type === "agentMessage") {
       if (done) this.emit({ type: "assistant.message", data: { messageId: id, content: text(item.text) } });
+      return;
+    }
+    if (item.type === "reasoning") {
+      if (done) this.completeRawReasoning(id, reasoningContent(item));
+      else {
+        const content = reasoningContent(item);
+        if (content) this.appendRawReasoning(id, content);
+      }
       return;
     }
     if (item.type === "imageGeneration") {
@@ -476,8 +626,10 @@ export class CodexSession implements AgentSession {
     this.pendingTurn = true;
     const message = this.emit({ type: "user.message", data: { content: options.prompt } });
     try {
+      const permission = codexPermissionSettings(this.permissionMode);
       this.startingTurn = this.connection.request("turn/start", { threadId: this.threadId, input: inputs, cwd: this.cwd,
-        model: this.model, effort: this.effort, approvalPolicy: "never" });
+        model: this.model, effort: this.effort, approvalPolicy: permission.approvalPolicy,
+        sandboxPolicy: permission.sandboxPolicy, approvalsReviewer: permission.approvalsReviewer });
       await this.startingTurn;
       return message.id;
     } catch (error) { this.pendingTurn = false; throw error; }

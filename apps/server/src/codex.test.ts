@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -23,6 +24,7 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   let injectTools = false;
   let stallUpstream = false;
   let generateImageMode = false;
+  let rawReasoningMode = false;
   const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ6sAAAAASUVORK5CYII=";
   let notifyStalled: (() => void) | undefined;
   const patch = "*** Begin Patch\n*** Add File: native-patch.txt\n+written by Codex\n*** End Patch";
@@ -67,6 +69,71 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
           res.end('data: {"choices":[{"delta":{"content":"Image generated"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
           return;
         }
+      }
+      if (rawReasoningMode && req.url === "/v1/responses") {
+        const response = { id: "resp_raw_reasoning", object: "response", model: request.model, status: "in_progress", output: [] };
+        const events: JsonObject[] = [
+          { type: "response.created", response },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { id: "raw-reasoning", type: "reasoning", summary: [], content: [] },
+          },
+          {
+            type: "response.reasoning_text.delta",
+            item_id: "raw-reasoning",
+            output_index: 0,
+            content_index: 0,
+            delta: "先检查相关实现，",
+          },
+          {
+            type: "response.reasoning_text.delta",
+            item_id: "raw-reasoning",
+            output_index: 0,
+            content_index: 0,
+            delta: "再调用工具。",
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: {
+              id: "raw-reasoning",
+              type: "reasoning",
+              summary: [],
+              content: [{ type: "reasoning_text", text: "先检查相关实现，再调用工具。" }],
+            },
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 1,
+            item: { id: "raw-message", type: "message", role: "assistant", status: "in_progress", content: [] },
+          },
+          {
+            type: "response.output_text.delta",
+            item_id: "raw-message",
+            output_index: 1,
+            content_index: 0,
+            delta: "原始思维链处理完成",
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 1,
+            item: {
+              id: "raw-message",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: "原始思维链处理完成" }],
+            },
+          },
+          {
+            type: "response.completed",
+            response: { id: "resp_raw_reasoning", usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
+          },
+        ];
+        res.setHeader("content-type", "text/event-stream");
+        res.end(events.map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`).join(""));
+        return;
       }
       if (req.url === "/v1/responses") {
         res.setHeader("content-type", request.stream === false ? "application/json" : "text/event-stream");
@@ -126,6 +193,108 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   assert.ok(requestCount >= 2);
   assert.ok(events.some((event) => event.type === "tool.execution_complete"));
   assert.ok(calls > 0);
+  await t.test("maps unencrypted reasoning to a tool activity", () => {
+    const reasoningSessionId = randomUUID();
+    fs.mkdirSync(path.join(root, "data", "codex-home", reasoningSessionId), { recursive: true });
+    const reasoningSession = new CodexSession(
+      reasoningSessionId,
+      { ...config, sessionId: reasoningSessionId },
+      () => {},
+    );
+    const emitted: SessionEvent[] = [];
+    reasoningSession.on((event) => emitted.push(event));
+    const internals = reasoningSession as unknown as {
+      threadId: string;
+      notification(method: string, params: JsonObject): void;
+    };
+    internals.threadId = "reasoning-thread";
+    internals.notification("item/reasoning/summaryTextDelta", {
+      threadId: "reasoning-thread",
+      itemId: "reasoning-1",
+      delta: "先检查相关实现。",
+    });
+    internals.notification("item/reasoning/textDelta", {
+      threadId: "reasoning-thread",
+      itemId: "reasoning-1",
+      delta: "读取文件后确认",
+    });
+    internals.notification("item/reasoning/textDelta", {
+      threadId: "reasoning-thread",
+      itemId: "reasoning-1",
+      delta: "调用点。",
+    });
+    internals.notification("item/completed", {
+      threadId: "reasoning-thread",
+      item: {
+        id: "reasoning-1",
+        type: "reasoning",
+        summary: ["先检查相关实现。"],
+        content: ["读取文件后确认调用点。"],
+      },
+    });
+
+    const reasoningEvents = emitted.filter(
+      (event) => event.type === "assistant.reasoning_delta",
+    );
+    assert.deepEqual(
+      reasoningEvents.map((event) => event.data),
+      [{ reasoningId: "reasoning-1", deltaContent: "先检查相关实现。" }],
+    );
+    const starts = emitted.filter((event) => event.type === "tool.execution_start");
+    assert.equal(starts.length, 1);
+    assert.equal(starts[0]?.data.toolCallId, "reasoning:reasoning-1");
+    assert.equal(starts[0]?.data.toolName, "reasoning");
+    const complete = emitted.find(
+      (event): event is Extract<SessionEvent, { type: "tool.execution_complete" }> =>
+        event.type === "tool.execution_complete",
+    );
+    assert.equal(complete?.data.toolCallId, "reasoning:reasoning-1");
+    assert.equal(complete?.data.success, true);
+    assert.equal(complete?.data.result?.content, "读取文件后确认调用点。");
+
+    const eventCount = emitted.length;
+    internals.notification("item/completed", {
+      threadId: "reasoning-thread",
+      item: {
+        id: "encrypted-reasoning",
+        type: "reasoning",
+        summary: [],
+        content: [],
+        encrypted_content: "encrypted",
+      },
+    });
+    assert.equal(emitted.length, eventCount);
+  });
+  await t.test("streams native unencrypted reasoning into the turn", async () => {
+    rawReasoningMode = true;
+    const reasoningConfig = {
+      ...config,
+      sessionId: randomUUID(),
+      provider: { ...config.provider, wireApi: "responses" as const },
+    };
+    const reasoningSession = await client.createSession(reasoningConfig);
+    try {
+      const response = await reasoningSession.sendAndWait("输出原始思维链", 20_000);
+      assert.equal(response?.data.content, "原始思维链处理完成");
+      const reasoningEvents = await reasoningSession.getEvents();
+      const start = reasoningEvents.find(
+        (event): event is Extract<SessionEvent, { type: "tool.execution_start" }> =>
+          event.type === "tool.execution_start" &&
+          event.data.toolCallId === "reasoning:raw-reasoning",
+      );
+      assert.equal(start?.data.toolName, "reasoning");
+      const complete = reasoningEvents.find(
+        (event): event is Extract<SessionEvent, { type: "tool.execution_complete" }> =>
+          event.type === "tool.execution_complete" &&
+          event.data.toolCallId === "reasoning:raw-reasoning",
+      );
+      assert.equal(complete?.data.success, true);
+      assert.equal(complete?.data.result?.content, "先检查相关实现，再调用工具。");
+    } finally {
+      rawReasoningMode = false;
+      await client.deleteSession(reasoningConfig.sessionId);
+    }
+  });
   await session.disconnect();
   let resumed = await client.resumeSession(id, config);
   assert.ok((await resumed.getEvents()).some((event) => event.type === "assistant.message"));
@@ -257,4 +426,75 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   await client.deleteSession(id);
   assert.equal(fs.existsSync(path.join(root, "data", "codex-home", id)), false);
   assert.deepEqual((await query("SELECT * FROM thread_events WHERE thread_id = ?", [id])).rows, []);
+});
+
+test("maps permission modes to Codex app-server settings", async () => {
+  const { codexPermissionSettings } = await import("./codex.js");
+  assert.deepEqual(codexPermissionSettings("request"), {
+    approvalPolicy: "on-request",
+    sandbox: "workspace-write",
+    approvalsReviewer: "user",
+    sandboxPolicy: { type: "workspaceWrite", networkAccess: false },
+  });
+  assert.deepEqual(codexPermissionSettings("auto"), {
+    approvalPolicy: "on-request",
+    sandbox: "workspace-write",
+    approvalsReviewer: "auto_review",
+    sandboxPolicy: { type: "workspaceWrite", networkAccess: false },
+  });
+  assert.deepEqual(codexPermissionSettings("full"), {
+    approvalPolicy: "never",
+    sandbox: "danger-full-access",
+    approvalsReviewer: "user",
+    sandboxPolicy: { type: "dangerFullAccess" },
+  });
+});
+
+test("maps Codex approval callbacks to app-server decisions", async () => {
+  const { CodexSession } = await import("./codex.js");
+  const requests: Array<{ kind: string; command?: string }> = [];
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "codex-permission-"));
+  const session = new CodexSession(
+    randomUUID(),
+    {
+      sessionId: randomUUID(),
+      workingDirectory: workspace,
+      permissionMode: "request",
+      onCodexPermissionRequest: async (request: { kind: string; command?: string }) => {
+        requests.push(request);
+        return "accept" as const;
+      },
+    } as never,
+    () => {},
+  );
+  const respond = (
+    session as unknown as {
+      approvalRequest(
+        method: string,
+        params: Record<string, unknown>,
+      ): Promise<Record<string, unknown>>;
+    }
+  ).approvalRequest.bind(session);
+  try {
+    assert.deepEqual(
+      await respond("item/commandExecution/requestApproval", {
+        itemId: "item-1",
+        command: "touch /tmp/example",
+        cwd: "/tmp",
+      }),
+      { decision: "accept" },
+    );
+    assert.equal(requests[0]?.kind, "command");
+    assert.equal(requests[0]?.command, "touch /tmp/example");
+    assert.deepEqual(
+      await respond("item/permissions/requestApproval", {
+        itemId: "item-2",
+        permissions: { network: { enabled: true } },
+      }),
+      { permissions: { network: { enabled: true } }, scope: "turn" },
+    );
+  } finally {
+    await session.disconnect();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
 });

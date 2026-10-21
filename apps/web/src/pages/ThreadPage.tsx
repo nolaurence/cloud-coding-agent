@@ -1,13 +1,14 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowLeftRight, FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
+import { AlertCircle, ArrowLeft, ArrowLeftRight, FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { resolveThreadModel, resolveThreadModelProviderId } from "@cca/protocol";
-import type { AgentMode, ModelRef } from "@cca/protocol";
+import type { AgentMode, ModelRef, PermissionMode } from "@cca/protocol";
 import { useApp, useThreadState } from "../lib/store";
 import { threadComposerDraftKey } from "../lib/composerDrafts";
 import { ChatView } from "../components/ChatView";
 import { Composer } from "../components/Composer";
 import { ComposerModelPicker } from "../components/ComposerModelPicker";
+import { ComposerPermissionPicker } from "../components/ComposerPermissionPicker";
 import { RightPanel } from "../components/RightPanel";
 import { RightPanelResizeHandle } from "../components/RightPanelResizeHandle";
 import { ThreadShareDialog } from "../components/ThreadShareDialog";
@@ -33,6 +34,8 @@ export function ThreadPage() {
   const compactContext = useApp((s) => s.compactContext);
   const setThreadModel = useApp((s) => s.setThreadModel);
   const setThreadAgentMode = useApp((s) => s.setThreadAgentMode);
+  const setThreadPermissionMode = useApp((s) => s.setThreadPermissionMode);
+  const respondPermission = useApp((s) => s.respondPermission);
   const panelOpen = useApp((s) => s.workspacePanelOpen);
   const setPanelOpen = useApp((s) => s.setWorkspacePanelOpen);
   const panelPlacement = useApp((s) => s.panelPlacement);
@@ -47,6 +50,7 @@ export function ThreadPage() {
   const canInteract = !legacySession && (canManageThread || thread?.access === "collaborate");
   const [switchingModel, setSwitchingModel] = useState(false);
   const [switchingMode, setSwitchingMode] = useState(false);
+  const [switchingPermission, setSwitchingPermission] = useState(false);
   const [modelError, setModelError] = useState("");
   const [viewingSubagentId, setViewingSubagentId] = useState<string | null>(null);
   const [imageToOpen, setImageToOpen] = useState<ImagePreviewTarget | null>(null);
@@ -58,6 +62,7 @@ export function ThreadPage() {
   const modelProviderId = resolveThreadModelProviderId(thread, settings?.defaultModel);
   const effectiveModel = resolveThreadModel(thread, settings?.defaultModel);
   const agentMode = thread?.agentMode ?? "standard";
+  const permissionMode = thread?.permissionMode ?? "full";
   const panelMaxWidth = useMemo(() => {
     if (layoutWidth === 0) return RIGHT_PANEL_DEFAULT_WIDTH;
     return Math.max(
@@ -97,6 +102,32 @@ export function ThreadPage() {
     }
   };
 
+  const onPermissionModeChange = async (mode: PermissionMode) => {
+    if (!threadId || switchingPermission || switchingMode || switchingModel || state.running || mode === permissionMode) {
+      return;
+    }
+    setSwitchingPermission(true);
+    setModelError("");
+    try {
+      await setThreadPermissionMode(threadId, mode);
+    } catch (error) {
+      setModelError(error instanceof Error ? error.message : "切换权限模式失败");
+    } finally {
+      setSwitchingPermission(false);
+    }
+  };
+
+  const onPermissionDecision = async (decision: "accept" | "decline") => {
+    const request = state.pendingPermission;
+    if (!threadId || !request) return;
+    setModelError("");
+    try {
+      await respondPermission(threadId, request.requestId, decision);
+    } catch (error) {
+      setModelError(error instanceof Error ? error.message : "响应权限请求失败");
+    }
+  };
+
   const onAgentModeChange = async (mode: AgentMode) => {
     if (!threadId || switchingMode || switchingModel || state.running || mode === agentMode) {
       return false;
@@ -118,6 +149,7 @@ export function ThreadPage() {
     modelRequestRef.current += 1;
     setSwitchingModel(false);
     setSwitchingMode(false);
+    setSwitchingPermission(false);
     setModelError("");
     setViewingSubagentId(null);
     setImageToOpen(null);
@@ -237,6 +269,50 @@ export function ThreadPage() {
               />
               <div className="relative mx-auto max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
                 <div className="pointer-events-auto">
+                  {state.pendingPermission && (
+                    <div className="mx-auto mb-2 max-w-3xl rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-950 shadow-sm dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-50">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[13px] font-medium">Codex 请求权限</div>
+                          <div className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-300">
+                            {state.pendingPermission.kind === "command"
+                              ? "执行命令"
+                              : state.pendingPermission.kind === "file"
+                                ? "修改工作区外的文件"
+                                : "访问额外权限"}
+                          </div>
+                          {state.pendingPermission.command && (
+                            <pre className="mt-2 max-h-28 overflow-auto rounded-md bg-amber-100/80 px-2 py-1.5 text-[11px] leading-4 whitespace-pre-wrap break-all dark:bg-amber-900/40">
+                              {state.pendingPermission.command}
+                            </pre>
+                          )}
+                          {state.pendingPermission.reason && (
+                            <p className="mt-1.5 text-[11px] leading-4 text-amber-800/90 dark:text-amber-200/90">
+                              {state.pendingPermission.reason}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="mt-2 flex justify-end gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void onPermissionDecision("decline")}
+                        >
+                          拒绝
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => void onPermissionDecision("accept")}
+                        >
+                          允许
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   <div className={viewingSubagentId ? "hidden" : undefined}>
                     <Composer
                       key={threadId}
@@ -250,15 +326,23 @@ export function ThreadPage() {
                       onCompact={() => compactContext(threadId)}
                       footerError={canManageThread ? modelError : undefined}
                       footerControls={canManageThread ? (
-                        <ComposerModelPicker
-                          value={effectiveModel}
-                          onChange={(ref) => void onModelChange(ref)}
-                          disabled={state.running || switchingMode}
-                          updating={switchingModel}
-                          lockedProviderId={modelProviderId}
-                          agentMode={agentMode}
-                          onAgentModeChange={onAgentModeChange}
-                        />
+                        <>
+                          <ComposerPermissionPicker
+                            value={permissionMode}
+                            onChange={onPermissionModeChange}
+                            disabled={state.running || switchingMode || switchingModel}
+                            updating={switchingPermission}
+                          />
+                          <ComposerModelPicker
+                            value={effectiveModel}
+                            onChange={(ref) => void onModelChange(ref)}
+                            disabled={state.running || switchingMode || switchingPermission}
+                            updating={switchingModel}
+                            lockedProviderId={modelProviderId}
+                            agentMode={agentMode}
+                            onAgentModeChange={onAgentModeChange}
+                          />
+                        </>
                       ) : undefined}
                     />
                   </div>

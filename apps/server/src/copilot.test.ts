@@ -5,7 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { CopilotClient, CopilotSession, SessionEvent } from "@github/copilot-sdk";
-import type { AppSettings, Project, ThreadEvent, ThreadMeta } from "@cca/protocol";
+import type {
+  AppSettings,
+  PermissionDecision,
+  PermissionRequest,
+  Project,
+  ThreadEvent,
+  ThreadMeta,
+} from "@cca/protocol";
 import { CopilotManager, normalizeGeneratedCommitMessage } from "./copilot.js";
 import { store } from "./store.js";
 
@@ -1074,6 +1081,44 @@ test("keeps streamed assistant text in snapshots and after an interrupt", async 
     interruptedSnapshot.messages.find((message) => message.id === "assistant-partial")?.text,
     "这是尚未完成的回答",
   );
+});
+
+test("passes the permission mode to Codex and bridges approval requests", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.runtime = "codex";
+  store.threads[0]!.permissionMode = "request";
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_id, event) => emitted.push(event));
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(threadId);
+  const config = client.createdConfigs[0] as {
+    permissionMode?: string;
+    onCodexPermissionRequest?: (request: PermissionRequest) => Promise<PermissionDecision>;
+  };
+  assert.equal(config.permissionMode, "request");
+  assert.equal(typeof config.onCodexPermissionRequest, "function");
+
+  const pending = config.onCodexPermissionRequest!({
+    requestId: "permission-1",
+    kind: "command",
+    command: "git push",
+  });
+  const request = emitted.find((event) => event.kind === "permission.request");
+  assert.equal(request?.kind === "permission.request" ? request.request.command : undefined, "git push");
+
+  manager.respondPermission(threadId, "permission-1", "accept");
+  assert.equal(await pending, "accept");
+  assert.ok(emitted.some((event) =>
+    event.kind === "permission.resolve" &&
+    event.requestId === "permission-1" &&
+    event.decision === "accept"
+  ));
+  manager.unsubscribe(threadId);
 });
 
 test("configures Ultra mode with highest supported reasoning and subagent orchestration", async (t) => {

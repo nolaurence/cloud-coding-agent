@@ -24,6 +24,9 @@ import type {
   MessageAttachment,
   ModelOption,
   ModelRef,
+  PermissionDecision,
+  PermissionMode,
+  PermissionRequest,
   ReasoningEffort,
   ResourceScope,
   SubagentActivity,
@@ -68,6 +71,11 @@ interface ThreadRuntime {
   } | null;
   pendingUserAttachments: MessageAttachment[];
   pendingUserAuthorId: string;
+  pendingPermissions: Map<string, {
+    request: PermissionRequest;
+    resolve: (decision: PermissionDecision) => void;
+    timer: NodeJS.Timeout;
+  }>;
   sessionActorId: string;
   detachTimer: NodeJS.Timeout | null;
   subscribers: number;
@@ -369,6 +377,7 @@ export class CopilotManager {
         pendingAssistant: null,
         pendingUserAttachments: [],
         pendingUserAuthorId: "",
+        pendingPermissions: new Map(),
         sessionActorId: "",
         detachTimer: null,
         subscribers: 0,
@@ -432,6 +441,50 @@ export class CopilotManager {
 
   private pendingReasoning(rt: ThreadRuntime): string | undefined {
     return rt.pendingAssistant?.reasoning;
+  }
+
+  private requestPermission(
+    threadId: string,
+    request: PermissionRequest,
+  ): Promise<PermissionDecision> {
+    const rt = this.threads.get(threadId);
+    if (!rt) return Promise.resolve("decline");
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => this.settlePermission(rt, request.requestId, "decline"), 5 * 60_000);
+      timer.unref();
+      rt.pendingPermissions.set(request.requestId, { request, resolve, timer });
+      this.emit(threadId, { kind: "permission.request", request });
+    });
+  }
+
+  private settlePermission(
+    rt: ThreadRuntime,
+    requestId: string,
+    decision: PermissionDecision,
+  ) {
+    const pending = rt.pendingPermissions.get(requestId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    rt.pendingPermissions.delete(requestId);
+    pending.resolve(decision);
+    this.emit(rt.threadId, { kind: "permission.resolve", requestId, decision });
+  }
+
+  private cancelPendingPermissions(rt: ThreadRuntime) {
+    for (const requestId of [...rt.pendingPermissions.keys()]) {
+      this.settlePermission(rt, requestId, "decline");
+    }
+  }
+
+  respondPermission(
+    threadId: string,
+    requestId: string,
+    decision: PermissionDecision,
+  ): void {
+    const rt = this.threads.get(threadId);
+    if (!rt) throw new Error("会话尚未加载");
+    if (!rt.pendingPermissions.has(requestId)) throw new Error("权限请求不存在或已失效");
+    this.settlePermission(rt, requestId, decision);
   }
 
   private commitPendingAssistant(rt: ThreadRuntime, emit = true) {
@@ -654,6 +707,9 @@ export class CopilotManager {
       sessionId: thread.id,
       legacySession: thread.runtime !== "codex",
       agentMode: thread.agentMode ?? "standard",
+      permissionMode: thread.permissionMode ?? "full",
+      onCodexPermissionRequest: (request: PermissionRequest) =>
+        this.requestPermission(thread.id, request),
       deniedPaths: deniedWorkspacePaths(project.path),
       streaming: true,
       includeSubAgentStreamingEvents: true,
@@ -748,6 +804,7 @@ export class CopilotManager {
     Object.assign(config, {
       sessionId,
       legacySession: false,
+      permissionMode: "full",
       tools: [],
       availableTools: [],
       systemMessage: {
@@ -809,6 +866,7 @@ export class CopilotManager {
 
   private finishTurn(rt: ThreadRuntime) {
     if (!rt.running) return;
+    this.cancelPendingPermissions(rt);
     const turnId = rt.currentTurnId ?? "";
     this.commitPendingAssistant(rt);
     rt.running = false;
@@ -1633,6 +1691,7 @@ export class CopilotManager {
             startedAt: rt.pendingAssistant.startedAt,
           }
         : undefined,
+      pendingPermission: rt.pendingPermissions.values().next().value?.request,
     };
   }
 
@@ -1872,6 +1931,44 @@ export class CopilotManager {
       Object.keys(options).length > 0 ? options : undefined,
     );
     if (modelChanged) this.updateContextUsage(rt, undefined);
+  }
+
+  async setThreadPermissionMode(
+    threadId: string,
+    nextMode: PermissionMode,
+  ): Promise<void> {
+    await this.assertThreadEditable(threadId);
+    const thread = store.getThread(threadId);
+    if (!thread) throw new Error("会话不存在");
+    if ((thread.permissionMode ?? "full") === nextMode) return;
+
+    const rt = this.threads.get(threadId);
+    if (rt?.running) throw new Error("当前任务运行中,请等待完成后再切换权限");
+    if (rt?.compacting) throw new Error("上下文正在压缩,请等待完成后再切换权限");
+    if (rt?.reconfiguring) throw new Error("会话模式正在切换,请稍候");
+
+    store.upsertThread({ ...thread, permissionMode: nextMode });
+    if (!rt) return;
+
+    this.clearDetachTimer(rt);
+    this.cancelPendingPermissions(rt);
+    const reconfiguring = (async () => {
+      const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
+      rt.session = null;
+      rt.sessionActorId = "";
+      await session?.disconnect();
+    })();
+    rt.reconfiguring = reconfiguring;
+    try {
+      await reconfiguring;
+    } catch (error) {
+      store.upsertThread(thread);
+      console.warn("[cca] switch permission mode failed thread=" + threadId + " mode=" + nextMode, error);
+      throw new Error("切换权限模式失败,请重试");
+    } finally {
+      if (rt.reconfiguring === reconfiguring) rt.reconfiguring = null;
+      this.scheduleDetach(rt, true);
+    }
   }
 
   async setThreadAgentMode(threadId: string, nextMode: AgentMode): Promise<void> {

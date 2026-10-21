@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { Folder, FolderOpen, FolderPlus, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import type { AgentMode, ModelRef, TurnAttachment } from "@cca/protocol";
+import type { AgentMode, ModelRef, PermissionMode, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { NEW_CHAT_DRAFT_KEY } from "../lib/composerDrafts";
 import { BrandLogo } from "../components/BrandLogo";
 import { Composer } from "../components/Composer";
 import { ComposerModelPicker } from "../components/ComposerModelPicker";
+import { ComposerPermissionPicker } from "../components/ComposerPermissionPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -28,6 +29,7 @@ export function NewChatPage() {
   const [projectId, setProjectId] = useState<string>("");
   const [model, setModel] = useState<ModelRef | undefined>(undefined);
   const [agentMode, setAgentMode] = useState<AgentMode>("standard");
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("full");
   const [creating, setCreating] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
   const [selectedFolder, setSelectedFolder] = useState("");
@@ -42,10 +44,13 @@ export function NewChatPage() {
     if (!effectiveProjectId || creating) return;
     setCreating(true);
     try {
-      const thread = await createThread(effectiveProjectId, effectiveModel, agentMode, {
-        text,
-        attachments,
-      });
+      const thread = await createThread(
+        effectiveProjectId,
+        effectiveModel,
+        agentMode,
+        permissionMode,
+        { text, attachments },
+      );
       navigate(`/thread/${thread.id}`);
     } finally {
       setCreating(false);
@@ -163,13 +168,20 @@ export function NewChatPage() {
               autoFocus
               placeholder="描述你的编码任务，@ 引用文件，/ 使用技能"
               footerControls={
-                <ComposerModelPicker
-                  value={effectiveModel}
-                  onChange={setModel}
-                  disabled={creating}
-                  agentMode={agentMode}
-                  onAgentModeChange={setAgentMode}
-                />
+                <>
+                  <ComposerPermissionPicker
+                    value={permissionMode}
+                    onChange={setPermissionMode}
+                    disabled={creating}
+                  />
+                  <ComposerModelPicker
+                    value={effectiveModel}
+                    onChange={setModel}
+                    disabled={creating}
+                    agentMode={agentMode}
+                    onAgentModeChange={setAgentMode}
+                  />
+                </>
               }
             />
           </>

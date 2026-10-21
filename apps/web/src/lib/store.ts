@@ -17,6 +17,9 @@ import type {
   McpServerConfig,
   ModelEntry,
   ModelOption,
+  PermissionDecision,
+  PermissionMode,
+  PermissionRequest,
   PluginInstallResult,
   PluginMarketplace,
   Workspace,
@@ -129,6 +132,7 @@ interface ThreadState {
   activeTurnId: string | null;
   activeTurnStartedAt: number | null;
   live: { text: string; reasoning: string; turnId: string | null };
+  pendingPermission: PermissionRequest | null;
   error: string | null;
 }
 
@@ -142,6 +146,7 @@ const emptyThread: ThreadState = {
   activeTurnId: null,
   activeTurnStartedAt: null,
   live: { text: "", reasoning: "", turnId: null },
+  pendingPermission: null,
   error: null,
 };
 
@@ -238,11 +243,21 @@ interface AppState {
     projectId: string,
     model?: ModelRef,
     agentMode?: AgentMode,
+    permissionMode?: PermissionMode,
     initialTurn?: TurnInput,
   ) => Promise<ThreadMeta>;
   deleteThread: (threadId: string) => Promise<void>;
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
   setThreadAgentMode: (threadId: string, agentMode: AgentMode) => Promise<void>;
+  setThreadPermissionMode: (
+    threadId: string,
+    permissionMode: PermissionMode,
+  ) => Promise<void>;
+  respondPermission: (
+    threadId: string,
+    requestId: string,
+    decision: PermissionDecision,
+  ) => Promise<void>;
   openThread: (threadId: string) => Promise<void>;
   closeThread: (threadId: string) => Promise<void>;
   sendMessage: (threadId: string, text: string, attachments?: TurnAttachment[]) => Promise<void>;
@@ -299,6 +314,7 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         live: event.live
           ? { text: event.live.text, reasoning: event.live.reasoning, turnId: event.live.turnId }
           : { text: "", reasoning: "", turnId: null },
+        pendingPermission: event.pendingPermission ?? null,
         error: event.error ?? null,
       };
     }
@@ -311,6 +327,7 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
           ? (state.activeTurnStartedAt ?? Date.now())
           : Date.now(),
         live: { text: "", reasoning: "", turnId: event.turnId },
+        pendingPermission: null,
         error: null,
       };
     case "turn.end": {
@@ -320,6 +337,7 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         activeTurnId: null,
         activeTurnStartedAt: null,
         live: { text: "", reasoning: "", turnId: null },
+        pendingPermission: null,
       };
     }
     case "user.message":
@@ -495,6 +513,19 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
           : [...state.subagents, next],
       };
     }
+    case "permission.request":
+      return {
+        ...state,
+        pendingPermission: event.request,
+      };
+    case "permission.resolve":
+      return {
+        ...state,
+        pendingPermission:
+          state.pendingPermission?.requestId === event.requestId
+            ? null
+            : state.pendingPermission,
+      };
     case "context.usage":
       return {
         ...state,
@@ -762,12 +793,13 @@ export const useApp = create<AppState>((set, get) => {
       await request({ type: "workspace.remove", projectId });
     },
 
-    createThread: async (projectId, model, agentMode, initialTurn) => {
+    createThread: async (projectId, model, agentMode, permissionMode, initialTurn) => {
       const created = await request<ThreadCreateResult>({
         type: "thread.create",
         projectId,
         model,
         agentMode,
+        permissionMode,
         initialTurn,
       });
       const { initialTurnAccepted, ...thread } = created;
@@ -831,6 +863,54 @@ export const useApp = create<AppState>((set, get) => {
           thread.id === threadId ? { ...thread, agentMode } : thread,
         ),
       }));
+    },
+
+    setThreadPermissionMode: async (threadId, permissionMode) => {
+      await request({ type: "thread.setPermissionMode", threadId, permissionMode });
+      set((state) => ({
+        threads: state.threads.map((thread) =>
+          thread.id === threadId ? { ...thread, permissionMode } : thread,
+        ),
+      }));
+    },
+
+    respondPermission: async (threadId, requestId, decision) => {
+      const previous = get().threadStates[threadId]?.pendingPermission ?? null;
+      set((state) => ({
+        threadStates: state.threadStates[threadId]
+          ? {
+              ...state.threadStates,
+              [threadId]: {
+                ...state.threadStates[threadId]!,
+                pendingPermission:
+                  state.threadStates[threadId]!.pendingPermission?.requestId === requestId
+                    ? null
+                    : state.threadStates[threadId]!.pendingPermission,
+              },
+            }
+          : state.threadStates,
+      }));
+      try {
+        await request({ type: "permission.respond", threadId, requestId, decision });
+      } catch (error) {
+        if (previous) {
+          set((state) => ({
+            threadStates: state.threadStates[threadId]
+              ? {
+                  ...state.threadStates,
+                  [threadId]: {
+                    ...state.threadStates[threadId]!,
+                    pendingPermission:
+                      state.threadStates[threadId]!.pendingPermission === null
+                        ? previous
+                        : state.threadStates[threadId]!.pendingPermission,
+                  },
+                }
+              : state.threadStates,
+          }));
+        }
+        throw error;
+      }
     },
 
     openThread: async (threadId) => {
