@@ -6,6 +6,7 @@ import type {
   ModelCapabilitiesOverride,
   SessionConfig,
   SessionEvent,
+  Tool,
 } from "@cca/protocol";
 import {
   DEFAULT_MODEL_PROVIDER_ID,
@@ -45,6 +46,7 @@ import { createWorkspacePermissionHandler } from "./permissions.js";
 import { browserPool, createBrowserUseTool } from "./browser.js";
 import { createAgentResourceTools } from "./agentResources.js";
 import { agentPluginRuntimeConfig, installAgentPlugin, scanInstalledPlugins, setAgentPluginEnabled, uninstallAgentPlugin } from "./agentPluginHost.js";
+import { registerThreadTools, unregisterThreadTools } from "./mcpToolsServer.js";
 import { effectiveMcpServers } from "./mcpServers.js";
 import { enabledSkillDirectories } from "./skills.js";
 import { getUserRole } from "./auth.js";
@@ -703,7 +705,7 @@ export class CopilotManager {
     }
     const skillConfig = enabledSkillDirectories(project.path);
     const systemInstructions = [
-      "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
+      "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 mcp__cca-tools__authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
     ];
     if (thread.agentMode !== "ultra") {
       systemInstructions.push(...STANDARD_SYSTEM_INSTRUCTIONS);
@@ -791,6 +793,8 @@ export class CopilotManager {
       config.imageGenerationModel = imageProvider.model;
       config.imageGenerationOwnerId = ownerId;
     }
+    // 自定义工具经 MCP 桥（mcpToolsServer）暴露给 Harness 运行时
+    registerThreadTools(thread.id, (config.tools ?? []) as Tool[]);
     return config;
   }
 
@@ -1998,6 +2002,7 @@ export class CopilotManager {
       }
     }
     this.threads.delete(threadId);
+    unregisterThreadTools(threadId);
     const client = await this.ensureClient();
     await client.deleteSession(threadId);
   }

@@ -38,6 +38,7 @@ import { getThreadAccess } from "./threadAccess.js";
 import { browserPool, NOVNC_ROOT } from "./browser.js";
 import WebSocket from "ws";
 import { clearBootstrapCredentials } from "./runtimeEnv.js";
+import { AGENT_TOOLS_MCP_PATH, agentToolsMcpHandler, setAgentToolsBaseUrl } from "./mcpToolsServer.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.resolve(__dirname, "../../web/dist");
@@ -330,6 +331,9 @@ export async function startServer(options: { port?: number; host?: string; insta
     return reply.type(mimeType).send(fs.createReadStream(imagePath));
   });
 
+  // Agent 自定义工具的 MCP 桥（DeepSeek Harness 运行时经 dsh-mcp-client 连回）
+  app.post(AGENT_TOOLS_MCP_PATH, agentToolsMcpHandler);
+
   app.register(async (scope) => {
     scope.get("/ws", { websocket: true }, (socket, req) => {
       const query = req.query as { token?: string };
@@ -349,6 +353,7 @@ export async function startServer(options: { port?: number; host?: string; insta
 
   await app.listen({ port, host });
   console.log(`[cca] server listening on http://${host}:${port}`);
+  setAgentToolsBaseUrl(`http://127.0.0.1:${port}`);
   hub.warmupPlugins();
 
   let shuttingDown: Promise<void> | null = null;
