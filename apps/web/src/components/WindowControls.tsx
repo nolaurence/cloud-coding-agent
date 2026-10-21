@@ -18,7 +18,7 @@ export function WindowControls({ className, show = "auto" }: WindowControlsProps
     <div
       className={cn(
         "window-controls window-no-drag flex shrink-0 items-center",
-        isMac ? "window-controls-mac gap-2" : "window-controls-windows gap-0.5",
+        isMac ? "window-controls-mac gap-1.5" : "window-controls-windows gap-0.5",
         className,
       )}
       role="group"
