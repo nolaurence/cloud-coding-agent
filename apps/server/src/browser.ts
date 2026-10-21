@@ -4,7 +4,7 @@ import { lookup } from "node:dns/promises";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { defineTool, type Tool } from "@cca/protocol";
+import { defineTool, type Tool } from "@github/copilot-sdk";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { DATA_DIR } from "./env.js";
 import { BROWSER_IPC_CHANNEL, BROWSER_IPC_TIMEOUT_MS, isBrowserIpcResponse, type BrowserInspectResult, type BrowserIpcOperation, type BrowserIpcRequest } from "./electronBrowserIpc.js";

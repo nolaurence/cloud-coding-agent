@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SessionEvent } from "@cca/protocol";
+import type { SessionEvent } from "@github/copilot-sdk";
 import { initDb, closeDb, query } from "./db.js";
 import { ThreadEventStore, deleteThreadEvents } from "./threadEvents.js";
 

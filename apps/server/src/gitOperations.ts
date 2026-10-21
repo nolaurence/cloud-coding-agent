@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { devNull } from "node:os";
-import { defineTool, type Tool } from "@cca/protocol";
+import { defineTool, type Tool } from "@github/copilot-sdk";
 import type { GitCommitResult, GitProvider } from "@cca/protocol";
 import { getGitCredential, type GitCredential } from "./gitBindings.js";
 

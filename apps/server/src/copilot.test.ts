@@ -4,13 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import type { CopilotClient, CopilotSession } from "./agentRuntime.js";
+import type { CopilotClient, CopilotSession, SessionEvent } from "@github/copilot-sdk";
 import type {
   AppSettings,
   PermissionDecision,
   PermissionRequest,
   Project,
-  SessionEvent,
   ThreadEvent,
   ThreadMeta,
 } from "@cca/protocol";
@@ -157,12 +156,6 @@ class FakeClient {
     return this.models;
   }
 
-  readonly generateCalls: Array<{ config: unknown; prompt: string; timeout: number }> = [];
-  async generateText(config: unknown, prompt: string, timeout: number) {
-    this.generateCalls.push({ config, prompt, timeout });
-    return "```text\nfeat(git): generate commit messages\n```";
-  }
-
   async stop() {
     return [];
   }
@@ -185,7 +178,6 @@ function setupStore(
     id: threadId,
     projectId: project.id,
     title: "会话",
-    runtime: "dsh",
     createdAt,
     updatedAt: createdAt,
     archived: false,
@@ -967,7 +959,7 @@ test("updates open and stored usage when context settings change", async (t) => 
   assert.equal(session.disconnectCalls, 1);
 });
 
-test("generates a commit message via one-shot tool-free generation", async (t) => {
+test("generates a commit message in an isolated tool-free session", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
   const session = new FakeSession();
@@ -977,14 +969,14 @@ test("generates a commit message via one-shot tool-free generation", async (t) =
 
   const message = await manager.generateCommitMessage(threadId, "admin", "diff --git a/a b/a\n+change", false);
   assert.equal(message, "feat(git): generate commit messages");
-  assert.equal(client.generateCalls.length, 1);
-  const config = client.generateCalls[0]!.config as { sessionId: string; tools: unknown[]; availableTools: unknown[] };
+  assert.equal(client.createdConfigs.length, 1);
+  const config = client.createdConfigs[0] as { sessionId: string; tools: unknown[]; availableTools: unknown[] };
   assert.match(config.sessionId, /^commit-message-/);
   assert.deepEqual(config.tools, []);
   assert.deepEqual(config.availableTools, []);
-  assert.match(client.generateCalls[0]!.prompt, /<staged_diff>/);
-  assert.equal(session.disconnectCalls, 0);
-  assert.deepEqual(client.deletedSessionIds, []);
+  assert.match(JSON.stringify(session.sent[0]), /<staged_diff>/);
+  assert.equal(session.disconnectCalls, 1);
+  assert.deepEqual(client.deletedSessionIds, [config.sessionId]);
 });
 
 test("normalizes generated commit message wrappers and rejects empty output", () => {
@@ -1091,10 +1083,10 @@ test("keeps streamed assistant text in snapshots and after an interrupt", async 
   );
 });
 
-test("passes the permission mode to the runtime and bridges approval requests", async (t) => {
+test("passes the permission mode to Codex and bridges approval requests", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
-  store.threads[0]!.runtime = "dsh";
+  store.threads[0]!.runtime = "codex";
   store.threads[0]!.permissionMode = "request";
   const session = new FakeSession();
   const client = new FakeClient(session);
