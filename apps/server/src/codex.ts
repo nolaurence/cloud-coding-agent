@@ -9,6 +9,7 @@ import { COPILOT_HOME, DATA_DIR } from "./env.js";
 import { usingDatabase } from "./db.js";
 import { ThreadEventStore, deleteThreadEvents } from "./threadEvents.js";
 import { CodexRpc } from "./codexRpc.js";
+import { retryCodexReconnect } from "./codexReconnect.js";
 import { array, object, startLlmGateway, text, type GatewayProvider, type JsonObject } from "./llmGateway.js";
 import { sanitizedCopilotRuntimeEnv } from "./runtimeEnv.js";
 import { IMAGE_EXTENSIONS, MAX_IMAGE_SIZE, hasImageSignature, storeUploadedImage } from "./uploads.js";
@@ -79,7 +80,7 @@ class ArchivedSession implements AgentSession {
 }
 
 export class CodexSession implements AgentSession {
-  readonly connection = new CodexRpc();
+  connection: CodexRpc;
   private listeners = new Set<(event: SessionEvent) => void>();
   private threadId = "";
   private turnId: string | undefined;
@@ -99,8 +100,12 @@ export class CodexSession implements AgentSession {
   private readonly waiters = new Set<{ resolve(): void; reject(error: Error): void }>();
   private compacting = false;
   private imageGenerationItems = new Map<string, "running" | "complete">();
+  private reconnectTask: Promise<void> | undefined;
+  private commonConfig: JsonObject | undefined;
+  private opened = false;
   get runtimeDisconnected() { return this.closed; }
   constructor(readonly sessionId: string, private readonly config: Config, private readonly release: () => void) {
+    this.connection = this.createConnection();
     this.eventStore = new ThreadEventStore(sessionId, () => {
       this.emit({ type: "session.error", data: { errorType: "storage", message: "会话历史写入数据库失败,已保留本地日志;请恢复数据库后重新打开会话" } }, false);
     });
@@ -115,30 +120,96 @@ export class CodexSession implements AgentSession {
     this.model = config.model;
     const effort: string | undefined = config.reasoningEffort;
     this.effort = config.agentMode === "ultra" ? "xhigh" : effort === "max" ? "xhigh" : effort;
-    this.connection.onNotification((method, params) => this.notification(method, params));
-    this.connection.onRequest = (method, params) => this.toolRequest(method, params);
-    this.connection.onFailure = (error) => {
-      let failure = error;
+  }
+  private createConnection() {
+    const connection = new CodexRpc();
+    connection.onNotification((method, params) => this.notification(method, params));
+    connection.onRequest = (method, params) => this.toolRequest(method, params);
+    connection.onFailure = (error) => this.connectionFailed(error);
+    return connection;
+  }
+  private reportFailure(error: Error): Error {
+    try {
+      this.emit({ type: "session.error", data: { errorType: "codex", message: error.message } });
+      return error;
+    } catch (cause) {
+      const code = (cause as NodeJS.ErrnoException | undefined)?.code;
+      const failure = new Error(code === "ENOSPC" || code === "EDQUOT"
+        ? "服务端磁盘空间或存储配额不足，请释放空间后重新打开会话"
+        : "会话错误记录写入失败，请检查服务端存储后重新打开会话");
+      this.emit({ type: "session.error", data: { errorType: "storage", message: failure.message } }, false);
+      return failure;
+    }
+  }
+  private failSession(error: Error) {
+    let failure = error;
+    try {
+      failure = this.reportFailure(error);
+    } finally {
       try {
-        try {
-          this.emit({ type: "session.error", data: { errorType: "codex", message: error.message } });
-        } catch (cause) {
-          const code = (cause as NodeJS.ErrnoException | undefined)?.code;
-          failure = new Error(code === "ENOSPC" || code === "EDQUOT"
-            ? "服务端磁盘空间或存储配额不足，请释放空间后重新打开会话"
-            : "会话错误记录写入失败，请检查服务端存储后重新打开会话");
-          this.emit({ type: "session.error", data: { errorType: "storage", message: failure.message } }, false);
-        }
+        // A failed journal write must not prevent waiters and the UI from leaving
+        // the running state, or escape the child-process callback and crash Node.
+        this.complete(failure, false, false);
       } finally {
-        try {
-          // A failed journal write must not prevent waiters and the UI from leaving
-          // the running state, or escape the child-process callback and crash Node.
-          this.complete(failure, false, false);
-        } finally {
-          void this.disconnect().catch((cause: unknown) => console.error("[cca] Codex cleanup failed", cause));
-        }
+        void this.disconnect().catch((cause: unknown) => console.error("[cca] Codex cleanup failed", cause));
       }
+    }
+  }
+  private connectionFailed(error: Error) {
+    if (this.closed || this.reconnectTask) return;
+    if (!this.opened) {
+      this.failSession(error);
+      return;
+    }
+    console.warn("[cca] Codex connection lost:", error.message);
+    const task = this.recover();
+    this.reconnectTask = task;
+    const clear = () => {
+      if (this.reconnectTask === task) this.reconnectTask = undefined;
     };
+    void task.then(clear, (failure: unknown) => {
+      clear();
+      console.error("[cca] Codex reconnect failed", failure);
+    });
+  }
+  private async recover() {
+    if (this.turnId || this.pendingTurn || this.startingTurn || this.compacting) {
+      const error = new Error("Codex 连接中断，未完成的请求不会自动重发");
+      this.turnId = undefined;
+      this.pendingTurn = false;
+      this.startingTurn = undefined;
+      this.compacting = false;
+      this.complete(error, false, false);
+    }
+    try {
+      await retryCodexReconnect(async (attempt) => {
+        if (this.closed) throw new Error("Codex session closed");
+        const connection = this.createConnection();
+        try {
+          await connection.start(this.cwd, runtimeEnv(this.home));
+          if (this.closed) throw new Error("Codex session closed");
+          if (!this.commonConfig) throw new Error("Codex reconnect state is unavailable");
+          const result = await connection.request("thread/resume", { ...this.commonConfig, threadId: this.threadId });
+          const resumedThreadId = text(object(result.thread).id);
+          if (resumedThreadId !== this.threadId) throw new Error("Codex resumed an unexpected thread");
+          if (this.closed) throw new Error("Codex session closed");
+          this.connection = connection;
+          this.reconnectTask = undefined;
+          console.warn(`[cca] Codex reconnected thread=${this.threadId} attempt=${attempt + 1}`);
+        } catch (error) {
+          await connection.close().catch(() => {});
+          throw error;
+        }
+      }, { cancelled: () => this.closed });
+    } catch (error) {
+      if (this.closed) return;
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.failSession(new Error("Codex 重连失败: " + failure.message));
+    }
+  }
+  private async waitForReconnect() {
+    await this.reconnectTask;
+    if (this.closed) throw new Error("Codex session is disconnected");
   }
   private emit(input: EventInput, persist = true) {
     const value = event(input);
@@ -260,6 +331,7 @@ export class CodexSession implements AgentSession {
           "本会话已启用生图工具 mcp__cca_imagegen__image_gen（imagegen 技能所说的 image_gen 在此环境中的入口）。用户请求生成新图片时使用此工具;如果工具尚未出现在列表中,先用 tool_search 搜索 +cca_imagegen 加载工具,再调用。工具使用服务端配置的 GPT Image 提供商,凭据已配置,无需额外 OPENAI_API_KEY 或 CLI 回退确认。生成图片会自动作为助手附件显示,工具同时返回本地文件路径。此入口只支持生成新图片,不支持编辑参考图片。",
         ] : [])].filter(Boolean).join("\n"), persistExtendedHistory: true };
       if (provider) common.modelProvider = "cca";
+      this.commonConfig = common;
       const start = () => this.connection.request("thread/start", { ...common, experimentalRawEvents: false, dynamicTools: this.tools.map((tool) => ({
         name: tool.name, description: tool.description ?? "", inputSchema: tool.parameters ?? { type: "object", properties: {} },
       })) });
@@ -275,6 +347,7 @@ export class CodexSession implements AgentSession {
       this.threadId = text(object(result.thread).id);
       fs.writeFileSync(mappingPath + ".tmp", JSON.stringify({ threadId: this.threadId, cwd: this.cwd }), { mode: 0o600 });
       fs.renameSync(mappingPath + ".tmp", mappingPath);
+      this.opened = true;
     } catch (error) { await this.disconnect(); throw error; }
   }
   private async toolRequest(method: string, params: JsonObject): Promise<JsonObject> {
@@ -390,7 +463,7 @@ export class CodexSession implements AgentSession {
     this.waiters.clear();
   }
   async send(input: string | MessageOptions): Promise<string> {
-    if (this.closed) throw new Error("Codex session is disconnected");
+    await this.waitForReconnect();
     if (this.pendingTurn || this.turnId || this.compacting) throw new Error("Codex turn already running");
     this.eventStore.assertHealthy();
     const options = typeof input === "string" ? { prompt: input } : input;
@@ -437,10 +510,12 @@ export class CodexSession implements AgentSession {
   }
   async abort() {
     this.imageServer?.abort();
+    if (this.reconnectTask) return;
     if (this.startingTurn) await this.startingTurn;
     if (this.turnId) await this.connection.request("turn/interrupt", { threadId: this.threadId, turnId: this.turnId });
   }
   async setModel(model: string, options?: Parameters<AgentSession["setModel"]>[1]) {
+    await this.waitForReconnect();
     if (this.pendingTurn || this.turnId || this.compacting) throw new Error("Cannot change model during an active turn");
     this.model = model;
     this.effort = options?.reasoningEffort;
@@ -448,6 +523,7 @@ export class CodexSession implements AgentSession {
   }
   get rpc(): AgentSession["rpc"] {
     return { history: { compact: async () => {
+      await this.waitForReconnect();
       if (this.pendingTurn || this.turnId || this.compacting) throw new Error("Cannot compact an active turn");
       const before = this.usage?.currentTokens ?? 0;
       this.compacting = true;
@@ -459,7 +535,7 @@ export class CodexSession implements AgentSession {
         waiting.cancel();
         this.compacting = false;
         // Codex 0.114 can retain its compaction task; resume the persisted thread before the next turn.
-        await this.disconnect();
+        if (!this.reconnectTask) await this.disconnect();
       }
     } } };
   }
