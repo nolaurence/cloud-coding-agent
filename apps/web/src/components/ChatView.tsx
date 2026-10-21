@@ -205,10 +205,12 @@ function AssistantMessage({
   message,
   streaming = false,
   showMeta = true,
+  showReasoning = true,
 }: {
   message: ChatMessage;
   streaming?: boolean;
   showMeta?: boolean;
+  showReasoning?: boolean;
 }) {
   const { threadId, shareToken } = useContext(MessageContext);
   const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
@@ -217,7 +219,9 @@ function AssistantMessage({
       className="assistant-message group/assistant min-w-0 px-1 py-0.5"
       aria-live={streaming ? "polite" : undefined}
     >
-      {message.reasoning && <ReasoningBlock text={message.reasoning} streaming={streaming} />}
+      {showReasoning && message.reasoning && (
+        <ReasoningBlock text={message.reasoning} streaming={streaming} />
+      )}
       {message.text && <Markdown>{message.text}</Markdown>}
       {images.length > 0 && threadId && (
         <div className={cn("my-2 grid max-w-2xl gap-2", images.length > 1 && "grid-cols-2")}>
@@ -392,6 +396,7 @@ function CompletedTurn({
   onOpenSubagent: (subagentId: string) => void;
 }) {
   const terminalAssistant = findTerminalAssistantEntry(entries);
+  const reasoning = terminalAssistant?.message.reasoning?.trim() ?? "";
   const userEntries = entries.filter(
     (entry): entry is Extract<ChatTimelineEntry, { kind: "message" }> =>
       entry.kind === "message" && entry.message.role === "user",
@@ -422,6 +427,9 @@ function CompletedTurn({
       {userEntries.map((entry) => (
         <UserMessage key={entry.id} message={entry.message} />
       ))}
+      {reasoning && (hasCollapsibleEntries ? expanded : true) && (
+        <ReasoningBlock text={reasoning} />
+      )}
       {processSegments.map((segment) => {
         const first = segment[0];
         if (!first) return null;
@@ -463,7 +471,9 @@ function CompletedTurn({
           </button>
         </div>
       )}
-      {terminalAssistant && <AssistantMessage message={terminalAssistant.message} />}
+      {terminalAssistant && (
+        <AssistantMessage message={terminalAssistant.message} showReasoning={false} />
+      )}
     </section>
   );
 }

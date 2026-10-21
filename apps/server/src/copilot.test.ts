@@ -405,6 +405,37 @@ test("reports SDK acceptance before a post-send metadata update fails", async (t
   assert.equal(manager.isRunning(threadId), false);
 });
 
+test("keeps accumulated reasoning when the final message omits reasoning text", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "检查代码");
+  session.emit(
+    sessionEvent("assistant.reasoning_delta", {
+      reasoningId: "reasoning-1",
+      deltaContent: "先检查相关实现。",
+    }),
+  );
+  session.emit(
+    sessionEvent("assistant.message", {
+      messageId: "message-1",
+      content: "检查完成。",
+    }),
+  );
+  session.emit(sessionEvent("session.idle", {}));
+
+  const snapshot = await manager.subscribe(threadId);
+  assert.equal(snapshot.kind, "snapshot");
+  if (snapshot.kind !== "snapshot") return;
+  const message = snapshot.messages.find((candidate) => candidate.id === "message-1");
+  assert.equal(message?.text, "检查完成。");
+  assert.equal(message?.reasoning, "先检查相关实现。");
+});
+
 test("keeps a request running across assistant tool turns until session.idle", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);

@@ -357,12 +357,20 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         },
       };
     case "assistant.message": {
-      const exists = state.messages.some((m) => m.id === event.message.id);
+      const liveReasoning =
+        !event.message.reasoning &&
+        (!state.live.turnId || state.live.turnId === event.message.turnId)
+          ? state.live.reasoning
+          : "";
+      const message = liveReasoning
+        ? { ...event.message, reasoning: liveReasoning }
+        : event.message;
+      const exists = state.messages.some((m) => m.id === message.id);
       return {
         ...state,
         messages: exists
-          ? state.messages.map((m) => (m.id === event.message.id ? event.message : m))
-          : [...state.messages, event.message],
+          ? state.messages.map((m) => (m.id === message.id ? message : m))
+          : [...state.messages, message],
         live: { text: "", reasoning: "", turnId: null },
       };
     }

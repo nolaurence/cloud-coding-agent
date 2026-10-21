@@ -430,6 +430,10 @@ export class CopilotManager {
     return rt.pendingAssistant;
   }
 
+  private pendingReasoning(rt: ThreadRuntime): string | undefined {
+    return rt.pendingAssistant?.reasoning;
+  }
+
   private commitPendingAssistant(rt: ThreadRuntime, emit = true) {
     const pending = rt.pendingAssistant;
     rt.pendingAssistant = null;
@@ -999,8 +1003,11 @@ export class CopilotManager {
         const generatedAttachments = (data as typeof data & { attachments?: MessageAttachment[] }).attachments;
         if (event.agentId) {
           const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
-          if (!data.content && !data.reasoningText) break;
-          if (subagent.live?.messageId && subagent.live.messageId !== data.messageId) {
+          const live = subagent.live;
+          const sameMessage = !live?.messageId || live.messageId === data.messageId;
+          const reasoning = data.reasoningText || (sameMessage ? live?.reasoning : undefined);
+          if (!data.content && !reasoning) break;
+          if (live?.messageId && live.messageId !== data.messageId) {
             this.commitPendingSubagentMessage(subagent);
           } else {
             subagent.live = undefined;
@@ -1009,18 +1016,19 @@ export class CopilotManager {
             id: data.messageId,
             role: "assistant",
             text: data.content,
-            reasoning: data.reasoningText,
+            reasoning: reasoning || undefined,
             createdAt: ts,
           });
           this.emitSubagent(rt, subagent);
           break;
         }
-        if (!data.content && !data.reasoningText && !generatedAttachments?.length) break;
+        const reasoning = data.reasoningText || this.pendingReasoning(rt);
+        if (!data.content && !reasoning && !generatedAttachments?.length) break;
         const message: ChatMessage = {
           id: data.messageId,
           role: "assistant",
           text: data.content,
-          reasoning: data.reasoningText,
+          reasoning: reasoning || undefined,
           ...(generatedAttachments?.length ? { attachments: generatedAttachments } : {}),
           turnId: rt.currentTurnId ?? data.turnId ?? "",
           createdAt: ts,
@@ -1402,8 +1410,11 @@ export class CopilotManager {
             const data = event.data;
             if (event.agentId) {
               const subagent = this.ensureSubagent(rt, event.agentId, undefined, ts);
-              if (!data.content && !data.reasoningText) break;
-              if (subagent.live?.messageId && subagent.live.messageId !== data.messageId) {
+              const live = subagent.live;
+              const sameMessage = !live?.messageId || live.messageId === data.messageId;
+              const reasoning = data.reasoningText || (sameMessage ? live?.reasoning : undefined);
+              if (!data.content && !reasoning) break;
+              if (live?.messageId && live.messageId !== data.messageId) {
                 this.commitPendingSubagentMessage(subagent);
               } else {
                 subagent.live = undefined;
@@ -1412,20 +1423,21 @@ export class CopilotManager {
                 id: data.messageId,
                 role: "assistant",
                 text: data.content,
-                reasoning: data.reasoningText,
+                reasoning: reasoning || undefined,
                 createdAt: ts,
               });
               break;
             }
             const attachments = (data as typeof data & { attachments?: MessageAttachment[] }).attachments ??
               store.getThread(rt.threadId)?.messageAttachments?.[data.messageId];
-            if (!data.content && !data.reasoningText && !attachments?.length) break;
+            const reasoning = data.reasoningText || this.pendingReasoning(rt);
+            if (!data.content && !reasoning && !attachments?.length) break;
             rt.pendingAssistant = null;
             rt.messages.push({
               id: data.messageId,
               role: "assistant",
               text: data.content,
-              reasoning: data.reasoningText,
+              reasoning: reasoning || undefined,
               ...(attachments?.length ? { attachments } : {}),
               turnId,
               createdAt: ts,
