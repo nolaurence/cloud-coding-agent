@@ -79,3 +79,27 @@ export function clearBootstrapCredentials(environment: NodeJS.ProcessEnv = proce
   delete environment.ADMIN_USERNAME;
   delete environment.ADMIN_PASSWORD;
 }
+
+/**
+ * DeepSeek Harness 运行时（dsh --profile sdk）的子进程环境：
+ * 系统键白名单 + DSH_HOME + 本次 spawn 注入的模型凭据（apiKeyEnv 引用的变量）。
+ * 其余变量（数据库、服务凭据、工作区配置）一律不跨进程边界。
+ */
+export function sanitizedDshRuntimeEnv(
+  dshHome: string,
+  credentials: Record<string, string>,
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const target: NodeJS.ProcessEnv = {};
+  for (const key of SYSTEM_KEYS) if (source[key] !== undefined) target[key] = source[key];
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined && (key.startsWith("DSH_") || key.startsWith("CCA_DSH_")) && !BLOCKED_KEYS.has(key)) {
+      target[key] = value;
+    }
+  }
+  // 打包 Electron 里 process.execPath 是 Electron 本体，dsh CLI 的 JS 入口需要按 Node 运行。
+  if (source.ELECTRON_RUN_AS_NODE === "1") target.ELECTRON_RUN_AS_NODE = "1";
+  target.DSH_HOME = dshHome;
+  for (const [key, value] of Object.entries(credentials)) target[key] = value;
+  return target;
+}

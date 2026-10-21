@@ -1,3 +1,5 @@
+import type { AgentPluginRecord } from "./agentPlugins.js";
+
 export type WireApi = "completions" | "responses";
 export type ProviderType = "openai" | "azure" | "anthropic";
 export const REASONING_EFFORTS = [
@@ -124,6 +126,8 @@ export interface AppSettings {
   mcpServers: McpServerConfig[];
   skillDirectories: string[];
   disabledSkills: string[];
+  /** 已停用的 Agent Plugins（manifest.name 列表）。 */
+  disabledAgentPlugins?: string[];
 }
 
 export const DEFAULT_MODEL_PROVIDER_ID = "codex";
@@ -256,7 +260,8 @@ export interface ContextCompactionResult {
 }
 
 export interface ThreadMeta {
-  runtime?: "codex";
+  /** 执行引擎标记：codex/copilot 为旧引擎只读会话，dsh 为 DeepSeek Harness 会话。 */
+  runtime?: "codex" | "copilot" | "dsh";
   id: string;
   projectId: string;
   title: string;
@@ -310,30 +315,23 @@ export interface AuthUser {
   role: UserRole;
 }
 
-export interface PluginMarketplace {
-  name: string;
-  source: string;
-  isDefault: boolean;
-}
-
-export interface MarketplacePlugin {
-  name: string;
-  description: string;
-}
-
 export interface InstalledPlugin {
+  /** manifest.name（插件唯一 id） */
   name: string;
-  marketplace: string;
+  /** 插件根目录（服务端路径） */
+  path: string;
   version?: string;
+  description?: string;
   enabled: boolean;
-  directSourceId?: string;
+  /** 目录扫描结果（含 skills / mcpServers / warnings / errors） */
+  record: AgentPluginRecord;
 }
 
 export interface PluginInstallResult {
   plugin: InstalledPlugin;
+  /** 安装后可用的技能数 */
   skillsInstalled: number;
   postInstallMessage?: string;
-  deprecationWarning?: string;
 }
 
 export interface SkillInfo {
@@ -666,13 +664,9 @@ export type ClientMessage =
   | { id: string; type: "mcp.delete"; idToDelete: string }
   | { id: string; type: "skill.save"; name: string; description: string; content: string }
   | { id: string; type: "skill.delete"; name: string }
-  | { id: string; type: "plugins.marketplaces.list" }
-  | { id: string; type: "plugins.marketplace.add"; source: string }
-  | { id: string; type: "plugins.marketplace.remove"; name: string; force?: boolean }
-  | { id: string; type: "plugins.marketplace.browse"; name: string }
   | { id: string; type: "plugins.list" }
-  | { id: string; type: "plugins.install"; source: string }
-  | { id: string; type: "plugins.uninstall"; name: string; directSourceId?: string }
+  | { id: string; type: "plugins.install"; source: string } // source = 服务端上的插件目录绝对路径
+  | { id: string; type: "plugins.uninstall"; name: string }
   | { id: string; type: "plugins.setEnabled"; name: string; enabled: boolean }
   | { id: string; type: "models.list" }
   | { id: string; type: "provider.models.discover"; provider: ProviderModelDiscoveryConfig }
@@ -761,6 +755,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mcpServers: [],
   skillDirectories: [],
   disabledSkills: [],
+  disabledAgentPlugins: [],
 };
 
 export function flattenModels(
@@ -830,3 +825,6 @@ export function normalizeModelRefReasoning(
 export function normalizeConfiguredModelRef(settings: AppSettings, model: ModelRef): ModelRef {
   return normalizeModelRefReasoning(model, flattenModels(settings));
 }
+
+export * from "./agentContract.js";
+export * from "./agentPlugins.js";

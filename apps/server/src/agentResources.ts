@@ -1,4 +1,4 @@
-import { defineTool, type Tool } from "@github/copilot-sdk";
+import { defineTool, type Tool } from "@cca/protocol";
 import type { McpServerConfig, ResourceScope } from "@cca/protocol";
 import {
   deleteScopedMcpServer,

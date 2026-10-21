@@ -12,7 +12,6 @@ import type {
   ContextCompactionResult,
   ContextUsage,
   InstalledPlugin,
-  MarketplacePlugin,
   ModelRef,
   McpServerConfig,
   ModelEntry,
@@ -21,7 +20,6 @@ import type {
   PermissionMode,
   PermissionRequest,
   PluginInstallResult,
-  PluginMarketplace,
   Workspace,
   ProviderModelDiscoveryConfig,
   RegistrationPolicy,
@@ -274,16 +272,9 @@ interface AppState {
   deleteMcpServer: (id: string) => Promise<void>;
   saveSkill: (name: string, description: string, content: string) => Promise<void>;
   deleteSkill: (name: string) => Promise<void>;
-  listPluginMarketplaces: () => Promise<PluginMarketplace[]>;
-  addPluginMarketplace: (source: string) => Promise<{ name: string }>;
-  removePluginMarketplace: (
-    name: string,
-    force?: boolean,
-  ) => Promise<{ removed: boolean; dependentPlugins: string[] }>;
-  browsePluginMarketplace: (name: string) => Promise<MarketplacePlugin[]>;
   listInstalledPlugins: () => Promise<InstalledPlugin[]>;
   installPlugin: (source: string) => Promise<PluginInstallResult>;
-  uninstallPlugin: (name: string, directSourceId?: string) => Promise<void>;
+  uninstallPlugin: (name: string) => Promise<void>;
   setPluginEnabled: (name: string, enabled: boolean) => Promise<void>;
   searchFiles: (projectId: string, query: string) => Promise<string[]>;
   setComposerDraft: (key: string, text: string) => void;
@@ -1047,39 +1038,17 @@ export const useApp = create<AppState>((set, get) => {
       await request({ type: "skill.delete", name });
     },
 
-    listPluginMarketplaces: async () => {
-      return request<PluginMarketplace[]>({ type: "plugins.marketplaces.list" });
-    },
-
-    addPluginMarketplace: async (source) => {
-      // 首次克隆市场仓库可能较慢
-      return request<{ name: string }>({ type: "plugins.marketplace.add", source }, 180_000);
-    },
-
-    removePluginMarketplace: async (name, force) => {
-      return request<{ removed: boolean; dependentPlugins: string[] }>({
-        type: "plugins.marketplace.remove",
-        name,
-        force,
-      });
-    },
-
-    browsePluginMarketplace: async (name) => {
-      // 首次克隆市场仓库可能较慢
-      return request<MarketplacePlugin[]>({ type: "plugins.marketplace.browse", name }, 180_000);
-    },
-
     listInstalledPlugins: async () => {
       return request<InstalledPlugin[]>({ type: "plugins.list" });
     },
 
     installPlugin: async (source) => {
-      // 安装需要下载插件文件
+      // 安装即扫描服务端上的插件目录
       return request<PluginInstallResult>({ type: "plugins.install", source }, 180_000);
     },
 
-    uninstallPlugin: async (name, directSourceId) => {
-      await request({ type: "plugins.uninstall", name, directSourceId });
+    uninstallPlugin: async (name) => {
+      await request({ type: "plugins.uninstall", name });
     },
 
     setPluginEnabled: async (name, enabled) => {

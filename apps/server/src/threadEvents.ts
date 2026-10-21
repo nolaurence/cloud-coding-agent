@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@github/copilot-sdk";
+import type { SessionEvent } from "@cca/protocol";
 import { enqueueWrite, flushDbWrites, query, transaction, upsert, usingDatabase } from "./db.js";
 
 // JSONL remains a write-ahead journal. Replaying stable IDs repairs interrupted DB writes.

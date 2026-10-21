@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { McpServerConfig, ResourceScope } from "@cca/protocol";
-import type { MCPServerConfig } from "@github/copilot-sdk";
+import type { MCPServerConfig, McpServerConfig, ResourceScope } from "@cca/protocol";
 import { store } from "./store.js";
 
 const MCP_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;

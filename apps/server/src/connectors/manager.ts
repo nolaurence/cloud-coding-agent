@@ -314,7 +314,7 @@ export class ConnectorManager {
       model: { ...config.model },
       modelProviderId: config.model.providerId,
       userId: config.ownerId,
-      runtime: "codex",
+      runtime: "dsh",
       createdAt: now,
       updatedAt: now,
       archived: false,

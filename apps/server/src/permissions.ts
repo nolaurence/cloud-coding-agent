@@ -1,4 +1,4 @@
-import type { PermissionHandler, PermissionRequestResult } from "@github/copilot-sdk";
+import type { PermissionHandler, PermissionRequestResult } from "@cca/protocol";
 
 const APPROVE: PermissionRequestResult = { kind: "approve-once" };
 

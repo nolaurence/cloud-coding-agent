@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { CodexClient, SessionNotFoundError } from "./codex.js";
+import { DshClient } from "./dsh/dshClient.js";
+import { SessionNotFoundError } from "./errors.js";
 import type { AgentClient as CopilotClient, AgentSession as CopilotSession } from "./agentRuntime.js";
 import type {
   ModelCapabilitiesOverride,
   SessionConfig,
   SessionEvent,
-} from "@github/copilot-sdk";
+} from "@cca/protocol";
 import {
   DEFAULT_MODEL_PROVIDER_ID,
   flattenModels,
@@ -43,6 +44,7 @@ import { createWorkspacePermissionHandler } from "./permissions.js";
 
 import { browserPool, createBrowserUseTool } from "./browser.js";
 import { createAgentResourceTools } from "./agentResources.js";
+import { agentPluginRuntimeConfig, installAgentPlugin, scanInstalledPlugins, setAgentPluginEnabled, uninstallAgentPlugin } from "./agentPluginHost.js";
 import { effectiveMcpServers } from "./mcpServers.js";
 import { enabledSkillDirectories } from "./skills.js";
 import { getUserRole } from "./auth.js";
@@ -314,7 +316,7 @@ export class CopilotManager {
 
   constructor(
     private readonly createClient: CopilotClientFactory = () =>
-      new CodexClient(),
+      new DshClient(),
   ) {}
 
   onThreadEvent(sink: ThreadEventSink) {
@@ -695,6 +697,10 @@ export class CopilotManager {
     }
     const ownerId = thread.userId;
     const mcpServers = effectiveMcpServers(project.path);
+    const pluginConfig = agentPluginRuntimeConfig();
+    for (const [name, server] of Object.entries(pluginConfig.mcpServers)) {
+      if (!(name in mcpServers)) mcpServers[name] = server;
+    }
     const skillConfig = enabledSkillDirectories(project.path);
     const systemInstructions = [
       "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
@@ -705,7 +711,7 @@ export class CopilotManager {
 
     const config: Record<string, unknown> & Pick<SessionConfig, "provider" | "model" | "systemMessage"> = {
       sessionId: thread.id,
-      legacySession: thread.runtime !== "codex",
+      legacySession: thread.runtime !== "dsh",
       agentMode: thread.agentMode ?? "standard",
       permissionMode: thread.permissionMode ?? "full",
       onCodexPermissionRequest: (request: PermissionRequest) =>
@@ -719,7 +725,7 @@ export class CopilotManager {
       requestExtensions: false,
       mcpServers,
       customAgents: [],
-      skillDirectories: skillConfig.dirs,
+      skillDirectories: [...skillConfig.dirs, ...pluginConfig.skillDirs],
       pluginDirectories: [],
       disabledSkills: skillConfig.disabled,
       enableSkills: skillConfig.dirs.length > 0,
@@ -823,34 +829,7 @@ export class CopilotManager {
       truncated ? "The staged diff was truncated. Infer conservatively from the visible portion." : "The staged diff is complete.",
       "<staged_diff>", patch, "</staged_diff>",
     ].join("\n");
-    if (client instanceof CodexClient) return normalizeGeneratedCommitMessage(await client.generateText(config, prompt, COMMIT_MESSAGE_TIMEOUT_MS));
-    let session: CopilotSession | null = null;
-    let generationError: unknown;
-    try {
-      session = await client.createSession(config as never);
-      const response = await session.sendAndWait({ prompt }, COMMIT_MESSAGE_TIMEOUT_MS);
-      return normalizeGeneratedCommitMessage(response?.data.content ?? "");
-    } catch (error) {
-      generationError = error;
-      throw error;
-    } finally {
-      const cleanupErrors: unknown[] = [];
-      try {
-        await session?.disconnect();
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-      try {
-        await client.deleteSession(sessionId);
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-      if (cleanupErrors.length > 0) {
-        const cleanupError = new AggregateError(cleanupErrors, "清理提交信息生成会话失败");
-        if (generationError) console.error(cleanupError);
-        else throw cleanupError;
-      }
-    }
+    return normalizeGeneratedCommitMessage(await client.generateText(config, prompt, COMMIT_MESSAGE_TIMEOUT_MS));
   }
 
   private attachEventHandlers(rt: ThreadRuntime, session: CopilotSession) {
@@ -1339,12 +1318,12 @@ export class CopilotManager {
       ) {
         capabilityModels = (await this.listModels()).map((model) => ({
           ref: { providerId: DEFAULT_MODEL_PROVIDER_ID, modelId: model.id },
-          label: "Codex / " + (model.name ?? model.id),
+          label: "DeepSeek Harness / " + (model.name ?? model.id),
           supportedReasoningEfforts: model.supportedReasoningEfforts,
           defaultReasoningEffort: model.defaultReasoningEffort,
         }));
       }
-      const config = client instanceof CodexClient && thread.runtime !== "codex"
+      const config = thread.runtime !== "dsh"
         ? { sessionId: thread.id, legacySession: true }
         : this.buildSessionConfig(
         thread,
@@ -1355,7 +1334,6 @@ export class CopilotManager {
 
       let session: CopilotSession;
       const hasHistory =
-        client instanceof CodexClient ||
         rt.sdkSessionEstablished ||
         thread.createdAt < Date.now() - 1000 ||
         rt.messages.length > 0;
@@ -1366,7 +1344,7 @@ export class CopilotManager {
           throw new Error("create");
         }
       } catch (error) {
-        if (client instanceof CodexClient && hasHistory && !(error instanceof SessionNotFoundError)) throw error;
+        if (hasHistory && !(error instanceof SessionNotFoundError)) throw error;
         session = await client.createSession(config as never);
       }
 
@@ -1869,7 +1847,7 @@ export class CopilotManager {
 
   private async assertThreadEditable(threadId: string) {
     const thread = store.getThread(threadId);
-    if (thread && thread.runtime !== "codex" && (await this.ensureClient()) instanceof CodexClient) throw new Error("旧 Copilot 会话只读,请新建 Codex 会话");
+    if (thread && thread.runtime !== "dsh") throw new Error("旧引擎会话只读,请新建 DeepSeek Harness 会话");
   }
 
   async setThreadModel(
@@ -1973,7 +1951,7 @@ export class CopilotManager {
 
   async setThreadAgentMode(threadId: string, nextMode: AgentMode): Promise<void> {
     await this.assertThreadEditable(threadId);
-    if (nextMode === "ultra" && (await this.ensureClient()) instanceof CodexClient) throw new Error("Codex 暂不支持 Ultra 子代理模式");
+    if (nextMode === "ultra" && false) throw new Error("Ultra 子代理模式不可用");
     const thread = store.getThread(threadId);
     if (!thread) throw new Error("会话不存在");
     if ((thread.agentMode ?? "standard") === nextMode) return;
@@ -2047,88 +2025,32 @@ export class CopilotManager {
     return this.threads.get(threadId)?.running ?? false;
   }
 
-  // 后台预热插件市场缓存,避免用户首次打开插件页时等待市场仓库克隆
-  async warmupPlugins(): Promise<void> {
-    if ((await this.ensureClient()) instanceof CodexClient) return;
-    try {
-      const marketplaces = await this.listPluginMarketplaces();
-      await Promise.allSettled(
-        marketplaces.map((m) => this.browsePluginMarketplace(m.name)),
-      );
-    } catch (error) {
-      console.warn("[cca] 插件市场预热失败", error);
-    }
-  }
-
-  async listPluginMarketplaces() {
-    const client = await this.ensureClient();
-    const result = await client.rpc.plugins.marketplaces.list();
-    return result.marketplaces.map((m) => ({
-      name: m.name,
-      source: m.source,
-      isDefault: m.isDefault ?? false,
-    }));
-  }
-
-  async addPluginMarketplace(source: string) {
-    const client = await this.ensureClient();
-    const result = await client.rpc.plugins.marketplaces.add({ source });
-    return { name: result.name };
-  }
-
-  async removePluginMarketplace(name: string, force: boolean) {
-    const client = await this.ensureClient();
-    const result = await client.rpc.plugins.marketplaces.remove({ name, force });
-    return { removed: result.removed, dependentPlugins: result.dependentPlugins ?? [] };
-  }
-
-  async browsePluginMarketplace(name: string) {
-    const client = await this.ensureClient();
-    const result = await client.rpc.plugins.marketplaces.browse({ name });
-    return result.plugins.map((p) => ({ name: p.name, description: p.description ?? "" }));
-  }
+  // Agent Plugins 1.0 插件管理：本地目录扫描，无需预热
+  async warmupPlugins(): Promise<void> {}
 
   async listInstalledPlugins() {
-    const client = await this.ensureClient();
-    const result = await client.rpc.plugins.list();
-    return result.plugins.map((p) => ({
-      name: p.name,
-      marketplace: p.marketplace,
-      version: p.version,
-      enabled: p.enabled,
-      directSourceId: p.directSourceId,
-    }));
+    return scanInstalledPlugins();
   }
 
   async installPlugin(source: string) {
-    const client = await this.ensureClient();
-    const result = await client.rpc.plugins.install({ source });
-    return {
-      plugin: {
-        name: result.plugin.name,
-        marketplace: result.plugin.marketplace,
-        version: result.plugin.version,
-        enabled: result.plugin.enabled,
-        directSourceId: result.plugin.directSourceId,
-      },
-      skillsInstalled: result.skillsInstalled,
-      postInstallMessage: result.postInstallMessage,
-      deprecationWarning: result.deprecationWarning,
-    };
+    return this.mutatePluginConfig(() => installAgentPlugin(source));
   }
 
-  async uninstallPlugin(name: string, directSourceId?: string) {
-    const client = await this.ensureClient();
-    await client.rpc.plugins.uninstall({ name, directSourceId: directSourceId ?? null });
+  async uninstallPlugin(name: string) {
+    await this.mutatePluginConfig(() => uninstallAgentPlugin(name));
   }
 
   async setPluginEnabled(name: string, enabled: boolean) {
-    const client = await this.ensureClient();
-    if (enabled) {
-      await client.rpc.plugins.enable({ names: [name] });
-    } else {
-      await client.rpc.plugins.disable({ names: [name] });
+    await this.mutatePluginConfig(() => setAgentPluginEnabled(name, enabled));
+  }
+
+  private async mutatePluginConfig<T>(action: () => T): Promise<T> {
+    if (this.runningThreadIds().length > 0) {
+      throw new Error("当前仍有任务运行,请停止或等待完成后再安装或修改插件");
     }
+    const result = action();
+    await this.reconfigureOpenSessions();
+    return result;
   }
 
   runningThreadIds(): string[] {
