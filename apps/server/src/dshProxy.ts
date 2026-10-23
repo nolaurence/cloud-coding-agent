@@ -172,16 +172,6 @@ export function registerDshRoutes(app: FastifyInstance, options: DshRouteOptions
     return manager.status();
   });
 
-  app.post("/api/dsh/retry", async (req, reply) => {
-    const user = authenticate(req.headers.authorization);
-    if (!user) return reply.code(401).send({ error: "未授权" });
-    const status = manager.status();
-    if (!status.enabled) return reply.code(503).send({ error: "DeepSeek Harness 已禁用" });
-    // A retry may wake a failed launch, but must not interrupt a running one.
-    if (!status.ready && !status.starting) manager.reload();
-    return manager.status();
-  });
-
   app.post("/api/dsh/ticket", async (req, reply) => {
     const user = authenticate(req.headers.authorization);
     if (!user) return reply.code(401).send({ error: "未授权" });

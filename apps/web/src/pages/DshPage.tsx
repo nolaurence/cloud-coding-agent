@@ -35,16 +35,6 @@ export function DshPage() {
     setError(null);
     try {
       let next = knownStatus;
-      if (force) {
-        const response = await fetch("/api/dsh/retry", {
-          method: "POST",
-          headers: authHeader(),
-        });
-        const result = (await response.json().catch(() => ({}))) as DshStatus & { error?: string };
-        if (!response.ok) throw new Error(result.error ?? `重试失败 (${response.status})`);
-        next = result;
-        setStatus(next);
-      }
       if (!next) {
         const response = await fetch("/api/dsh/status", {
           headers: authHeader(),

@@ -33,6 +33,7 @@ export interface DshStatus {
 }
 
 interface ResolvedDshConfig {
+  enabled: boolean;
   bin: string;
   homeDir: string;
   templateDir: string;
@@ -102,6 +103,7 @@ function resolveConfig(): ResolvedDshConfig {
   }
 
   return {
+    enabled: envFlag(process.env.DSH_ENABLED, true),
     bin: process.env.DSH_BIN?.trim() || "dsh",
     homeDir,
     templateDir,
@@ -179,13 +181,13 @@ async function waitForFileOrKeyscan(file: string, host: string): Promise<void> {
 }
 
 export class DshManager {
+  private config: ResolvedDshConfig | undefined;
   private child: ChildProcess | undefined;
   private childExit: Promise<void> | undefined;
   private gateways: RunningGateways | undefined;
   private supervisor: Promise<void> | undefined;
   private stopping = false;
   private reloadRequested = false;
-  private wakeRetry: (() => void) | undefined;
   private launchTokenValue: string | undefined;
   private portValue: number | undefined;
   private statusValue: DshStatus = {
@@ -209,10 +211,22 @@ export class DshManager {
   }
 
   start(): void {
-    if (this.supervisor || this.stopping) return;
-    this.statusValue.enabled = envFlag(process.env.DSH_ENABLED, true);
+    if (this.supervisor) return;
+    try {
+      this.config = resolveConfig();
+      this.statusValue.enabled = this.config.enabled;
+    } catch (error) {
+      this.statusValue = {
+        ...this.statusValue,
+        enabled: envFlag(process.env.DSH_ENABLED, true),
+        starting: false,
+        ready: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      if (!this.statusValue.enabled) return;
+    }
     if (!this.statusValue.enabled) {
-      this.statusValue = { ...this.statusValue, ready: false, starting: false, error: undefined };
+      this.statusValue.ready = false;
       return;
     }
     this.supervisor = this.supervise();
@@ -220,13 +234,8 @@ export class DshManager {
 
   reload(): void {
     if (this.stopping) return;
-    this.statusValue = {
-      ...this.statusValue, ready: false, starting: this.statusValue.enabled, error: undefined,
-    };
     this.reloadRequested = true;
     this.child?.kill("SIGTERM");
-    this.wakeRetry?.();
-    this.start();
   }
 
   async waitUntilReady(timeoutMs = 30_000): Promise<void> {
@@ -245,7 +254,6 @@ export class DshManager {
   async close(): Promise<void> {
     this.stopping = true;
     this.reloadRequested = false;
-    this.wakeRetry?.();
     this.statusValue = { ...this.statusValue, ready: false, starting: false };
     await this.stopChild();
     await this.gateways?.close().catch(() => undefined);
@@ -265,10 +273,7 @@ export class DshManager {
         error: undefined,
       };
       try {
-        // Resolve on every attempt: failed validation must retain its real
-        // error and recover once deployment files or configuration are fixed.
-        const config = resolveConfig();
-        await this.launch(config);
+        await this.launch();
         failures = 0;
         this.statusValue = { ...this.statusValue, ready: true, starting: false };
         await this.childExit;
@@ -297,24 +302,14 @@ export class DshManager {
       failures += 1;
       if (this.reloadRequested) failures = 0;
       const waitMs = failures === 0 ? 250 : Math.min(30_000, 1_000 * 2 ** Math.min(failures, 5));
-      if (!this.reloadRequested) await this.waitForRetry(waitMs);
+      await delay(waitMs);
     }
     this.statusValue = { ...this.statusValue, ready: false, starting: false };
   }
 
-  private waitForRetry(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      const finish = () => {
-        clearTimeout(timer);
-        this.wakeRetry = undefined;
-        resolve();
-      };
-      const timer = setTimeout(finish, ms);
-      this.wakeRetry = finish;
-    });
-  }
-
-  private async launch(config: ResolvedDshConfig): Promise<void> {
+  private async launch(): Promise<void> {
+    const config = this.config;
+    if (!config) throw new Error("DeepSeek Harness 配置尚未初始化");
     let sshBinDir: string | undefined;
     if (config.sandbox.enabled) {
       if (!fs.existsSync(config.sandbox.identityFile)) {
@@ -323,7 +318,7 @@ export class DshManager {
       fs.chmodSync(config.sandbox.identityFile, 0o600);
       await waitForFileOrKeyscan(config.sandbox.knownHostsFile, config.sandbox.host);
       sshBinDir = writeDshSshConfig(config.homeDir, config.sandbox);
-      await this.syncWorkspace(config, sshBinDir);
+      await this.syncWorkspace(sshBinDir);
     }
 
     ensureDshProfile(config.homeDir, config.templateDir);
@@ -464,8 +459,9 @@ export class DshManager {
     }
   }
 
-  private async syncWorkspace(config: ResolvedDshConfig, sshBinDir: string): Promise<void> {
-    if (!config.sandbox.syncEnabled) return;
+  private async syncWorkspace(sshBinDir: string): Promise<void> {
+    const config = this.config;
+    if (!config?.sandbox.syncEnabled) return;
     const marker = path.join(config.homeDir, ".workspace-sync-v1.json");
     if (fs.existsSync(marker)) return;
     const key = config.sandbox.syncIdentityFile;
