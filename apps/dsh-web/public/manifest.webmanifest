@@ -1,0 +1,15 @@
+{
+  "name": "Kloud Work",
+  "short_name": "Kloud Work",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "icons": [
+    {
+      "src": "kloud-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

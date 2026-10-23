@@ -7,11 +7,13 @@
     "dev": "tsx watch src/index.ts",
     "build": "node ../desktop/build-server.mjs",
     "start": "node dist/index.js",
-    "test": "node --import tsx --test src/dshProfile.test.ts src/dshManager.test.ts src/threadEvents.test.ts src/codex.test.ts src/codexRpc.test.ts src/codexReconnect.test.ts src/llmGateway.test.ts src/connectors/connectors.test.ts src/permissions.test.ts src/providers.test.ts src/reasoning.test.ts src/copilot.test.ts src/browser.test.ts src/electronBrowserIpc.test.ts src/runtimeEnv.test.ts src/db.test.ts src/auth.test.ts src/threadShares.test.ts src/gitOperations.test.ts src/gitWorkspace.test.ts src/terminals.test.ts src/uploads.test.ts src/workspaceProjects.test.ts src/workspace.test.ts src/resources.test.ts ../web/src/lib/directoryPaths.test.ts ../web/src/lib/browserVisibility.test.ts ../web/src/lib/chatTimeline.test.ts ../web/src/lib/theme.test.ts ../web/src/lib/diffRendering.test.ts ../web/src/lib/gitGraph.test.ts ../web/src/lib/composerDrafts.test.ts ../web/src/components/workspace/fileAutosaver.test.ts",
+    "test": "node --import tsx --test src/dshProfile.test.ts src/dshManager.test.ts src/dshIsolation.test.ts src/threadEvents.test.ts src/codex.test.ts src/codexRpc.test.ts src/codexReconnect.test.ts src/llmGateway.test.ts src/connectors/connectors.test.ts src/permissions.test.ts src/providers.test.ts src/reasoning.test.ts src/copilot.test.ts src/browser.test.ts src/electronBrowserIpc.test.ts src/runtimeEnv.test.ts src/db.test.ts src/auth.test.ts src/threadShares.test.ts src/gitOperations.test.ts src/gitWorkspace.test.ts src/terminals.test.ts src/uploads.test.ts src/workspaceProjects.test.ts src/workspace.test.ts src/resources.test.ts ../web/src/lib/directoryPaths.test.ts ../web/src/lib/browserVisibility.test.ts ../web/src/lib/chatTimeline.test.ts ../web/src/lib/theme.test.ts ../web/src/lib/diffRendering.test.ts ../web/src/lib/gitGraph.test.ts ../web/src/lib/composerDrafts.test.ts ../web/src/components/workspace/fileAutosaver.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@cca/protocol": "*",
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sdk-client": "0.2.1-rc.2",
     "@fastify/cors": "^10.0.2",
     "@fastify/static": "^8.0.4",
     "@fastify/websocket": "^11.0.2",

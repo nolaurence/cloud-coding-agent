@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { DATA_DIR, WORKSPACE_ROOT } from "./env.js";
 import { startLlmGateway, type GatewayProvider } from "./llmGateway.js";
 import {
   apiKeyEnvName,
   buildDshIntegration,
+  dshUserKey,
   ensureDshProfile,
   ensureDshWorkspace,
   isUsableDshProvider,
@@ -34,8 +37,12 @@ export interface DshStatus {
 
 interface ResolvedDshConfig {
   bin: string;
+  binArgs: string[];
   homeDir: string;
+  sharedHomeDir: string;
+  userWorkspace: string;
   templateDir: string;
+  templateRequired: boolean;
   publicRoot: string;
   trustedHost: string;
   sandbox: DshSandboxConfig;
@@ -51,6 +58,7 @@ const READY_TIMEOUT_MS = 120_000;
 const STARTUP_LINE_LIMIT = 80;
 const WORKSPACE_SYNC_TIMEOUT_MS = 60 * 60_000;
 const execFileAsync = promisify(execFile);
+const workspaceSyncs = new Map<string, Promise<void>>();
 
 function envFlag(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined || value.trim() === "") return fallback;
@@ -67,13 +75,59 @@ function publicRootFromEnv(): string {
   return root.replace(/\/+$/, "") + "/dsh/";
 }
 
-function resolveConfig(): ResolvedDshConfig {
-  const homeDir = path.resolve(
+/**
+ * Locate the vendored DSH client UI plugins. The shell build owns them under
+ * `apps/dsh-web/plugins`; deployments can point CCA_DSH_UI_PLUGINS elsewhere.
+ */
+function resolveUiPlugins(): { brand?: string; sidebar?: string } {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const configured = process.env.CCA_DSH_UI_PLUGINS?.trim();
+  const candidates = configured
+    ? [configured]
+    : [
+        // src/ or dist/ under apps/server both resolve to apps/dsh-web.
+        path.resolve(here, "../../dsh-web/plugins"),
+        // Repo root (tsx/start from the checkout root).
+        path.resolve(process.cwd(), "apps/dsh-web/plugins"),
+        // `npm run start -w @cca/server` sets cwd to apps/server.
+        path.resolve(process.cwd(), "../dsh-web/plugins"),
+      ];
+  const root = candidates.find((dir) => fs.existsSync(dir));
+  if (!root) return {};
+  const usable = (name: string): string | undefined => {
+    const dir = path.resolve(root, name);
+    const entry = path.join(dir, "lib", "index.js");
+    // The Loader imports this path directly; a package directory is not an
+    // importable ESM specifier. client-modules still finds the package.json by
+    // walking up from the file to discover lib/client.js and dsh.client.
+    return fs.existsSync(entry) && fs.existsSync(path.join(dir, "lib", "client.js"))
+      ? entry
+      : undefined;
+  };
+  return { brand: usable("brand"), sidebar: usable("sidebar") };
+}
+
+function resolveDshCommand(): { bin: string; args: string[] } {
+  const configured = process.env.DSH_BIN?.trim();
+  if (configured) return { bin: configured, args: [] };
+  try {
+    const require = createRequire(import.meta.url);
+    const bin = require.resolve("@deepseek-ai/dsh/lib/bin.js");
+    return { bin: process.execPath, args: [bin] };
+  } catch {
+    return { bin: "dsh", args: [] };
+  }
+}
+
+function resolveConfig(username: string): ResolvedDshConfig {
+  const sharedHomeDir = path.resolve(
     process.env.DSH_HOME?.trim() || path.join(DATA_DIR, "dsh-home-cca"),
   );
-  const templateDir = path.resolve(
-    process.env.DSH_PROFILE_TEMPLATE?.trim() || "/opt/cca-dsh/profile-template",
-  );
+  const userKey = dshUserKey(username);
+  const homeDir = path.join(sharedHomeDir, "users", userKey);
+  const workspace = process.env.DSH_SANDBOX_WORKSPACE?.trim() || "/workspace";
+  const configuredTemplate = process.env.DSH_PROFILE_TEMPLATE?.trim();
+  const templateDir = path.resolve(configuredTemplate || "/opt/cca-dsh/profile-template");
   const sandboxEnabled = envFlag(process.env.DSH_SANDBOX_ENABLED, true);
   const helper =
     process.env.DSH_SSH_HELPER?.trim() ||
@@ -101,10 +155,15 @@ function resolveConfig(): ResolvedDshConfig {
     throw new Error("CCA_PUBLIC_URL 仅支持 HTTP 或 HTTPS");
   }
 
+  const command = resolveDshCommand();
   return {
-    bin: process.env.DSH_BIN?.trim() || "dsh",
+    bin: command.bin,
+    binArgs: command.args,
     homeDir,
+    sharedHomeDir,
+    userWorkspace: path.join(workspace, ".cca-users", userKey),
     templateDir,
+    templateRequired: configuredTemplate !== undefined,
     publicRoot,
     trustedHost: publicUrl.host,
     sandbox: {
@@ -113,20 +172,20 @@ function resolveConfig(): ResolvedDshConfig {
       user: process.env.DSH_SANDBOX_SSH_USER?.trim() || "nolaurence",
       identityFile: path.resolve(
         process.env.DSH_SANDBOX_SSH_KEY?.trim() ||
-          path.join(homeDir, ".ssh", "cca_sandbox_ed25519"),
+          path.join(sharedHomeDir, ".ssh", "cca_sandbox_ed25519"),
       ),
       knownHostsFile: path.resolve(
         process.env.DSH_SANDBOX_SSH_KNOWN_HOSTS?.trim() ||
-          path.join(homeDir, ".ssh", "known_hosts"),
+          path.join(sharedHomeDir, ".ssh", "known_hosts"),
       ),
       helper,
       helperHash,
-      workspace: process.env.DSH_SANDBOX_WORKSPACE?.trim() || "/workspace",
+      workspace,
       tmpdir: process.env.DSH_SSH_TMPDIR?.trim() || "/tmp/cca-dsh-ssh",
       syncEnabled: envFlag(process.env.DSH_SANDBOX_SYNC_ENABLED, true),
       syncIdentityFile: path.resolve(
         process.env.DSH_SANDBOX_SYNC_KEY?.trim() ||
-          path.join(homeDir, ".ssh", "cca_workspace_sync_ed25519"),
+          path.join(sharedHomeDir, ".ssh", "cca_workspace_sync_ed25519"),
       ),
       hostWorkspace:
         process.env.DSH_SANDBOX_HOST_WORKSPACE?.trim() ||
@@ -179,6 +238,10 @@ async function waitForFileOrKeyscan(file: string, host: string): Promise<void> {
 }
 
 export class DshManager {
+  constructor(readonly username: string) {
+    dshUserKey(username);
+  }
+
   private child: ChildProcess | undefined;
   private childExit: Promise<void> | undefined;
   private gateways: RunningGateways | undefined;
@@ -267,7 +330,7 @@ export class DshManager {
       try {
         // Resolve on every attempt: failed validation must retain its real
         // error and recover once deployment files or configuration are fixed.
-        const config = resolveConfig();
+        const config = resolveConfig(this.username);
         await this.launch(config);
         failures = 0;
         this.statusValue = { ...this.statusValue, ready: true, starting: false };
@@ -286,7 +349,7 @@ export class DshManager {
           starting: false,
           error: message,
         };
-        console.error("[cca] DeepSeek Harness 启动失败:", message);
+        console.error(`[cca] 用户 ${this.username} DeepSeek Harness 启动失败:`, message);
       } finally {
         await this.stopChild();
         await this.gateways?.close().catch(() => undefined);
@@ -315,6 +378,15 @@ export class DshManager {
   }
 
   private async launch(config: ResolvedDshConfig): Promise<void> {
+    // The image always sets DSH_PROFILE_TEMPLATE. A local checkout that does
+    // not set it lets `dsh web` create the shipped profile on first launch.
+    if (
+      config.templateRequired ||
+      fs.existsSync(path.join(config.templateDir, "package.json"))
+    ) {
+      ensureDshProfile(config.homeDir, config.templateDir);
+    }
+    fs.mkdirSync(config.userWorkspace, { recursive: true, mode: 0o700 });
     let sshBinDir: string | undefined;
     if (config.sandbox.enabled) {
       if (!fs.existsSync(config.sandbox.identityFile)) {
@@ -326,11 +398,12 @@ export class DshManager {
       await this.syncWorkspace(config, sshBinDir);
     }
 
-    ensureDshProfile(config.homeDir, config.templateDir);
-    ensureDshWorkspace(config.homeDir, config.sandbox.workspace, store.projects);
+    ensureDshWorkspace(config.homeDir, config.sandbox.workspace, store.projects, {
+      ownerId: this.username, fallbackPath: config.userWorkspace,
+    });
     const gateways = await this.startGateways();
     this.gateways = gateways;
-    const integration = buildDshIntegration(store.settings, gateways.routes, config.sandbox);
+    const integration = buildDshIntegration(store.settings, gateways.routes, config.sandbox, resolveUiPlugins());
     this.statusValue = {
       ...this.statusValue,
       providerCount: gateways.routes.length,
@@ -348,6 +421,7 @@ export class DshManager {
     const child = spawn(
       config.bin,
       [
+        ...config.binArgs,
         "--profile",
         "web",
         "--patch",
@@ -466,7 +540,19 @@ export class DshManager {
 
   private async syncWorkspace(config: ResolvedDshConfig, sshBinDir: string): Promise<void> {
     if (!config.sandbox.syncEnabled) return;
-    const marker = path.join(config.homeDir, ".workspace-sync-v1.json");
+    const marker = path.join(config.sharedHomeDir, ".workspace-sync-v1.json");
+    const existing = workspaceSyncs.get(marker);
+    if (existing) return existing;
+    const pending = this.syncWorkspaceOnce(config, sshBinDir, marker);
+    workspaceSyncs.set(marker, pending);
+    try {
+      await pending;
+    } finally {
+      if (workspaceSyncs.get(marker) === pending) workspaceSyncs.delete(marker);
+    }
+  }
+
+  private async syncWorkspaceOnce(config: ResolvedDshConfig, sshBinDir: string, marker: string): Promise<void> {
     if (fs.existsSync(marker)) return;
     const key = config.sandbox.syncIdentityFile;
     if (!key || !fs.existsSync(key)) {
@@ -576,4 +662,41 @@ export class DshManager {
   }
 }
 
-export const dshManager = new DshManager();
+export type DshRuntime = Pick<DshManager,
+  "start" | "status" | "reload" | "waitUntilReady" | "close" | "upstreamPort" | "launchToken"
+>;
+
+/** DSH has no CCA user boundary of its own: each account needs its own process and home. */
+export class DshPool {
+  private instances = new Map<string, { manager: DshRuntime; projects: string }>();
+  private stopping = false;
+
+  constructor(private readonly createManager: (username: string) => DshRuntime =
+    (username) => new DshManager(username)) {}
+
+  forUser(username: string): DshRuntime {
+    dshUserKey(username);
+    if (this.stopping) throw new Error("DeepSeek Harness 正在关闭");
+    const projects = JSON.stringify(store.projects.filter((project) => project.ownerId === username));
+    let instance = this.instances.get(username);
+    if (!instance) {
+      instance = { manager: this.createManager(username), projects };
+      this.instances.set(username, instance);
+      instance.manager.start();
+    } else if (instance.projects !== projects) {
+      instance.projects = projects;
+      instance.manager.reload();
+    }
+    return instance.manager;
+  }
+
+  reload(): void {
+    for (const { manager } of this.instances.values()) manager.reload();
+  }
+
+  async close(): Promise<void> {
+    this.stopping = true;
+    await Promise.allSettled([...this.instances.values()].map(({ manager }) => manager.close()));
+    this.instances.clear();
+  }
+}

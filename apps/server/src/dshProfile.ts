@@ -40,6 +40,26 @@ export interface DshIntegration {
   patch: unknown[];
 }
 
+/** Absolute directories of the vendored client UI plugins enabled for this launch. */
+export interface DshUiPlugins {
+  brand?: string;
+  sidebar?: string;
+  layout?: string;
+}
+
+/**
+ * Replace a stock client UI row with a vendored package directory. The local
+ * sidebar keeps the stock package name so every other plugin's declared
+ * `dsh.client.inject` edge resolves to it.
+ */
+function uiOverride(id: string, disabledId: string, dir: string | undefined): unknown[] {
+  if (!dir) return [];
+  return [
+    { id: disabledId, disabled: true },
+    { insert: [{ id, name: dir }] },
+  ];
+}
+
 const SSH_PROVIDER_ROWS = [
   { id: "subprocess-ssh", name: "@deepseek-ai/dsh-subprocess-ssh" },
   { id: "sandbox-ssh", name: "@deepseek-ai/dsh-sandbox-ssh" },
@@ -83,6 +103,7 @@ export function buildDshIntegration(
   settings: AppSettings,
   routes: readonly DshGatewayRoute[],
   sandbox: DshSandboxConfig,
+  ui: DshUiPlugins = {},
 ): DshIntegration {
   if (routes.length === 0) {
     throw new Error("没有可用于 DSH 的 OpenAI 兼容模型提供方");
@@ -182,6 +203,9 @@ export function buildDshIntegration(
         config: { providers },
       },
       ...(sandboxRows.length > 0 ? [{ insert: sandboxRows }] : []),
+      ...uiOverride("cca-brand", "ui-brand-official", ui.brand),
+      ...uiOverride("cca-sidebar", "ui-sidebar", ui.sidebar),
+      ...uiOverride("cca-layout", "ui-layout", ui.layout),
     ],
   };
 }
@@ -353,6 +377,12 @@ export interface DshWorkspaceProject {
   id: string;
   name: string;
   path: string;
+  ownerId?: string;
+}
+
+export function dshUserKey(username: string): string {
+  if (!username.trim()) throw new Error("DSH 用户无效");
+  return createHash("sha256").update(username).digest("hex");
 }
 
 function canonicalWorkspacePath(candidate: string): string {
@@ -360,12 +390,16 @@ function canonicalWorkspacePath(candidate: string): string {
     return fs.realpathSync(candidate);
   } catch {
     // DSH only needs a stable spelling here; the remote path is authoritative.
-    return path.posix.resolve(candidate);
+    return path.isAbsolute(candidate) && !candidate.startsWith("/")
+      ? path.resolve(candidate)
+      : path.posix.resolve(candidate);
   }
 }
 
 function isWorkspaceChild(candidate: string, root: string): boolean {
-  return candidate !== root && candidate.startsWith(`${root.replace(/\/+$/, "")}/`);
+  const relative = path.relative(root, candidate);
+  return relative !== "" && relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 /**
@@ -379,6 +413,7 @@ export function ensureDshWorkspace(
   homeDir: string,
   workspacePath: string,
   projects: readonly DshWorkspaceProject[] = [],
+  scope?: { ownerId: string; fallbackPath: string },
 ): void {
   const file = path.join(homeDir, "storages", "workspace.json");
   let current: StoredWorkspaceState | undefined;
@@ -396,18 +431,19 @@ export function ensureDshWorkspace(
     ...workspaceIds,
     ...Object.keys(workspaces).filter((id) => !workspaceIds.includes(id)),
   ];
-  const rootPath = canonicalWorkspacePath(workspacePath);
+  const catalogRoot = canonicalWorkspacePath(workspacePath);
+  const rootPath = canonicalWorkspacePath(scope?.fallbackPath ?? workspacePath);
   const now = new Date().toISOString();
 
   const findIdByPath = (candidate: string) =>
     existingIds.find((id) => workspaces[id]?.path === candidate);
-  const rootId = findIdByPath(rootPath) ?? (workspaces["cca-default"] ? "cca-default" : undefined);
+  const rootId = findIdByPath(rootPath);
   let resolvedRootId = rootId;
   if (!resolvedRootId) {
     resolvedRootId = "cca-default";
     workspaces[resolvedRootId] = {
       path: rootPath,
-      title: "工作区",
+      title: scope ? "个人工作区" : "工作区",
       sessionIds: [],
       createdAt: now,
       updatedAt: now,
@@ -417,8 +453,9 @@ export function ensureDshWorkspace(
   const projectIds: string[] = [];
   const claimedIds = new Set<string>([resolvedRootId]);
   for (const project of projects) {
+    if (scope && project.ownerId !== scope.ownerId) continue;
     const projectPath = canonicalWorkspacePath(project.path);
-    if (!isWorkspaceChild(projectPath, rootPath)) continue;
+    if (!isWorkspaceChild(projectPath, catalogRoot)) continue;
     const id = findIdByPath(projectPath) ?? `cca-project-${project.id}`;
     if (claimedIds.has(id)) continue;
     const title = project.name.trim() || project.id;
@@ -450,7 +487,18 @@ export function ensureDshWorkspace(
     projectIds.push(id);
   }
 
-  const orderedIds = [...new Set([...projectIds, resolvedRootId, ...existingIds])];
+  const orderedIds = [...new Set([
+    ...projectIds, resolvedRootId, ...(scope ? [] : existingIds),
+  ])];
+  const visibleWorkspaces: Record<string, StoredWorkspaceRecord> = {};
+  for (const id of orderedIds) {
+    const workspace = workspaces[id];
+    if (workspace) visibleWorkspaces[id] = workspace;
+  }
+  const visibleSessionIds = new Set(orderedIds.flatMap((id) => workspaces[id]?.sessionIds ?? []));
+  const sessionIds = (values: unknown) => Array.isArray(values)
+    ? values.filter((id): id is string => typeof id === "string" && (!scope || visibleSessionIds.has(id)))
+    : [];
   const state: StoredWorkspaceState = {
     unit: { name: "workspace", version: 2 },
     global: {
@@ -458,14 +506,10 @@ export function ensureDshWorkspace(
       initialized: true,
       workspaceIds: orderedIds,
       defaultWorkspaceId: projectIds[0] ?? resolvedRootId,
-      archivedSessionIds: Array.isArray(current?.global?.archivedSessionIds)
-        ? current.global.archivedSessionIds
-        : [],
-      pinnedSessionIds: Array.isArray(current?.global?.pinnedSessionIds)
-        ? current.global.pinnedSessionIds
-        : [],
+      archivedSessionIds: sessionIds(current?.global?.archivedSessionIds),
+      pinnedSessionIds: sessionIds(current?.global?.pinnedSessionIds),
     },
-    tables: { ...current?.tables, workspaces },
+    tables: { ...current?.tables, workspaces: visibleWorkspaces },
   };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;

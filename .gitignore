@@ -1,5 +1,8 @@
 node_modules
 dist
+apps/dsh-web/plugins/*/lib
+.tmp-*
+.acl-recovery
 data
 .env
 *.local

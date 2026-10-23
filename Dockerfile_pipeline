@@ -9,15 +9,18 @@ COPY package.json package-lock.json ./
 COPY apps/desktop/package.json apps/desktop/
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
+COPY apps/dsh-web/package.json apps/dsh-web/
 COPY packages/protocol/package.json packages/protocol/
 RUN ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci --no-audit --no-fund
 
 FROM deps AS server-build
 COPY tsconfig.base.json ./
 COPY apps/server ./apps/server
+COPY apps/dsh-web ./apps/dsh-web
 COPY apps/desktop/build-server.mjs ./apps/desktop/build-server.mjs
 COPY packages/protocol ./packages/protocol
-RUN npm run build -w @cca/server
+RUN npm run build -w @cca/dsh-web \
+    && npm run build -w @cca/server
 
 FROM node:22-slim
 WORKDIR /opt/cca-dsh
@@ -33,8 +36,10 @@ RUN apt-get update \
     && git config --system --add safe.directory '*'
 
 # Install the same DSH runtime as the source-built image before adding /app.
-COPY deploy/dsh/install-runtime.sh deploy/dsh/patch-helper.mjs ./
+COPY deploy/dsh/install-runtime.sh deploy/dsh/patch-helper.mjs deploy/dsh/patch-brand.mjs ./
 RUN sh ./install-runtime.sh
+# 去掉 DSH 前端的品牌露出（侧栏 logotype、首页 hero 标志与文案）。
+RUN node ./patch-brand.mjs
 
 ENV DSH_HOME=/data/dsh-home-cca
 ENV DSH_PROFILE_TEMPLATE=/opt/cca-dsh/profile-template
@@ -52,6 +57,8 @@ COPY --from=server-build /app/apps/server/dist ./apps/server/dist
 COPY packages/protocol ./packages/protocol
 COPY apps/web/package.json ./apps/web/package.json
 COPY apps/web/dist ./apps/web/dist
+COPY --from=server-build /app/apps/dsh-web/dist ./apps/dsh-web/dist
+COPY --from=server-build /app/apps/dsh-web/plugins ./apps/dsh-web/plugins
 
 EXPOSE 8787
 VOLUME ["/data"]
