@@ -274,7 +274,7 @@ button:disabled,
 
 /* Assistant-only message typography. User bubbles keep the shared markdown defaults. */
 .assistant-message .markdown-body {
-  color: var(--foreground);
+  color: color-mix(in oklab, var(--foreground) 82%, transparent);
   font-size: 0.875rem;
   line-height: 1.7;
 }

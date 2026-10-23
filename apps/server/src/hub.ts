@@ -103,7 +103,7 @@ export class Hub {
     }
   });
 
-  constructor(private readonly onSettingsApplied?: () => void) {
+  constructor() {
     this.manager.onThreadEvent((threadId, event) => {
       this.broadcastThread(threadId, event);
     });
@@ -998,9 +998,6 @@ export class Hub {
           }
           this.broadcastSettings();
           this.broadcastSkills();
-          if (modelProvidersChanged || prev.defaultModel !== nextSettings.defaultModel) {
-            this.onSettingsApplied?.();
-          }
           this.reply(conn, msg.id);
           break;
         }
