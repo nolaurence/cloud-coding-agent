@@ -13,6 +13,7 @@ import {
 import type { ToolActivity } from "@cca/protocol";
 import { cn } from "../lib/utils";
 import { Markdown } from "./Markdown";
+import "./tool-call.css";
 
 type ToolKind = "reasoning" | "modify" | "read" | "search" | "command" | "web" | "other";
 
@@ -82,7 +83,7 @@ const labels: Record<ToolKind, string> = {
 };
 
 function ToolIcon({ kind, className }: { kind: ToolKind; className?: string }) {
-  const iconClassName = cn("block size-4 shrink-0 stroke-[1.8] opacity-70", className);
+  const iconClassName = cn("block size-3.5 shrink-0 stroke-[1.8] opacity-70", className);
   if (kind === "reasoning") return <Brain className={iconClassName} />;
   if (kind === "modify") return <SquarePen className={iconClassName} />;
   if (kind === "read") return <Eye className={iconClassName} />;
@@ -98,15 +99,6 @@ function formatPayload(raw: string): string {
   } catch {
     return raw;
   }
-}
-
-function expandedBody(activity: ToolActivity): string | null {
-  const blocks: string[] = [];
-  if (activity.args?.trim()) blocks.push(`参数\n${formatPayload(activity.args)}`);
-  if (activity.result?.trim()) {
-    blocks.push(`${activity.status === "error" ? "错误" : "输出"}\n${formatPayload(activity.result)}`);
-  }
-  return blocks.length > 0 ? blocks.join("\n\n") : null;
 }
 
 function summaryLabel(kind: ToolKind, count: number): string {
@@ -178,50 +170,46 @@ export function ToolCallGroup({
   const iconKind = latestRunning ? toolKind(latestRunning) : summary.kind;
 
   return (
-    <div className="pb-2">
+    <div className="chat-tool-group" data-running={latestRunning ? "true" : undefined}>
       <button
         type="button"
-        className="group/tool-group flex min-h-6 w-full cursor-pointer items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-sm leading-relaxed transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        className="chat-disclosure-row"
         aria-label={hasFailure ? `${label}，工具调用失败` : undefined}
         aria-expanded={expanded}
         onClick={onToggle}
       >
         <span
           className={cn(
-            "flex size-6 shrink-0 items-center justify-center",
+            "chat-disclosure-leading",
             hasFailure ? "text-destructive" : "text-icon-muted",
+            latestRunning && !hasFailure && "text-sky-600 dark:text-sky-400",
           )}
           role={hasFailure ? "img" : undefined}
           aria-label={hasFailure ? "工具调用失败" : undefined}
         >
           {hasFailure ? (
-            <X className="size-4 shrink-0 stroke-[1.8] opacity-70" aria-hidden />
+            <X className="size-3.5 shrink-0 stroke-[1.8] opacity-70" aria-hidden />
           ) : (
             <ToolIcon kind={iconKind} />
           )}
         </span>
-        <span className="min-w-0 flex-1 truncate text-secondary-label">{label}</span>
+        <span className={cn("chat-disclosure-title", latestRunning && "chat-shimmer chat-shimmer--running")}>
+          {label}
+        </span>
+        <ChevronDown className="chat-disclosure-chevron" aria-hidden />
       </button>
       {expanded ? (
-        <div className="-mx-1 px-1 py-0">
-          <div className="space-y-px">
-            {activities.map((activity) => (
-              <ToolCallRow key={activity.id} activity={activity} isExpandedToolGroupEntry />
-            ))}
-          </div>
+        <div className="chat-tool-group-body">
+          {activities.map((activity) => (
+            <ToolCallRow key={activity.id} activity={activity} />
+          ))}
         </div>
       ) : null}
     </div>
   );
 }
 
-function ToolCallRow({
-  activity,
-  isExpandedToolGroupEntry,
-}: {
-  activity: ToolActivity;
-  isExpandedToolGroupEntry: boolean;
-}) {
+function ToolCallRow({ activity }: { activity: ToolActivity }) {
   const [expanded, setExpanded] = useState(false);
   const args = useMemo(() => parseArgs(activity.args), [activity.args]);
   const target = useMemo(() => toolTarget(args), [args]);
@@ -230,18 +218,21 @@ function ToolCallRow({
   const rawPreview = (target ?? activity.toolName).replace(/\s+/g, " ");
   const displayText =
     kind === "reasoning" || rawPreview.toLowerCase() === heading.toLowerCase()
-      ? heading
+      ? ""
       : rawPreview;
   const reasoningText = kind === "reasoning" ? (activity.result?.trim() ?? "") : "";
-  const body = expandedBody(activity);
-  const canExpand = kind === "reasoning" ? Boolean(reasoningText) : body !== null;
+  const input = activity.args?.trim() ? formatPayload(activity.args) : "";
+  const output = activity.result?.trim() ? formatPayload(activity.result) : "";
+  const canExpand = kind === "reasoning" ? Boolean(reasoningText) : Boolean(input || output);
   const failed = activity.status === "error";
-  const showEntryIcon = !isExpandedToolGroupEntry || failed;
+  const running = activity.status === "running";
   const rowToggleProps = canExpand
     ? {
         role: "button" as const,
         tabIndex: 0 as const,
-        "aria-label": failed ? `${displayText}，工具调用失败` : displayText,
+        "aria-label": failed
+          ? `${heading}${displayText ? `：${displayText}` : ""}，工具调用失败`
+          : `${heading}${displayText ? `：${displayText}` : ""}`,
         "aria-expanded": expanded,
         onClick: () => setExpanded((value) => !value),
         onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
@@ -255,76 +246,61 @@ function ToolCallRow({
 
   return (
     <div
-      className={cn(
-        "flex flex-col rounded-md px-0.5 transition-colors",
-        isExpandedToolGroupEntry ? "py-0" : "py-0.5",
-        canExpand &&
-          "cursor-pointer hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
-      )}
-      {...rowToggleProps}
+      className="chat-tool-row"
+      data-error={failed ? "true" : undefined}
     >
-      <div className="flex select-none items-center gap-1.5 transition-[opacity,translate] duration-200">
+      <div
+        className={cn("chat-disclosure-row select-none", canExpand && "cursor-pointer")}
+        {...rowToggleProps}
+      >
         <span
           className={cn(
-            "flex size-6 shrink-0 items-center justify-center",
+            "chat-disclosure-leading",
             failed ? "text-destructive" : "text-icon-muted",
-            !showEntryIcon && "invisible",
+            running && !failed && "text-sky-600 dark:text-sky-400",
           )}
           role={failed ? "img" : undefined}
           aria-label={failed ? "工具调用失败" : undefined}
-          aria-hidden={!showEntryIcon}
         >
           {failed ? (
-            <X className="block size-4 shrink-0 stroke-[1.8] opacity-70" aria-hidden />
+            <X className="block size-3.5 shrink-0 stroke-[1.8] opacity-70" aria-hidden />
           ) : (
             <ToolIcon kind={kind} />
           )}
         </span>
-        <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="flex min-w-0 w-full items-baseline gap-1.5 text-sm leading-relaxed">
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate",
-                  failed ? "font-medium text-destructive" : "text-secondary-label",
-                )}
-              >
-                {displayText}
-              </span>
-            </p>
-          </div>
-          <span
-            className={cn(
-              "flex size-4 shrink-0 items-center justify-center",
-              !canExpand && "invisible",
-            )}
-            aria-hidden
-          >
-            <ChevronDown
-              className={cn(
-                "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
-                expanded && "rotate-180",
-              )}
-            />
-          </span>
-        </div>
+        <span className={cn("chat-disclosure-title", running && "chat-shimmer chat-shimmer--running")}>
+          {heading}
+        </span>
+        {displayText && (
+          <>
+            <span className="chat-disclosure-sep" aria-hidden />
+            <span className="chat-disclosure-summary" title={displayText}>{displayText}</span>
+          </>
+        )}
+        {canExpand && <ChevronDown className="chat-disclosure-chevron" aria-hidden />}
       </div>
       {expanded && canExpand ? (
-        <div
-          className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
-          onClick={(event) => event.stopPropagation()}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          {kind === "reasoning" ? (
-            <div className="max-h-64 cursor-text overflow-auto text-muted-foreground/75 select-text">
-              <Markdown>{reasoningText}</Markdown>
-            </div>
-          ) : body ? (
-            <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-secondary-label select-text">
-              {body}
-            </pre>
-          ) : null}
-        </div>
+        kind === "reasoning" ? (
+          <div className="chat-tool-reasoning cursor-text select-text">
+            <Markdown>{reasoningText}</Markdown>
+          </div>
+        ) : (
+          <div className="chat-tool-io cursor-text select-text">
+            {input && (
+              <div className="chat-tool-io-section">
+                <span className="chat-tool-io-label">输入</span>
+                <pre>{input}</pre>
+              </div>
+            )}
+            {input && output && <div className="chat-tool-io-divider" aria-hidden />}
+            {output && (
+              <div className="chat-tool-io-section" data-error={failed ? "true" : undefined}>
+                <span className="chat-tool-io-label">{failed ? "错误" : "输出"}</span>
+                <pre>{output}</pre>
+              </div>
+            )}
+          </div>
+        )
       ) : null}
     </div>
   );

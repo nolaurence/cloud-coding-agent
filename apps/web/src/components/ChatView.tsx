@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Ban,
   Bot,
+  Brain,
   Check,
   ChevronDown,
   ChevronRight,
@@ -32,6 +33,7 @@ import {
   subagentTaskTitle,
 } from "./SubagentTaskCard";
 import { cn } from "../lib/utils";
+import "./chat.css";
 
 const shortTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour: "2-digit",
@@ -50,35 +52,49 @@ function formatDuration(milliseconds: number): string {
   return remainingMinutes > 0 ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
 }
 
-function ReasoningBlock({ text, streaming = false }: { text: string; streaming?: boolean }) {
-  const [open, setOpen] = useState(streaming);
+function firstNonEmptyLine(text: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
 
-  useEffect(() => {
-    setOpen(streaming);
-  }, [streaming]);
+function reasoningSummary(text: string, streaming: boolean): string {
+  if (!streaming) return firstNonEmptyLine(text).replaceAll("**", "");
+  const paragraphs = text.split(/\r?\n(?:[\t ]*\r?\n)+/);
+  const completed = paragraphs.length > 1 ? paragraphs.at(-2)?.trim() : undefined;
+  return firstNonEmptyLine(completed || text).replaceAll("**", "");
+}
+
+function ReasoningBlock({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const summary = useMemo(() => reasoningSummary(text, streaming), [streaming, text]);
 
   return (
-    <div className="assistant-reasoning mb-2">
+    <div className="chat-reasoning">
       <button
         type="button"
         aria-expanded={open}
-        className="flex min-h-6 items-center gap-1 rounded-md px-1 py-0.5 text-left text-[12px] font-medium leading-5 text-muted-foreground transition-colors hover:bg-accent/20 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/60"
+        className="chat-disclosure-row"
         onClick={() => setOpen((value) => !value)}
       >
-        <ChevronRight
-          className={cn("h-3.5 w-3.5 shrink-0 opacity-70 transition-transform", open && "rotate-90")}
-        />
-        <span>{streaming ? "正在思考" : "思考过程"}</span>
-        {streaming && (
-          <span className="inline-flex items-center gap-[3px] pl-0.5" aria-hidden="true">
-            <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/35" />
-            <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/35 [animation-delay:200ms]" />
-            <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/35 [animation-delay:400ms]" />
-          </span>
+        <span className="chat-disclosure-leading">
+          <Brain className="h-3.5 w-3.5 stroke-[1.8]" aria-hidden />
+        </span>
+        <span className="chat-disclosure-title">思考</span>
+        {!open && summary && (
+          <>
+            <span className="chat-disclosure-sep" aria-hidden />
+            <span className={cn("chat-disclosure-summary", streaming && "chat-shimmer")}>
+              {summary}
+            </span>
+          </>
         )}
+        <ChevronDown className="chat-disclosure-chevron" aria-hidden />
       </button>
       {open && (
-        <div className="ml-2.5 mt-1 border-l border-border/60 pl-3 text-muted-foreground/75">
+        <div className="chat-disclosure-body chat-reasoning-body">
           <Markdown>{text}</Markdown>
         </div>
       )}
@@ -122,7 +138,7 @@ function CopyAction({
     <button
       type="button"
       className={cn(
-        "flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-200",
+        "flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
         className,
       )}
       aria-label={copied ? "已复制" : label}
@@ -231,8 +247,8 @@ function AssistantMessage({
         </div>
       )}
       {showMeta && !streaming && (message.text || images.length > 0) && (
-        <div className="mt-1.5 flex h-7 items-center gap-2 text-xs tabular-nums text-muted-foreground opacity-100 transition-opacity duration-200 sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
-          {message.text && <CopyAction text={message.text} label="复制回复" className="h-6 w-6 text-muted-foreground" />}
+        <div className="mt-1 flex h-6 items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground opacity-100 transition-opacity duration-200 sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
+          {message.text && <CopyAction text={message.text} label="复制回复" />}
           <MessageTime at={message.createdAt} />
         </div>
       )}
@@ -251,18 +267,17 @@ function UserMessage({ message }: { message: ChatMessage }) {
   const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
 
   return (
-    <article className="group/user flex flex-col items-end py-1">
+    <article className="group/user flex flex-col items-end py-0.5">
       {message.authorId && showAuthors && (
         <div className="mb-1 px-2 text-[11px] text-muted-foreground">
           {message.authorId === currentUsername ? "你" : message.authorId}
         </div>
       )}
-      <div className="relative max-w-[80%] rounded-xl bg-muted px-3 py-2 text-foreground">
-        <CopyAction
-          text={message.text}
-          label="复制消息"
-          className="absolute -left-9 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100"
-        />
+      <div className="chat-user-bubble relative">
+        <div className="absolute -left-[74px] top-1/2 flex -translate-y-1/2 items-center gap-1 text-[11px] tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100">
+          <MessageTime at={message.createdAt} />
+          <CopyAction text={message.text} label="复制消息" />
+        </div>
         {images.length > 0 && (
           <div className={cn("grid gap-2", images.length > 1 && "grid-cols-2")}>
             {images.map((image) => (
@@ -367,13 +382,17 @@ function WorkingIndicator({ startedAt }: { startedAt: number | null }) {
   }, [startedAt]);
 
   return (
-    <div className="flex items-center gap-2 px-1.5 py-1 text-[11px] tabular-nums text-muted-foreground" aria-live="polite">
-      <span className="inline-flex items-center gap-[3px]" aria-hidden="true">
-        <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30" />
-        <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30 [animation-delay:200ms]" />
-        <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30 [animation-delay:400ms]" />
+    <div className="chat-running">
+      <span className="sr-only" role="status">正在执行</span>
+      <span className="chat-running-divider" aria-hidden />
+      <span className="chat-running-content" aria-hidden="true">
+        <span className="chat-running-icon">
+          <Sparkles className="h-3.5 w-3.5 stroke-[1.8]" />
+        </span>
+        <span className="chat-shimmer chat-shimmer--running">
+          {startedAt ? `正在执行，用时 ${formatDuration(now - startedAt)}` : "正在执行"}
+        </span>
       </span>
-      <span>{startedAt ? `已工作 ${formatDuration(now - startedAt)}` : "正在工作"}</span>
     </div>
   );
 }
@@ -416,61 +435,83 @@ function CompletedTurn({
     if (current && current[0]?.kind !== "subagent") current.push(entry);
     else processSegments.push([entry]);
   }
-  const hasCollapsibleEntries = processEntries.some((entry) => entry.kind !== "subagent");
+  const toolCount = processEntries.filter((entry) => entry.kind === "tool").length;
+  const messageCount = processEntries.filter(
+    (entry) => entry.kind === "message" && entry.message.role !== "user",
+  ).length;
+  const hasCollapsibleEntries = Boolean(reasoning) || processEntries.some((entry) => entry.kind !== "subagent");
   const startedAt = turnStartedAt(entries);
   const endedAt = turnEndedAt(entries);
-  const durationLabel =
-    startedAt !== null && endedAt !== null ? `工作了 ${formatDuration(endedAt - startedAt)}` : "工作过程";
+  const headerLabel = startedAt !== null && endedAt !== null ? "已完成" : "工作过程";
+  const headerMeta = [
+    toolCount > 0 ? `${toolCount} 次工具调用` : undefined,
+    messageCount > 0 ? `${messageCount} 条消息` : undefined,
+  ].filter(Boolean).join(" · ");
+  const renderSegment = (segment: ChatTimelineEntry[]) => {
+    const first = segment[0];
+    if (!first) return null;
+    if (first.kind === "subagent") {
+      return (
+        <SubagentTaskCard
+          key={first.id}
+          subagent={first.subagent}
+          onOpen={onOpenSubagent}
+        />
+      );
+    }
+    return (
+      <ProcessEntries
+        key={`segment:${first.id}`}
+        entries={segment}
+        expandedWorkGroups={expandedWorkGroups}
+        onToggleWorkGroup={onToggleWorkGroup}
+        onOpenSubagent={onOpenSubagent}
+      />
+    );
+  };
 
   return (
     <section className="flex flex-col gap-3" data-turn-id={turnId}>
       {userEntries.map((entry) => (
         <UserMessage key={entry.id} message={entry.message} />
       ))}
-      {reasoning && (hasCollapsibleEntries ? expanded : true) && (
-        <ReasoningBlock text={reasoning} />
-      )}
-      {processSegments.map((segment) => {
-        const first = segment[0];
-        if (!first) return null;
-        if (first.kind === "subagent") {
-          return (
-            <SubagentTaskCard
-              key={first.id}
-              subagent={first.subagent}
-              onOpen={onOpenSubagent}
-            />
-          );
-        }
-        if (!expanded) return null;
-        return (
-          <ProcessEntries
-            key={`segment:${first.id}`}
-            entries={segment}
-            expandedWorkGroups={expandedWorkGroups}
-            onToggleWorkGroup={onToggleWorkGroup}
-            onOpenSubagent={onOpenSubagent}
-          />
-        );
-      })}
       {hasCollapsibleEntries && (
-        <div className="border-b border-border/60 pb-2 pt-1">
+        <div className="chat-turn-process">
           <button
             type="button"
             aria-expanded={expanded}
             data-scroll-anchor-ignore
             onClick={() => onToggleTurn(turnId)}
-            className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-xs text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+            className="chat-process-header"
           >
-            <span>{durationLabel}</span>
-            {expanded ? (
-              <ChevronDown className="size-3.5" />
-            ) : (
-              <ChevronRight className="size-3.5" />
-            )}
+            <span className="chat-process-header-main">
+              <span className="chat-process-header-label">{headerLabel}</span>
+              {startedAt !== null && endedAt !== null && (
+                <>
+                  <span className="chat-disclosure-sep" aria-hidden />
+                  <span className="chat-process-header-meta">用时 {formatDuration(endedAt - startedAt)}</span>
+                </>
+              )}
+              {headerMeta && (
+                <>
+                  <span className="chat-disclosure-sep" aria-hidden />
+                  <span className="chat-process-header-meta">{headerMeta}</span>
+                </>
+              )}
+            </span>
+            <ChevronDown className="chat-disclosure-chevron" aria-hidden />
           </button>
+          {expanded ? (
+            <div className="chat-process-body">
+              {reasoning && <ReasoningBlock text={reasoning} />}
+              {processSegments.map(renderSegment)}
+            </div>
+          ) : processSegments
+            .filter((segment) => segment[0]?.kind === "subagent")
+            .map(renderSegment)}
         </div>
       )}
+      {!hasCollapsibleEntries && processSegments.map(renderSegment)}
       {terminalAssistant && (
         <AssistantMessage message={terminalAssistant.message} showReasoning={false} />
       )}
@@ -878,7 +919,7 @@ export function ChatView({
           className="h-full min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain [scrollbar-gutter:stable_both-edges]"
         >
           <div
-            className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-3 pt-4 sm:px-5 sm:pt-5"
+            className="chat-transcript mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-3 pt-4 sm:px-5 sm:pt-5"
             style={{ paddingBottom: Math.max(20, bottomInset + 16) }}
           >
             {selectedSubagent ? (
@@ -901,7 +942,7 @@ export function ChatView({
                 {blocks.map((block) => {
                   if (block.kind === "system") {
                     return (
-                      <div key={block.id} className="py-2 text-center text-xs text-zinc-400">
+                      <div key={block.id} className="py-2 text-center text-xs text-muted-foreground">
                         {block.message.text}
                       </div>
                     );
@@ -964,17 +1005,22 @@ export function ChatView({
         </div>
 
         {!selectedSubagent && !atBottom && (
-          <button
-            type="button"
-            aria-label="回到最新消息"
-            title="回到最新消息"
-            className="absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-600 shadow-sm hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-            style={{ bottom: bottomInset + 6 }}
-            onClick={scrollToBottom}
+          <div
+            className="pointer-events-none absolute inset-x-0 z-10 flex justify-center"
+            style={{ bottom: bottomInset + 8 }}
           >
-            <ArrowDown className="h-3.5 w-3.5" />
-            回到最新消息
-          </button>
+            <div className="flex w-full max-w-3xl justify-end px-3 sm:px-5">
+              <button
+                type="button"
+                aria-label="回到最新消息"
+                title="回到最新消息"
+                className="chat-back-to-bottom pointer-events-auto"
+                onClick={scrollToBottom}
+              >
+                <ArrowDown className="h-4 w-4" aria-hidden />
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </MessageContext.Provider>

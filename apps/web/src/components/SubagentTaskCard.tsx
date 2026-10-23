@@ -64,7 +64,7 @@ export function SubagentTaskCard({
         </span>
       </span>
       {metadata && (
-        <span className="hidden max-w-44 shrink truncate text-[11px] text-muted-foreground sm:block">
+        <span className="hidden max-w-56 shrink truncate text-[11px] text-muted-foreground sm:block">
           {metadata}
         </span>
       )}

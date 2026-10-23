@@ -38,6 +38,8 @@ import { getThreadAccess } from "./threadAccess.js";
 import { browserPool, NOVNC_ROOT } from "./browser.js";
 import WebSocket from "ws";
 import { clearBootstrapCredentials } from "./runtimeEnv.js";
+import { dshManager } from "./dshManager.js";
+import { registerDshRoutes } from "./dshProxy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.resolve(__dirname, "../../web/dist");
@@ -77,8 +79,15 @@ export async function startServer(options: { port?: number; host?: string; insta
     { parseAs: "buffer", bodyLimit: MAX_IMAGE_SIZE },
     (_req, body, done) => done(null, body),
   );
+  app.addContentTypeParser(
+    "*",
+    { parseAs: "buffer", bodyLimit: 64 * 1024 * 1024 },
+    (_req, body, done) => done(null, body),
+  );
 
-  const hub = new Hub();
+  const hub = new Hub(() => dshManager.reload());
+
+  registerDshRoutes(app, { manager: dshManager, authenticate });
 
   app.get("/health", async () => ({ ok: true }));
   app.get("/api/runtime", async () => ({
@@ -349,12 +358,14 @@ export async function startServer(options: { port?: number; host?: string; insta
 
   await app.listen({ port, host });
   console.log(`[cca] server listening on http://${host}:${port}`);
+  dshManager.start();
   hub.warmupPlugins();
 
   let shuttingDown: Promise<void> | null = null;
   const close = () => {
     if (!shuttingDown) {
       shuttingDown = (async () => {
+        await dshManager.close();
         await hub.shutdown();
         await browserPool.stop();
         await app.close();

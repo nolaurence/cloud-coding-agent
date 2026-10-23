@@ -2,8 +2,7 @@ import { useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
-import { NewChatPage } from "./pages/NewChatPage";
-import { ThreadPage } from "./pages/ThreadPage";
+import { DshPage } from "./pages/DshPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SettingsLayout } from "./pages/settings/SettingsLayout";
 import { GeneralSettings } from "./pages/settings/GeneralSettings";
@@ -47,8 +46,8 @@ export default function App() {
     <Routes>
       <Route path="share/:token" element={<ShareThreadPage />} />
       <Route element={<AppLayout />}>
-        <Route index element={<NewChatPage />} />
-        <Route path="thread/:threadId" element={<ThreadPage />} />
+        <Route index element={<DshPage />} />
+        <Route path="thread/:threadId" element={<Navigate to="/" replace />} />
         <Route
           path="skills"
           element={

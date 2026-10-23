@@ -12,6 +12,16 @@ services:
       - DATABASE_URL=sqlite:/data/cca.db
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?请在 .env 中配置管理员密码}
+      - CCA_PUBLIC_URL=${CCA_PUBLIC_URL:-http://192.168.100.241:7001}
+      - DSH_ENABLED=${DSH_ENABLED:-true}
+      - DSH_SANDBOX_ENABLED=${DSH_SANDBOX_ENABLED:-true}
+      - DSH_SANDBOX_SSH_HOST=${DSH_SANDBOX_SSH_HOST:-192.168.100.130}
+      - DSH_SANDBOX_SSH_USER=${DSH_SANDBOX_SSH_USER:-nolaurence}
+      - DSH_SANDBOX_SSH_KEY=${DSH_SANDBOX_SSH_KEY:-/data/dsh-home-cca/.ssh/cca_sandbox_ed25519}
+      - DSH_SANDBOX_WORKSPACE=${DSH_SANDBOX_WORKSPACE:-/workspace}
+      - DSH_SANDBOX_SYNC_ENABLED=${DSH_SANDBOX_SYNC_ENABLED:-true}
+      - DSH_SANDBOX_SYNC_KEY=${DSH_SANDBOX_SYNC_KEY:-/data/dsh-home-cca/.ssh/cca_workspace_sync_ed25519}
+      - DSH_SANDBOX_HOST_WORKSPACE=${DSH_SANDBOX_HOST_WORKSPACE:-/home/nolaurence/cca-workspaces/default}
     init: true
     healthcheck:
       test:

@@ -131,6 +131,8 @@ docker compose -f docker-compose-prod.yml up -d --build
 生产 Compose 只启动 `agent`,不会拉起 MySQL。默认使用宿主机端口 `7001`;可用 `APP_PORT` 修改宿主机端口,用 `WORKSPACE_DIR` 修改挂载到 `/workspace` 的代码目录;容器内服务固定监听 `8787`。当前 Compose 还将宿主机 `/home/nolaurence/dev` 挂载到容器 `/codeprojects`,因此本项目在界面中应添加为 `/codeprojects/cloud-coding-agent`。`.env` 已被 git 忽略。
 外部 MySQL 用户需要目标数据库的 `CREATE`/`SELECT`/`INSERT`/`UPDATE`/`DELETE` 权限;`DATABASE_URL` 密码中的 URL 保留字符需要百分号编码。
 
+DeepSeek Harness 的 workspace 实际运行在 sandbox 主机上。首次启动时,服务会把容器 `/workspace` 通过受限 `rrsync` 增量种子同步到 `DSH_SANDBOX_HOST_WORKSPACE`(默认 `/home/nolaurence/cca-workspaces/default`),使用 `--ignore-existing` 保留 sandbox 中已经生成的文件。成功后写入 `$DSH_HOME/.workspace-sync-v1.json`;需要重新导入时删除该标记并重启。安装 sandbox 时使用 `deploy/dsh/sandbox-install.sh <sandbox-pubkey> [workspace-sync-pubkey]` 同时登记网关密钥和同步密钥。
+
 ## 使用
 
 1. 打开页面,使用管理员账户登录(开发 Compose 默认 `admin`/`admin123`;生产 Compose 使用 `.env` 中的配置),或注册普通账户
