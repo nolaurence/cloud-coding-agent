@@ -1,9 +1,13 @@
 node_modules
+**/node_modules
 data
 .env
+.env.*
 *.local
 *.log
 .git
+release
+workspace
 **/dist
 !apps/web/dist
 !apps/web/dist/**

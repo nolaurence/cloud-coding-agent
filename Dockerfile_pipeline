@@ -6,10 +6,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
+COPY apps/desktop/package.json apps/desktop/
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/protocol/package.json packages/protocol/
-RUN npm ci --no-audit --no-fund
+RUN ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci --no-audit --no-fund
 
 FROM deps AS server-build
 COPY tsconfig.base.json ./
