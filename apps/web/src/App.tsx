@@ -16,16 +16,6 @@ import { ShareThreadPage } from "./pages/ShareThreadPage";
 import { useApp } from "./lib/store";
 import { useTheme } from "./lib/theme";
 
-/** Revoke both the browser token and the server-side DSH portal session. */
-function LogoutPage() {
-  const logout = useApp((state) => state.logout);
-  useEffect(() => {
-    void fetch("/dsh/logout", { method: "POST" }).catch(() => undefined);
-    logout();
-  }, [logout]);
-  return <Navigate to="/login" replace />;
-}
-
 export default function App() {
   useTheme();
   const user = useApp((s) => s.user);
@@ -33,7 +23,7 @@ export default function App() {
   const authReady = useApp((s) => s.authReady);
 
   useEffect(() => {
-    document.title = "Kloud Work";
+    document.title = localMode ? "Kloud Work" : "Kloud Coding Agent";
   }, [localMode]);
 
   if (!authReady) {
@@ -55,11 +45,9 @@ export default function App() {
   return (
     <Routes>
       <Route path="share/:token" element={<ShareThreadPage />} />
-      <Route index element={<DshPage key={user.username} />} />
-      <Route path="thread/:threadId" element={<Navigate to="/" replace />} />
-      <Route path="logout" element={<LogoutPage />} />
-      <Route path="login" element={<Navigate to="/" replace />} />
       <Route element={<AppLayout />}>
+        <Route index element={<DshPage />} />
+        <Route path="thread/:threadId" element={<Navigate to="/" replace />} />
         <Route
           path="skills"
           element={

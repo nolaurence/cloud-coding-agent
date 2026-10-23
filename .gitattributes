@@ -1,3 +1,1 @@
 deploy/dsh/*.sh text eol=lf
-# compose 文件里嵌了 sh 脚本(agent-init),必须保持 LF
-docker-compose*.yml text eol=lf

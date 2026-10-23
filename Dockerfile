@@ -7,18 +7,15 @@ COPY package.json package-lock.json* ./
 COPY apps/desktop/package.json apps/desktop/
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
-COPY apps/dsh-web/package.json apps/dsh-web/
 COPY packages/protocol/package.json packages/protocol/
 RUN ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci --no-audit --no-fund
 COPY tsconfig.base.json ./
 COPY apps/desktop/build-server.mjs ./apps/desktop/build-server.mjs
 COPY apps/server ./apps/server
 COPY apps/web ./apps/web
-COPY apps/dsh-web ./apps/dsh-web
 COPY packages/protocol ./packages/protocol
 COPY deploy ./deploy
 RUN npm run build -w @cca/web \
-    && npm run build -w @cca/dsh-web \
     && npm run build -w @cca/server
 
 FROM node:22-slim
@@ -37,9 +34,8 @@ RUN apt-get update \
 # container startup never needs network access. DSH must own this profile's
 # pnpm workspace: pnpm supplies the peer closure that a plain npm install omits,
 # leaving core services such as sessionController unavailable.
-COPY deploy/dsh/install-runtime.sh deploy/dsh/patch-helper.mjs deploy/dsh/patch-brand.mjs ./
-RUN sh ./install-runtime.sh \
-    && node ./patch-brand.mjs
+COPY deploy/dsh/install-runtime.sh deploy/dsh/patch-helper.mjs ./
+RUN sh ./install-runtime.sh
 
 # Add the completed application after all package-manager operations. Later
 # layers must not rewrite /app/node_modules or its .bin directory.

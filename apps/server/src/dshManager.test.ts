@@ -21,10 +21,9 @@ function fixture(t: TestContext) {
     DSH_PROFILE_TEMPLATE: path.join(root, "missing-template"),
     DSH_SSH_HELPER_LOCAL: helper,
     DSH_SANDBOX_SSH_KEY: path.join(root, "missing-key"),
-    DSH_SANDBOX_WORKSPACE: path.join(root, "workspace"),
     CCA_PUBLIC_URL: "http://example.test:8787",
   });
-  const manager = new DshManager("user");
+  const manager = new DshManager();
   t.mock.method(console, "error", () => undefined);
   t.after(async () => {
     await manager.close();
@@ -53,7 +52,7 @@ test("DSH preserves the configuration error and automatically revalidates repair
   fs.writeFileSync(helper, "// installed helper\n");
   // The next automatic attempt must pass configuration validation and reach
   // the next deployment check, without a CCA process restart.
-  await waitForError(manager, /DSH profile 镜像模板不完整/, 4_000);
+  await waitForError(manager, /缺少沙箱 SSH 私钥/, 4_000);
 });
 
 test("DSH reload re-resolves configuration immediately during retry backoff", async (t) => {
@@ -81,7 +80,7 @@ test("disabled DSH does not validate missing runtime files or start a supervisor
 });
 
 test("DSH retry requires authentication and only wakes a failed launch", async (t) => {
-  const manager = new DshManager("user");
+  const manager = new DshManager();
   let status: DshStatus = {
     enabled: true, ready: false, starting: false, providerCount: 0, modelCount: 0,
     error: "找不到 SSH helper 安装文件",
@@ -92,7 +91,7 @@ test("DSH retry requires authentication and only wakes a failed launch", async (
   t.after(() => app.close());
   await app.register(websocket);
   registerDshRoutes(app, {
-    managers: { forUser: () => manager },
+    manager,
     authenticate: (header) => header === "Bearer valid"
       ? { username: "user", role: "user" }
       : null,
@@ -118,17 +117,4 @@ test("DSH retry requires authentication and only wakes a failed launch", async (
   status = { ...status, enabled: false, ready: false, starting: false };
   assert.equal((await retry()).statusCode, 503);
   assert.equal(reload.mock.callCount(), 1);
-});
-
-test("DSH logout clears the portal cookie below its path", async (t) => {
-  const app = Fastify();
-  t.after(() => app.close());
-  await app.register(websocket);
-  registerDshRoutes(app, {
-    managers: { forUser: () => ({}) as never },
-    authenticate: () => null,
-  });
-  const response = await app.inject({ method: "POST", url: "/dsh/logout" });
-  assert.equal(response.statusCode, 200);
-  assert.match(String(response.headers["set-cookie"]), /cca_dsh_session=; Max-Age=0/);
 });

@@ -18,9 +18,6 @@ export default defineConfig({
     proxy: {
       "/ws": { target: "ws://localhost:8787", ws: true },
       "/api": { target: "http://localhost:8787", changeOrigin: true },
-      // The DSH shell, its plugin bundles, and the remote.mux WebSocket are
-      // owned by the server, including while the CCA shell runs on Vite.
-      "/dsh": { target: "http://localhost:8787", changeOrigin: true, ws: true },
     },
   },
 });

@@ -1,49 +1,43 @@
-# Kloud Work · Cloud Coding Agent
+# Cloud Coding Agent
 
-基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的多用户云端编码 Agent。Agent core 使用官方 `@deepseek-ai/dsh` 包；Web 外壳、侧边栏和品牌位是搬入本仓库的 DSH 源码（`apps/dsh-web`），其余聊天/工具 UI 仍由官方 client 插件提供。登录后整页运行在 `/dsh/`，不再使用 iframe。CCA 负责登录、用户、项目、模型提供方、部署和反向代理，DSH 负责会话、工具、UI 和 agent loop。
+基于 [OpenAI Codex](https://github.com/openai/codex) app-server 的云端编码 Agent,提供 Web 对话界面。固定使用 `@openai/codex@0.114.0`,通过 stdio JSON-RPC 接入会话、文件编辑和命令执行,不解析交互终端输出。现有业务事件和工具定义仍复用 Copilot SDK 类型,但新会话不再启动 Copilot CLI。
 
 ## 功能
 
-- **DSH 原生 UI**：`apps/dsh-web` 是搬入的 DSH Web 外壳源码（Vite + React 18），由官方 host 注入 boot manifest；侧边栏和品牌位由本仓库的本地 client 插件接管，支持 CCA 的设置/退出入口；聊天、工具渲染等其余 UI 使用官方 `@deepseek-ai/dsh-client-*` 插件包
-- **官方 agent core**：每个用户独立启动 `dsh --profile web` 进程，DSH 自己持有会话、工具调用、审批和文件状态；模型流量经 CCA 的本地 Responses 网关转发
-- **程序化 agent 通道**：`@deepseek-ai/dsh-sdk-client` 驱动 `dsh --profile sdk`，提供 `POST /api/agent/run`，供连接器/自动化复用同一套官方运行时
-- **用户系统**：登录/注册；管理员由环境变量 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 创建；`/dsh/` 通过一次性 ticket 换取绑定 CCA 用户的 portal cookie，DSH 凭据不落浏览器
-- **项目管理与隔离**：一个项目 = 服务器上的一个工作目录；每个用户独立 `DSH_HOME`、workspace、会话和 DSH 进程
-- **模型配置**：支持 OpenAI Chat Completions / Responses 与 Azure OpenAI 兼容接口；BYOK，网关密钥只存在于服务端进程
-- **管理设置**：`/settings` 保留模型、MCP、技能、连接器、用户和 Git 绑定等 CCA 管理页；`/` 登录后进入 DSH 工作台
-- **数据存储**：内置 SQLite 单文件部署，也可连接 MySQL，并兼容旧 JSON 数据迁移
-- **远程沙箱**：`DSH_SANDBOX_ENABLED=true` 时按用户配置 SSH 沙箱、文件/终端 provider 和工作区同步
+- **对话流**(自研,非 assistant-ui):流式输出、思考过程折叠、工具调用时间线、Markdown 渲染
+- **Office 查看器**:工作区内的 DOCX、XLSX、PPTX 可在右侧 tab 中只读预览
+- **工作台布局**:右上角按钮可将对话区与工作区面板互换,位置会在本机记住
+- **模型配置**:支持 OpenAI(Chat Completions)与 OpenAI Responses 两种 wire 协议,以及 Azure 的 OpenAI 兼容接口;BYOK,会话内可切换同一提供方的模型。暂不支持 Anthropic 原生 Messages 协议
+- **MCP 模块**:本地 stdio / 远程 HTTP MCP 服务器管理,支持平台级配置和 workspace 根目录 `.mcp.json`,按工具白名单启用
+- **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用
+- **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
+- **项目管理**:一个项目 = 服务器上的一个工作目录,会话在其 cwd 中执行
+- **代码托管账户**:在「设置 → 通用」绑定 GitHub / Gitee,Agent 可使用当前用户的授权执行 clone、fetch、pull、push
+- **用户系统**:登录/注册;管理员由环境变量 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 创建,注册用户为普通用户;会话按用户隔离,管理员可见全部
+- **数据存储**:内置 SQLite 单文件部署,也可连接 MySQL,并兼容旧 JSON 数据迁移
 
 ## 架构
 
 ```
-浏览器
-  ├─ /login, /settings, /share/*   apps/web (React 19 + Tailwind + zustand)
-  └─ /dsh/*                        apps/dsh-web (搬入的 DSH Web 外壳)
-                                      │  服务端注入 __DSH_BOOT__ / 插件预加载
-apps/server (Fastify)
-  ├─ /dsh/ 外壳 HTML + 静态资源
-  ├─ /dsh/api/*, /dsh/plugins/*  → 每个用户的 dsh --profile web（官方 @deepseek-ai/dsh）
-  ├─ /api/agent/run              → @deepseek-ai/dsh-sdk-client（dsh --profile sdk）
-  └─ 登录/用户/项目/设置/连接器/本地 LLM 网关
+apps/web (React 19 + Vite + Tailwind v4 + zustand + react-router)
+      │  WebSocket /ws (JSON 协议,见 packages/protocol)
+apps/server (Fastify + Codex adapter)
+      │  stdio JSON-RPC
+Codex app-server(会话、工具、MCP、技能)
+      │  Responses
+本地鉴权网关 → 原生 Responses / Chat Completions 上游
 ```
 
-DSH 的 Web 前端不是独立应用：`dsh web` 会向页面注入 `window.__DSH_BOOT__`、插件预加载和主题初始化。CCA 在 `/dsh/` 取回当前用户 host 渲染的 index.html，把这些注入块拼进 `apps/dsh-web/dist/index.html`，再把 `/dsh/api`、`/dsh/plugins` 和 WebSocket 转发到该用户的 DSH 进程。`apps/dsh-web/plugins` 下的 `sidebar`、`brand` 会在构建时生成 DSH 的 `__ModuleLoader__` client bundle，并通过 `cca-integration.json` 覆盖官方同 id 的 profile 行。
-
-数据存储支持三种模式:`DATABASE_URL=sqlite:/path/to/cca.db` 使用内置 SQLite,`DATABASE_URL=h2:/path/to/cca.db` 是桌面本地模式使用的内置嵌入式数据库别名,`DATABASE_URL=mysql://...` 使用 MySQL;两者都会自动建表并从旧 JSON 文件迁移。未配置时继续使用 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。DSH 会话、workspace 和配置保存在 `$DSH_HOME/users/<用户名 SHA-256>/`；CCA 的线程/分享/连接器数据仍在 `CCA_DATA_DIR`，备份时两者都需要覆盖。旧 Codex/Copilot 代码保留在仓库中用于历史兼容，但主界面和主 agent 已不再走它们。
+数据存储支持三种模式:`DATABASE_URL=sqlite:/path/to/cca.db` 使用内置 SQLite,`DATABASE_URL=h2:/path/to/cca.db` 是桌面本地模式使用的内置嵌入式数据库别名,`DATABASE_URL=mysql://...` 使用 MySQL;两者都会自动建表并从旧 JSON 文件迁移。未配置时继续使用 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。新会话在数据目录的 `codex-home/<会话 ID>/` 中保存原生历史、线程映射和应用事件,每个会话使用独立进程和 CODEX_HOME。配置 MySQL/SQLite 时,新会话消息、工具调用/结果及其时间戳写入 `thread_events` 表,按会话内序号读取,事件 ID 去重;写入串行分批提交。`cca-events.jsonl` 保留为故障补录日志,已有 Codex 会话在下次打开时自动补录,数据库故障会明确报错。未配置数据库时继续使用 JSONL。流式正文增量不逐 token 入库,完成消息保存全文;工具开始/完成事件保留参数、结果、状态和时间。Codex 原生状态仍用于续聊,数据库不能替代它,备份仍须覆盖数据库和数据目录。旧 `copilot-home/` 历史保留只读,不自动转换或续写;升级前应备份整个数据目录。旧 Copilot 默认模型会清空,请重新选择模型;连接器请重新选择非 Copilot 模型。
 
 ## 本地开发
 
-需要 Node.js 22.13 或更高版本。`@deepseek-ai/dsh` 是 `apps/server` 的生产依赖，`npm install` 会一并安装。
+需要 Node.js 22.13 或更高版本。
 
 ```bash
 npm install
-npm run dev        # server :8787 + web :5173
-                   # 登录/管理:http://localhost:5173
-                   # DSH 工作台:http://localhost:8787/dsh/(5173 也会代理 /dsh)
+npm run dev        # server :8787 + web :5173(代理 /ws)
 ```
-
-`npm run dev` 会先构建 `apps/dsh-web`（外壳 + 本地 client 插件），再启动 server。只改 DSH 外壳或插件后重新运行 `npm run build -w @cca/dsh-web`；只重建插件可运行 `npm run build:plugins -w @cca/dsh-web`。
 
 ## Desktop(macOS / Windows)
 
@@ -57,10 +51,6 @@ npm run desktop:dist     # 当前平台生成 DMG/ZIP 或 NSIS 安装包
 ```
 
 发布配置只构建当前主机架构。为覆盖 macOS Intel/Apple Silicon 与 Windows x64/arm64,请使用 `macos-*-x64`、`macos-*-arm64`、`windows-*-x64`、`windows-*-arm64` 四个原生 runner（可组成 CI matrix）,在每个 runner 上从干净目录执行 `npm ci && npm run desktop:dist`。不要在单个 runner 上用 `--x64 --arm64` 交叉打包。`node-pty`、Koffi、Codex 及兼容依赖的平台运行时保留在 ASAR 外;`npm ci` 会按构建主机安装对应可选平台包；`node-pty` 必须存在目标 OS/架构预编译文件（或在目标 runner 上安装编译工具后构建）。跨架构发布前请在每个目标架构的 runner 上执行并冒烟测试,不要复用其他平台的 `node_modules`。 浏览器网络策略会在顶层导航及 Electron 请求拦截阶段重新解析主机并拒绝本机、私网、链路本地和元数据目标（除非设置 `BROWSER_ALLOW_PRIVATE_NETWORK=true`）；这属于尽力过滤,不是 DNS pinning。正式发布还需配置 Apple Developer ID 签名/公证和 Windows Authenticode 证书;本仓库不会存放证书。产物写入 `release/`。
-
-> 桌面打包目前没有把 DSH runtime 和 `apps/dsh-web` 一起塞进安装包；桌面本地模式打开 `/` 时若 DSH 不可用会显示可重试的错误页。真正的 DSH 工作台目前面向 Docker/服务器部署。
-
-
 
 ## Standalone 部署
 
@@ -145,21 +135,20 @@ DeepSeek Harness 的 workspace 实际运行在 sandbox 主机上。首次启动�
 
 ## 使用
 
-1. 打开 `/`,使用管理员账户登录(开发 Compose 默认 `admin`/`admin123`;生产 Compose 使用 `.env` 中的配置),或注册普通账户
-2. 登录成功后浏览器整页进入 `/dsh/`;左侧是 DSH 侧边栏(本地源码插件),底部「设置 / 退出」回到 CCA 管理页或退出登录
-3. 管理员在 `/settings/providers` 添加 OpenAI 兼容服务(baseUrl、apiKey、模型列表;Responses 协议选 `openai-responses`),在 `/settings/general` 选择默认模型
-4. 如需操作远程仓库,在 `/settings/general` 用具备仓库读写权限的访问令牌绑定 GitHub 或 Gitee
-5. 在 DSH 工作台里新建会话、选择工作区并输入任务;`@` 引用文件,`/` 调用 DSH 指令/技能
-6. `/settings/mcp`、`/settings/connectors`、`/settings/users` 管理 CCA 侧的 MCP、连接器和用户
-7. 需要让外部程序驱动 agent 时,管理员可调用 `POST /api/agent/run`(Bearer 管理员 token,body `{"prompt":"..."}`);它走官方 `@deepseek-ai/dsh-sdk-client`，与 Web 工作台共用模型网关
+1. 打开页面,使用管理员账户登录(开发 Compose 默认 `admin`/`admin123`;生产 Compose 使用 `.env` 中的配置),或注册普通账户
+2. 左侧边栏「添加项目目录」→ 填服务器上的绝对路径
+2. 设置 → 模型:添加一个 OpenAI 兼容服务(填 baseUrl、apiKey、模型列表;Responses 协议选 `openai-responses`)
+3. 设置 → 通用:选择默认模型
+4. 如需操作远程仓库,在设置 → 通用中使用具备仓库读写权限的访问令牌绑定 GitHub 或 Gitee
+5. 回到首页,输入任务开聊;`@` 引用文件,`/` 选择技能
+6. 设置 → MCP / 技能:按需接入平台级外部工具与提示词模块
+7. Agent 可通过 `manage_mcp_servers` 和 `manage_skills` 查询或管理资源;workspace 写操作对工作区所有者开放,平台写操作仅管理员 Agent 可用。workspace 同名 MCP 覆盖平台配置
 
 绑定令牌使用服务端密钥加密保存,按会话所属用户读取。Agent 通过受控的 `authenticated_git` 工具执行远程 Git 操作;令牌不会写入仓库 URL、`.gitconfig` 或 Web 终端环境。HTTPS 和常见 SSH remote 会统一通过对应平台的 HTTPS 认证执行。
 
-### 模型接入与兼容范围
+### Codex 模型接入与兼容范围
 
-主路径是 DSH：`/settings/providers` 里配置的每个 provider 会启动一个本地 Responses 网关，DSH 通过 `llm-pi-ai` 的 `openai-responses` 路由访问它。Base URL 填 API 根路径(例如含 `/v1`),选择 `completions` 或 `responses`,再设置默认模型；Chat 上游必须支持 `stream: true`、function tool calling 和 SSE。
-
-旧 Codex/Copilot 兼容代码仍保留在 `apps/server/src/codex.ts`、`copilot.ts` 中，供历史会话和连接器迁移使用；它们不再是 Web 工作台或默认 agent 的核心。新增能力应优先落到 DSH 插件/技能/MCP，而不是继续扩展旧适配器。
+推荐在「设置 → 模型服务」添加 OpenAI 兼容服务,Base URL 填 API 根路径(例如含 `/v1`),选择 `completions` 或 `responses`,再设置默认模型。Chat 上游必须支持 `stream: true` 和 function tool calling;网关转换文字、图片输入、推理增量、并行工具调用和工具结果,并把 Codex 的 free-form `apply_patch` 包装成带 `input` 字符串的 JSON 函数参数。兼容 Codex 的客户端 `tool_search`、搜索返回的 MCP 工具和命名空间调用。工具参数截断或流异常会报错,不会伪装成成功。手动压缩使用 Codex 的本地摘要流程,不伪造远程加密压缩结果。
 
 图片生成通过 Codex 原生 MCP 工具通道注册 `cca_imagegen.image_gen`,新会话和恢复的旧会话均可发现并调用。仅当已配置的 OpenAI 提供商中存在 `gpt-image` 或 `gpt-image-*` 模型时启用;优先使用当前聊天提供商,否则按配置顺序选择第一个有 GPT Image 模型的提供商,并使用该提供商列表中第一个匹配的模型。生图通过所选提供商的 `/images/generations` 接口执行,使用服务端已有凭据,无需在运行环境配置额外的 `OPENAI_API_KEY` 或确认 CLI 回退;当前入口仅支持生成新图片。生成结果作为助手图片附件保存,支持聊天内预览、刷新恢复和 QQ 私聊/群聊/频道原生图片回传;单张图片限制 10 MB,计入现有图片存储额度。
 

@@ -77,29 +77,6 @@ test("DSH integration falls back to the first usable provider", () => {
   assert.doesNotMatch(JSON.stringify(integration.patch), /dsh-ssh/);
 });
 
-test("DSH integration replaces stock UI rows with the vendored plugin entries", () => {
-  const integration = buildDshIntegration(
-    { ...DEFAULT_SETTINGS, providers: [provider] },
-    [route],
-    { ...sandbox, enabled: false },
-    {
-      brand: "/app/apps/dsh-web/plugins/brand/lib/index.js",
-      sidebar: "/app/apps/dsh-web/plugins/sidebar/lib/index.js",
-    },
-  );
-  const serialized = JSON.stringify(integration.patch);
-  assert.match(serialized, /"id":"ui-brand-official","disabled":true/);
-  assert.match(serialized, /"id":"ui-sidebar","disabled":true/);
-  assert.match(
-    serialized,
-    /"id":"cca-brand","name":"\/app\/apps\/dsh-web\/plugins\/brand\/lib\/index\.js"/,
-  );
-  assert.match(
-    serialized,
-    /"id":"cca-sidebar","name":"\/app\/apps\/dsh-web\/plugins\/sidebar\/lib\/index\.js"/,
-  );
-});
-
 test("DSH integration maps CCA reasoning efforts without inventing capabilities", () => {
   const model: ModelEntry = {
     id: "reasoning-model",
@@ -267,10 +244,8 @@ test("DSH SSH config is loaded through a PATH wrapper", () => {
     assert.match(wrapper, /^#!\/bin\/sh/);
     assert.match(wrapper, /-F/);
     assert.match(wrapper, /config/);
-    if (process.platform !== "win32") {
-      assert.equal(fs.statSync(path.join(binDir, "ssh")).mode & 0o777, 0o700);
-      assert.equal(fs.statSync(path.join(binDir, "rsync-ssh")).mode & 0o777, 0o700);
-    }
+    assert.equal(fs.statSync(path.join(binDir, "ssh")).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(path.join(binDir, "rsync-ssh")).mode & 0o777, 0o700);
     const config = fs.readFileSync(path.join(root, ".ssh", "config"), "utf8");
     assert.match(config, /Host cca-sandbox/);
     assert.match(config, /HostName '192\.0\.2\.10'/);

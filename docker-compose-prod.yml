@@ -1,37 +1,7 @@
 services:
-  agent-init:
-    image: ${CCA_IMAGE:?未设置 CCA_IMAGE}
-    build: .
-    user: "0:0"
-    # 该镜像只有 node 官方 entrypoint(没有 cca-entrypoint.sh),无法使用
-    # `--init-permissions`;这里用 sh 执行等价逻辑:只修正属主,不改文件内容。
-    # `$$` 是转义的 `$`,compose 会把它原样交给容器内的 shell。
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -eu
-        uid=$${CCA_UID:-1000}
-        gid=$${CCA_GID:-1000}
-        data_dir=$${CCA_DATA_DIR:-/data}
-        workspace_dir=$${WORKSPACE_ROOT:-/workspace}
-        home_dir="$$data_dir/home"
-        mkdir -p "$$home_dir" "$$workspace_dir"
-        find "$$data_dir" -xdev \( ! -uid "$$uid" -o ! -gid "$$gid" \) -exec chown -h "$$uid:$$gid" {} +
-        find "$$workspace_dir" -xdev -uid 0 -exec chown -h "$$uid:$$gid" {} +
-        chmod 700 "$$home_dir"
-        echo "permissions ready uid=$$uid gid=$$gid"
-    volumes:
-      - agent-data:/data
-      - ${WORKSPACE_DIR:-./workspace}:/workspace
-    environment:
-      - CCA_UID=${CCA_UID:-1000}
-      - CCA_GID=${CCA_GID:-1000}
-    restart: "no"
-
   agent:
     image: ${CCA_IMAGE:?未设置 CCA_IMAGE}
     build: .
-    user: "${CCA_UID:-1000}:${CCA_GID:-1000}"
     ports:
       - "${APP_PORT:-7001}:8787"
     volumes:
@@ -41,8 +11,6 @@ services:
       - /home/nolaurence/dev:/codeprojects
     environment:
       - PORT=8787
-      - CCA_UID=${CCA_UID:-1000}
-      - CCA_GID=${CCA_GID:-1000}
       # 生产环境仅连接外部 MySQL
       - DATABASE_URL=${DATABASE_URL:?请在 .env 中配置外部 MySQL 连接串}
       # 管理员账户(首次启动时创建);其他用户通过注册页面创建,均为普通用户
@@ -58,9 +26,6 @@ services:
       - DSH_SANDBOX_SYNC_ENABLED=${DSH_SANDBOX_SYNC_ENABLED:-true}
       - DSH_SANDBOX_SYNC_KEY=${DSH_SANDBOX_SYNC_KEY:-/data/dsh-home-cca/.ssh/cca_workspace_sync_ed25519}
       - DSH_SANDBOX_HOST_WORKSPACE=${DSH_SANDBOX_HOST_WORKSPACE:-/home/nolaurence/cca-workspaces/default}
-    depends_on:
-      agent-init:
-        condition: service_completed_successfully
     init: true
     healthcheck:
       test:

@@ -38,8 +38,7 @@ import { getThreadAccess } from "./threadAccess.js";
 import { browserPool, NOVNC_ROOT } from "./browser.js";
 import WebSocket from "ws";
 import { clearBootstrapCredentials } from "./runtimeEnv.js";
-import { DshPool } from "./dshManager.js";
-import { dshAgent } from "./dshAgent.js";
+import { dshManager } from "./dshManager.js";
 import { registerDshRoutes } from "./dshProxy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -86,10 +85,9 @@ export async function startServer(options: { port?: number; host?: string; insta
     (_req, body, done) => done(null, body),
   );
 
-  const dshPool = new DshPool();
-  const hub = new Hub(() => dshPool.reload());
+  const hub = new Hub(() => dshManager.reload());
 
-  registerDshRoutes(app, { managers: dshPool, authenticate });
+  registerDshRoutes(app, { manager: dshManager, authenticate });
 
   app.get("/health", async () => ({ ok: true }));
   app.get("/api/runtime", async () => ({
@@ -209,25 +207,6 @@ export async function startServer(options: { port?: number; host?: string; insta
       return reply.code(401).send({ error: "未授权" });
     }
     return { user: { username: payload.username, role: payload.role } };
-  });
-
-  // Programmatic agent channel backed by the official @deepseek-ai/dsh-sdk-client
-  // runtime. The Web UI keeps using the per-user `dsh web` host above.
-  app.post("/api/agent/run", async (req, reply) => {
-    const user = authenticate(req.headers.authorization);
-    if (!user) return reply.code(401).send({ error: "未授权" });
-    if (user.role !== "admin") {
-      return reply.code(403).send({ error: "仅管理员可以运行 SDK agent" });
-    }
-    const body = (req.body ?? {}) as { prompt?: string };
-    if (!body.prompt?.trim()) return reply.code(400).send({ error: "prompt 不能为空" });
-    try {
-      return await dshAgent.run(body.prompt);
-    } catch (error) {
-      return reply.code(502).send({
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
   });
 
   app.get("/api/admin/users", async (req, reply) => {
@@ -379,14 +358,14 @@ export async function startServer(options: { port?: number; host?: string; insta
 
   await app.listen({ port, host });
   console.log(`[cca] server listening on http://${host}:${port}`);
+  dshManager.start();
   hub.warmupPlugins();
 
   let shuttingDown: Promise<void> | null = null;
   const close = () => {
     if (!shuttingDown) {
       shuttingDown = (async () => {
-        await dshAgent.close();
-        await dshPool.close();
+        await dshManager.close();
         await hub.shutdown();
         await browserPool.stop();
         await app.close();
