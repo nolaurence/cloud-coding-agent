@@ -61,3 +61,13 @@ docker compose -f docker-compose-standalone.yml logs --tail=100 agent
 若全新构建的镜像仍在解压阶段失败，记录 `docker version`、`docker info`、
 `containerd --version` 和出错的镜像摘要，继续排查部署机的 containerd/overlayfs。
 上述操作保留 `agent-data` 数据卷；无需执行 `down -v` 或清理 Docker 数据目录。
+
+## DeepSeek Harness 启动失败
+
+源码镜像和 `Dockerfile_pipeline` 现在通过同一安装脚本内置 DSH、web profile、
+SSH helper 和 rsync。旧流水线镜像没有这些文件，需要重新构建并发布新 tag 后部署；
+只刷新页面不会补装运行时依赖。
+
+启动失败时，页面和容器日志会保留具体原因（如缺少 SSH helper、沙箱私钥、
+profile 模板或模型提供方）。修复配置或挂载文件后会自动重试，也可以点击页面
+“重试”立即重新检查；该操作不会重启已就绪或正在启动的 DSH 进程。
