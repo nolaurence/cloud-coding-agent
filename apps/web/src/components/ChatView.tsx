@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   ArrowLeft,
@@ -7,6 +7,8 @@ import {
   Brain,
   Check,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Loader2,
   Pause,
@@ -19,17 +21,17 @@ import type { ImagePreviewTarget } from "../lib/imagePreview";
 import { useApp, useThreadState } from "../lib/store";
 import {
   deriveChatTimeline,
-  findTerminalAssistantEntry,
+  deriveTurnContent,
   turnEndedAt,
   turnStartedAt,
   type ChatTimelineEntry,
 } from "../lib/chatTimeline";
 import { Markdown } from "./Markdown";
 import {
-  TOOL_LABELS,
   ToolCallRow,
   ToolKindIcon,
   liveToolLabel,
+  processToolTitle,
   toolCategoryKinds,
   type ToolKind,
 } from "./ToolCallRow";
@@ -398,7 +400,7 @@ function ProcessEntries({
       rows.push(<UserMessage key={entry.id} message={entry.message} />);
     } else if (entry.message.role === "assistant") {
       rows.push(
-        <AssistantMessage key={entry.id} message={entry.message} showMeta={false} />,
+        <AssistantMessage key={entry.id} message={entry.message} streaming={entry.message.streaming} showMeta={false} />,
       );
     }
   }
@@ -413,6 +415,7 @@ function ProcessGroupHeader({
   iconKind,
   label,
   detail,
+  bodyId,
   onToggle,
 }: {
   open: boolean;
@@ -420,26 +423,31 @@ function ProcessGroupHeader({
   iconKind: ToolKind | undefined;
   label: string;
   detail: string;
+  bodyId?: string;
   onToggle?: () => void;
 }) {
   const content = (
     <>
       <span className="relative flex size-4 shrink-0 items-center justify-center text-label-3">
-        {iconKind === undefined
-          ? <Sparkles className="size-3.5" strokeWidth={1.8} />
-          : <ToolKindIcon kind={iconKind} />}
+        <span className={cn("transition-opacity duration-100", onToggle && (
+          open ? "opacity-0" : "group-hover/process:opacity-0 group-focus-visible/process:opacity-0"
+        ))}>
+          {iconKind === undefined
+            ? <Brain className="size-3.5" strokeWidth={1.8} />
+            : <ToolKindIcon kind={iconKind} />}
+        </span>
         {onToggle && (
-          <ChevronRight
+          <ChevronDown
             className={cn(
               "absolute size-3.5 transition-all duration-100",
-              open ? "rotate-90 opacity-100" : "opacity-0 group-hover/process:opacity-100",
+              open ? "rotate-180 opacity-100" : "opacity-0 group-hover/process:opacity-100 group-focus-visible/process:opacity-100",
             )}
           />
         )}
       </span>
       <span
         className={cn(
-          "shrink-0 text-[13px] leading-6 text-label-2 transition-colors",
+          "min-w-0 truncate text-[13px] leading-6 text-label-2 transition-colors",
           running && "text-shimmer",
           onToggle && "group-hover/process:text-label-1",
         )}
@@ -459,6 +467,7 @@ function ProcessGroupHeader({
     <button
       type="button"
       aria-expanded={open}
+      aria-controls={bodyId}
       onClick={onToggle}
       className={cn(className, "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60")}
     >
@@ -467,18 +476,6 @@ function ProcessGroupHeader({
   ) : (
     <div className={className} aria-live="polite">{content}</div>
   );
-}
-
-/** 运行中回合的已用时间,每秒刷新。 */
-function useElapsedLabel(startedAt: number | null): string | null {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (startedAt === null) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [startedAt]);
-  return startedAt === null ? null : formatDuration(now - startedAt);
 }
 
 function WorkingIndicator({ startedAt }: { startedAt: number | null }) {
@@ -502,117 +499,134 @@ function WorkingIndicator({ startedAt }: { startedAt: number | null }) {
   );
 }
 
-function CompletedTurn({
-  turnId,
-  entries,
-  expanded,
-  onToggleTurn,
-  onOpenSubagent,
+/** A process stays in place while its live title and disclosure change. */
+function ToolProcessGroup({
+  entries, closed, onOpenSubagent,
+}: {
+  entries: readonly ChatTimelineEntry[];
+  closed: boolean;
+  onOpenSubagent: (subagentId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [edges, setEdges] = useState({ top: false, bottom: false });
+  const bodyId = useId();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const followBottomRef = useRef(true);
+  const activities = toolActivitiesOf(entries);
+  const kinds = toolCategoryKinds(activities);
+  const runningActivity = [...activities].reverse().find((activity) => activity.status === "running");
+  const runningAgent = [...entries].reverse().find((entry) => entry.kind === "subagent" && entry.subagent.status === "running");
+  const label = closed
+    ? processToolTitle(kinds, entries.some((entry) => entry.kind === "subagent"))
+    : runningActivity ? liveToolLabel(runningActivity)
+      : runningAgent ? "正在协调子代理" : "正在思考";
+  const iconKind = closed ? kinds[0] : runningActivity ? toolCategoryKinds([runningActivity])[0] : "reasoning";
+  const updateEdges = () => {
+    const body = bodyRef.current;
+    if (!body) return;
+    setEdges({ top: body.scrollTop > 1, bottom: body.scrollHeight - body.scrollTop - body.clientHeight > 1 });
+  };
+  useEffect(() => {
+    if (!open) return;
+    const observer = new ResizeObserver(() => {
+      const body = bodyRef.current;
+      if (!closed && followBottomRef.current && body) body.scrollTop = body.scrollHeight;
+      updateEdges();
+    });
+    if (bodyRef.current) observer.observe(bodyRef.current);
+    if (contentRef.current) observer.observe(contentRef.current);
+    updateEdges();
+    return () => observer.disconnect();
+  }, [open, closed]);
+  const toggle = () => {
+    if (!open) {
+      followBottomRef.current = !closed;
+      window.requestAnimationFrame(() => {
+        const body = bodyRef.current;
+        if (body) body.scrollTop = closed ? 0 : body.scrollHeight;
+        updateEdges();
+      });
+    }
+    setOpen((value) => !value);
+  };
+  return (
+    <div className="min-w-0" data-tool-process data-process-closed={closed}>
+      <ProcessGroupHeader open={open} running={!closed} iconKind={iconKind} label={label}
+        detail="" bodyId={bodyId} onToggle={toggle} />
+      <div id={bodyId} ref={bodyRef} hidden={!open} onScroll={() => {
+        const body = bodyRef.current;
+        if (body) followBottomRef.current = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
+        updateEdges();
+      }}
+        className={cn("tool-process-body mt-4 max-h-[min(400px,50vh)] overflow-y-auto [scrollbar-gutter:stable]",
+          !open && "hidden", edges.top && "tool-process-fade-top", edges.bottom && "tool-process-fade-bottom")}>
+        <div ref={contentRef}>
+          <ProcessEntries entries={entries} onOpenSubagent={onOpenSubagent} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChatTurn({
+  turnId, entries, expanded, onToggleTurn, onOpenSubagent, running, live, startedAt,
 }: {
   turnId: string;
   entries: readonly ChatTimelineEntry[];
   expanded: boolean;
   onToggleTurn: (turnId: string) => void;
   onOpenSubagent: (subagentId: string) => void;
-}) {
-  const terminalAssistant = findTerminalAssistantEntry(entries);
-  const reasoning = terminalAssistant?.message.reasoning?.trim() ?? "";
-  const userEntries = entries.filter(
-    (entry): entry is Extract<ChatTimelineEntry, { kind: "message" }> =>
-      entry.kind === "message" && entry.message.role === "user",
-  );
-  const processEntries = entries.filter(
-    (entry) =>
-      !(entry.kind === "message" && entry.message.role === "user") &&
-      entry.id !== terminalAssistant?.id,
-  );
-  const hasProcess = processEntries.length > 0;
-  const kinds = toolCategoryKinds(toolActivitiesOf(processEntries));
-  const detail = kinds.slice(0, 3).map((kind) => TOOL_LABELS[kind]).join("、");
-  const startedAt = turnStartedAt(entries);
-  const endedAt = turnEndedAt(entries);
-  const durationLabel =
-    startedAt !== null && endedAt !== null ? `工作了 ${formatDuration(endedAt - startedAt)}` : "工作过程";
-
-  return (
-    <section className="flex flex-col gap-4" data-turn-id={turnId}>
-      {userEntries.map((entry) => (
-        <UserMessage key={entry.id} message={entry.message} />
-      ))}
-      {reasoning && (!hasProcess || expanded) && <ReasoningBlock text={reasoning} />}
-      {hasProcess && (
-        <div className={cn("flex min-w-0 flex-col", expanded ? "gap-4" : "gap-0")}>
-          <ProcessGroupHeader
-            open={expanded}
-            running={false}
-            iconKind={kinds[0]}
-            label={durationLabel}
-            detail={detail}
-            onToggle={() => onToggleTurn(turnId)}
-          />
-          {expanded && (
-            <ProcessEntries entries={processEntries} onOpenSubagent={onOpenSubagent} />
-          )}
-        </div>
-      )}
-      {terminalAssistant && (
-        <AssistantMessage message={terminalAssistant.message} showReasoning={false} />
-      )}
-    </section>
-  );
-}
-
-function RunningTurn({
-  entries,
-  live,
-  startedAt,
-  onOpenSubagent,
-}: {
-  entries: readonly ChatTimelineEntry[];
+  running: boolean;
   live: { text: string; reasoning: string };
   startedAt: number | null;
-  onOpenSubagent: (subagentId: string) => void;
 }) {
-  const hasLive = Boolean(live.text || live.reasoning);
-  const liveMessage: ChatMessage = {
-    id: "live-assistant-message",
-    role: "assistant",
-    text: live.text,
-    reasoning: live.reasoning,
-    streaming: true,
-    turnId: "live",
-    createdAt: Date.now(),
-  };
-  const userEntries = entries.filter(
-    (entry): entry is Extract<ChatTimelineEntry, { kind: "message" }> =>
-      entry.kind === "message" && entry.message.role === "user",
-  );
-  const processEntries = entries.filter(
-    (entry) => !(entry.kind === "message" && entry.message.role === "user"),
-  );
-  const activities = toolActivitiesOf(processEntries);
-  const runningActivity = [...activities].reverse().find((activity) => activity.status === "running");
-  const kinds = toolCategoryKinds(activities);
-  const elapsed = useElapsedLabel(startedAt ?? turnStartedAt(entries));
+  const hasLive = running && Boolean(live.text || live.reasoning);
+  const contentEntries: readonly ChatTimelineEntry[] = hasLive ? [...entries, {
+    kind: "message", id: "live-assistant-message", at: Date.now(),
+    message: { id: "live-assistant-message", role: "assistant", text: live.text, reasoning: live.reasoning,
+      streaming: true, turnId, createdAt: Date.now() },
+  }] : entries;
+  const content = deriveTurnContent(contentEntries, running);
+  const finalReply = [...content].reverse().find((block) => block.kind === "message" && block.message.role === "assistant");
+  const hasProcess = content.some((block) => block.kind === "process")
+    || content.some((block) => block.kind === "message" && block.message.role === "assistant" && block.id !== finalReply?.id);
+  const firstUser = content[0]?.kind === "message" && content[0].message.role === "user" ? content[0] : null;
+  const start = startedAt ?? turnStartedAt(entries);
+  const end = turnEndedAt(entries);
+  const duration = start !== null && end !== null ? `，用时 ${formatDuration(end - start)}` : "";
+  const bodyId = useId();
 
   return (
-    <section className="flex flex-col gap-4">
-      {userEntries.map((entry) => (
-        <UserMessage key={entry.id} message={entry.message} />
-      ))}
-      <div className="flex min-w-0 flex-col gap-4">
-        <ProcessGroupHeader
-          open
-          running
-          iconKind={kinds[0]}
-          label={runningActivity ? liveToolLabel(runningActivity) : "正在工作"}
-          detail={elapsed ? `已工作 ${elapsed}` : ""}
-        />
-        {processEntries.length > 0 && (
-          <ProcessEntries entries={processEntries} onOpenSubagent={onOpenSubagent} />
-        )}
+    <section className="flex min-w-0 flex-col gap-4" data-turn-id={turnId}>
+      {firstUser && <UserMessage message={firstUser.message} />}
+      {!running && hasProcess && (
+        <button type="button" aria-expanded={expanded} aria-controls={bodyId}
+          onClick={() => onToggleTurn(turnId)}
+          className="flex min-h-6 w-fit items-center gap-1.5 text-left text-[13px] leading-6 text-label-2 transition-colors hover:text-label-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+          <span>{`已完成${duration}`}</span>
+          {expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+        </button>
+      )}
+      <div id={bodyId} className="flex min-w-0 flex-col gap-4">
+        {content.filter((block) => block !== firstUser).map((block) => {
+          const independent = block.kind === "message" && block.message.role === "user";
+          const hidden = !running && hasProcess && !expanded && block.id !== finalReply?.id && !independent;
+          return (
+            <div key={block.id} hidden={hidden} className={cn("min-w-0", hidden && "hidden")}>
+              {block.kind === "process" ? (
+                <ToolProcessGroup entries={block.entries} closed={block.closed} onOpenSubagent={onOpenSubagent} />
+              ) : block.message.role === "user" ? (
+                <UserMessage message={block.message} />
+              ) : (
+                <AssistantMessage message={block.message} streaming={block.message.streaming}
+                  showReasoning={false} showMeta={!running && block.id === finalReply?.id} />
+              )}
+            </div>
+          );
+        })}
+        {running && <WorkingIndicator startedAt={start} />}
       </div>
-      {hasLive && <AssistantMessage message={liveMessage} streaming showMeta={false} />}
     </section>
   );
 }
@@ -988,22 +1002,17 @@ export function ChatView({
                   }
 
                   const running = state.running && block.turnId === activeTurnId;
-                  return running ? (
-                    <RunningTurn
-                      key={block.id}
-                      entries={block.entries}
-                      live={state.live}
-                      startedAt={state.activeTurnStartedAt}
-                      onOpenSubagent={openSubagent}
-                    />
-                  ) : (
-                    <CompletedTurn
+                  return (
+                    <ChatTurn
                       key={block.id}
                       turnId={block.turnId}
                       entries={block.entries}
                       expanded={expandedTurnIds.has(block.turnId)}
                       onToggleTurn={toggleTurn}
                       onOpenSubagent={openSubagent}
+                      running={running}
+                      live={state.live}
+                      startedAt={running ? state.activeTurnStartedAt : null}
                     />
                   );
                 })}

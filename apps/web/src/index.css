@@ -524,6 +524,18 @@ button:disabled,
   }
 }
 
+.tool-process-fade-top {
+  mask-image: linear-gradient(to bottom, transparent, #000 24px);
+}
+
+.tool-process-fade-bottom {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
+}
+
+.tool-process-fade-top.tool-process-fade-bottom {
+  mask-image: linear-gradient(to bottom, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+}
+
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: var(--ds-font-sans);

@@ -81,12 +81,34 @@ export function toolKind(activity: ToolActivity): ToolKind {
   return "other";
 }
 
-const KIND_ORDER: ToolKind[] = ["command", "modify", "read", "search", "web", "reasoning", "other"];
-
-/** 一组工具调用覆盖的动作类别,按固定顺序去重(用于回合标题的摘要)。 */
+/** 按调用次数排序，同次数保留首次出现的顺序。 */
 export function toolCategoryKinds(activities: readonly ToolActivity[]): ToolKind[] {
-  const kinds = new Set(activities.map(toolKind));
-  return KIND_ORDER.filter((kind) => kinds.has(kind));
+  const counts = new Map<ToolKind, number>();
+  const seen = new Set<string>();
+  for (const activity of activities) {
+    if (seen.has(activity.id)) continue;
+    seen.add(activity.id);
+    const kind = toolKind(activity);
+    if (kind === "reasoning") continue;
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  return [...counts.keys()].sort((left, right) => counts.get(right)! - counts.get(left)!);
+}
+
+export function processToolTitle(kinds: readonly ToolKind[], hasSubagents = false): string {
+  const labels: Record<ToolKind, string> = {
+    reasoning: "已完成分析", modify: "修改了文件", read: "已读取文件", search: "已搜索代码",
+    command: "执行了命令", web: "已访问网页", other: "已调用工具",
+  };
+  const titles = kinds.map((kind) => labels[kind]);
+  if (hasSubagents) titles.push("已协调子代理");
+  if (titles.length === 0) return "已完成分析";
+  if (titles.length === 1) return titles[0]!;
+  if (titles.length === 2) {
+    const [first, second] = titles as [string, string];
+    return `${first}并${first.startsWith("已") && second.startsWith("已") ? second.slice(1) : second}`;
+  }
+  return `${titles.slice(0, 3).join("，")}${titles.length > 3 ? "等" : ""}`;
 }
 
 export function toolCategoryLabels(activities: readonly ToolActivity[]): string[] {
@@ -276,7 +298,7 @@ export function ToolCallRow({ activity }: { activity: ToolActivity }) {
   const caption = TOOL_LABELS[kind];
   const summary = failed
     ? firstLine(output) || `${activity.toolName} 调用失败`
-    : target ?? activity.toolName;
+    : target ?? (kind === "reasoning" ? firstLine(output) : activity.toolName);
   const canExpand = Boolean(output) || (args !== null && Object.keys(args).length > 0);
   const toggle = () => setExpanded((value) => !value);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -322,14 +344,19 @@ export function ToolCallRow({ activity }: { activity: ToolActivity }) {
             failed ? "text-destructive" : "text-label-3",
           )}
         >
-          {failed ? <X className="size-3.5 stroke-[1.8]" /> : <ToolKindIcon kind={kind} />}
+          <span className={cn(
+            "transition-opacity duration-100",
+            canExpand && (expanded ? "opacity-0" : "group-hover/tool:opacity-0 group-focus-within/tool:opacity-0"),
+          )}>
+            {failed ? <X className="size-3.5 stroke-[1.8]" /> : <ToolKindIcon kind={kind} />}
+          </span>
           {canExpand && (
             <ChevronRight
               className={cn(
                 "absolute size-3.5 transition-all duration-100",
                 expanded
                   ? "rotate-90 opacity-100"
-                  : "opacity-0 group-hover/tool:opacity-100",
+                  : "opacity-0 group-hover/tool:opacity-100 group-focus-within/tool:opacity-100",
               )}
             />
           )}
