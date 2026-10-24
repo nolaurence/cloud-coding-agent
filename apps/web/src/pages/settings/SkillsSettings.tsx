@@ -70,7 +70,14 @@ export function SkillsSettings() {
             <div className="flex items-center gap-3">
               <Sparkles className="h-4 w-4 shrink-0 text-purple-400" />
               <div className="min-w-0 flex-1">
-                <div className="mono text-sm font-medium">/{sk.name}</div>
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="mono truncate text-sm font-medium">/{sk.name}</span>
+                  {sk.plugin && (
+                    <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-4 text-muted-foreground">
+                      插件 · {sk.plugin}
+                    </span>
+                  )}
+                </div>
                 {sk.description && <div className="truncate text-xs text-zinc-500">{sk.description}</div>}
               </div>
               <Switch
@@ -78,16 +85,18 @@ export function SkillsSettings() {
                 aria-label={`${sk.disabled ? "启用" : "停用"}技能 ${sk.name}`}
                 onCheckedChange={(enabled) => toggle(sk.name, !enabled)}
               />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => {
-                  setIsNew(false);
-                  setEditing({ name: sk.name, description: sk.description, content: sk.content });
-                }}
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </Button>
+              {!sk.plugin && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    setIsNew(false);
+                    setEditing({ name: sk.name, description: sk.description, content: sk.content });
+                  }}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              )}
               {sk.builtin && (
                 <Button
                   variant="ghost"

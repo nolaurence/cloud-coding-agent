@@ -48,7 +48,7 @@ export function NavRail({
           },
           {
             to: "/plugins",
-            label: "扩展工具",
+            label: "插件",
             icon: Package,
             isActive: (p: string) => p === "/plugins",
           },

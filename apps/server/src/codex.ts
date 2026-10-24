@@ -704,7 +704,7 @@ export class CodexSession implements AgentSession {
 export class CodexClient implements AgentClient {
   private sessions = new Set<CodexSession>();
   async start() { fs.mkdirSync(CODEX_HOME, { recursive: true, mode: 0o700 }); }
-  get rpc(): AgentClient["rpc"] { throw new Error("Copilot 插件市场不适用于 Codex;请使用 Skill 或 MCP 管理"); }
+  get rpc(): AgentClient["rpc"] { throw new Error("Codex 运行时不提供 Copilot CLI 的 rpc;插件请使用 Agent Plugins 市场安装"); }
   private async open(id: string, config: Config, resume: boolean): Promise<AgentSession> {
     sessionPath(id);
     if (Array.isArray(config.availableTools) && config.availableTools.length === 0) throw new Error("Codex app-server cannot disable every built-in tool; use generateText for tool-free requests");

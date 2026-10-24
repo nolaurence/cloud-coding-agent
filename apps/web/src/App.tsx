@@ -68,7 +68,7 @@ export default function App() {
           element={
             user.role === "admin" ? (
               <div className="h-full overflow-y-auto p-4 sm:p-6">
-                <div className="mx-auto max-w-2xl">
+                <div className="mx-auto max-w-4xl">
                   <PluginsPage />
                 </div>
               </div>

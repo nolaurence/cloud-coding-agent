@@ -310,30 +310,94 @@ export interface AuthUser {
   role: UserRole;
 }
 
-export interface PluginMarketplace {
-  name: string;
-  source: string;
-  isDefault: boolean;
+export interface PluginAuthor {
+  name?: string;
+  email?: string;
+  url?: string;
 }
 
-export interface MarketplacePlugin {
+/**
+ * 插件清单的遵循程度:严格通过 Agent Plugins 1.0.0 校验,或按兼容模式解析
+ * (旧的 Claude/Codex/Copilot 插件目录,未声明 `$schema`)。
+ */
+export type PluginConformance = "agent-plugins-1.0.0" | "compat";
+
+export interface PluginSkillInfo {
   name: string;
   description: string;
+  /** 相对插件根目录的路径,便于在 UI 中定位。 */
+  path: string;
+  valid: boolean;
+  error?: string;
+}
+
+export interface PluginMcpServerInfo {
+  id: string;
+  transport: "stdio" | "streamable-http" | "sse";
+  label: string;
+  valid: boolean;
+  error?: string;
 }
 
 export interface InstalledPlugin {
+  /** 插件标识:Agent Plugins 的 manifest.name(兼容模式会规整为小写 kebab-case)。 */
   name: string;
-  marketplace: string;
+  /** 清单里的原始名称,兼容模式下可能与 name 不同。 */
+  displayName?: string;
   version?: string;
+  description?: string;
+  author?: PluginAuthor;
+  homepage?: string;
+  repository?: string;
+  license?: string;
+  keywords: string[];
+  /** 安装来源:git 地址、本地路径或 builtin:<id>。 */
+  source: string;
+  subdirectory?: string;
+  installedAt: number;
   enabled: boolean;
-  directSourceId?: string;
+  conformance: PluginConformance;
+  skills: PluginSkillInfo[];
+  mcpServers: PluginMcpServerInfo[];
+  /** 非致命问题:未知顶层字段、被跳过的组件等。 */
+  warnings: string[];
+  /** 插件被判定为无效时的原因,此时不会加载任何组件。 */
+  error?: string;
+}
+
+export interface PluginMarketplace {
+  id: string;
+  name: string;
+  description?: string;
+  /** 内置市场为 builtin,远程市场为清单 URL。 */
+  source: string;
+  kind: "builtin" | "remote";
+  pluginCount: number;
+}
+
+export interface MarketplacePlugin {
+  id: string;
+  marketplaceId: string;
+  name: string;
+  description: string;
+  /** 传给 plugins.install 的来源。 */
+  source: string;
+  subdirectory?: string;
+  version?: string;
+  author?: string;
+  homepage?: string;
+  license?: string;
+  tags: string[];
+  category: string;
+  /** 市场条目自述的遵循程度;未知时省略,安装后再判定。 */
+  conformance?: PluginConformance;
+  installed?: boolean;
 }
 
 export interface PluginInstallResult {
   plugin: InstalledPlugin;
   skillsInstalled: number;
-  postInstallMessage?: string;
-  deprecationWarning?: string;
+  warnings: string[];
 }
 
 export interface SkillInfo {
@@ -344,6 +408,8 @@ export interface SkillInfo {
   disabled: boolean;
   builtin: boolean;
   scope: ResourceScope;
+  /** 由插件提供时,这里是插件名;插件技能只读,随插件启停。 */
+  plugin?: string;
 }
 
 export interface ShellState {
@@ -668,11 +734,11 @@ export type ClientMessage =
   | { id: string; type: "skill.delete"; name: string }
   | { id: string; type: "plugins.marketplaces.list" }
   | { id: string; type: "plugins.marketplace.add"; source: string }
-  | { id: string; type: "plugins.marketplace.remove"; name: string; force?: boolean }
-  | { id: string; type: "plugins.marketplace.browse"; name: string }
+  | { id: string; type: "plugins.marketplace.remove"; marketplaceId: string }
+  | { id: string; type: "plugins.marketplace.browse"; marketplaceId: string }
   | { id: string; type: "plugins.list" }
-  | { id: string; type: "plugins.install"; source: string }
-  | { id: string; type: "plugins.uninstall"; name: string; directSourceId?: string }
+  | { id: string; type: "plugins.install"; source: string; subdirectory?: string }
+  | { id: string; type: "plugins.uninstall"; name: string }
   | { id: string; type: "plugins.setEnabled"; name: string; enabled: boolean }
   | { id: string; type: "models.list" }
   | { id: string; type: "provider.models.discover"; provider: ProviderModelDiscoveryConfig }

@@ -10,6 +10,7 @@
 - **模型配置**:支持 OpenAI(Chat Completions)与 OpenAI Responses 两种 wire 协议,以及 Azure 的 OpenAI 兼容接口;BYOK,会话内可切换同一提供方的模型。暂不支持 Anthropic 原生 Messages 协议
 - **MCP 模块**:本地 stdio / 远程 HTTP MCP 服务器管理,支持平台级配置和 workspace 根目录 `.mcp.json`,按工具白名单启用
 - **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用
+- **插件市场**:兼容 [Agent Plugins 1.0.0](https://agent-plugins.org/specification) 标准(`plugin.json` + `skills/` + `mcp.json`),也兼容 Claude/Codex/Copilot 布局的插件目录;内置一方法插件与官方仓库精选,支持从 git 地址、`owner/repo` 或本地目录安装,插件贡献的技能与 MCP 服务器自动进入会话,可随时停用/卸载
 - **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
 - **项目管理**:一个项目 = 服务器上的一个工作目录,会话在其 cwd 中执行
 - **代码托管账户**:在「设置 → 通用」绑定 GitHub / Gitee,Agent 可使用当前用户的授权执行 clone、fetch、pull、push
@@ -29,6 +30,8 @@ Codex app-server(会话、工具、MCP、技能)
 ```
 
 数据存储支持三种模式:`DATABASE_URL=sqlite:/path/to/cca.db` 使用内置 SQLite,`DATABASE_URL=h2:/path/to/cca.db` 是桌面本地模式使用的内置嵌入式数据库别名,`DATABASE_URL=mysql://...` 使用 MySQL;两者都会自动建表并从旧 JSON 文件迁移。未配置时继续使用 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。新会话在数据目录的 `codex-home/<会话 ID>/` 中保存原生历史、线程映射和应用事件,每个会话使用独立进程和 CODEX_HOME。配置 MySQL/SQLite 时,新会话消息、工具调用/结果及其时间戳写入 `thread_events` 表,按会话内序号读取,事件 ID 去重;写入串行分批提交。`cca-events.jsonl` 保留为故障补录日志,已有 Codex 会话在下次打开时自动补录,数据库故障会明确报错。未配置数据库时继续使用 JSONL。流式正文增量不逐 token 入库,完成消息保存全文;工具开始/完成事件保留参数、结果、状态和时间。Codex 原生状态仍用于续聊,数据库不能替代它,备份仍须覆盖数据库和数据目录。旧 `copilot-home/` 历史保留只读,不自动转换或续写;升级前应备份整个数据目录。旧 Copilot 默认模型会清空,请重新选择模型;连接器请重新选择非 Copilot 模型。
+
+插件同样落在数据目录:安装的插件包在 `agent-plugins/<name>/`,每个插件的私有持久化目录在 `agent-plugin-data/<name>/`(作为 `PLUGIN_DATA` 传给插件的 MCP 子进程),安装记录与自定义市场源在 `agent-plugins.json`。插件安装时会校验清单、组件位置与包内路径边界,未知顶层字段只提示不拒绝;停用或卸载后对应技能与 MCP 立即从后续会话中移除。`skills/` 里由插件带来的技能是只读的,修改请改插件本身或卸载后自建。
 
 ## 本地开发
 
@@ -150,6 +153,6 @@ docker compose -f docker-compose-prod.yml up -d --build
 
 图片生成通过 Codex 原生 MCP 工具通道注册 `cca_imagegen.image_gen`,新会话和恢复的旧会话均可发现并调用。仅当已配置的 OpenAI 提供商中存在 `gpt-image` 或 `gpt-image-*` 模型时启用;优先使用当前聊天提供商,否则按配置顺序选择第一个有 GPT Image 模型的提供商,并使用该提供商列表中第一个匹配的模型。生图通过所选提供商的 `/images/generations` 接口执行,使用服务端已有凭据,无需在运行环境配置额外的 `OPENAI_API_KEY` 或确认 CLI 回退;当前入口仅支持生成新图片。生成结果作为助手图片附件保存,支持聊天内预览、刷新恢复和 QQ 私聊/群聊/频道原生图片回传;单张图片限制 10 MB,计入现有图片存储额度。
 
-不保证所有 OpenAI 兼容服务的扩展字段兼容;暂不支持依赖 `previous_response_id` 的服务端状态、原生 Anthropic、跨协议加密推理历史、Copilot 插件市场和 Ultra 子代理模式。扩展请使用现有 Skill/MCP 管理。自动提交信息通过自定义模型服务执行纯文本请求,不开放工具;原生 Codex 账号暂需手动填写提交信息。上游 API key 保留在服务端网关,子进程仅持有会话级随机网关凭证;本地网关不对外发布端口。
+不保证所有 OpenAI 兼容服务的扩展字段兼容;暂不支持依赖 `previous_response_id` 的服务端状态、原生 Anthropic、跨协议加密推理历史、Copilot CLI 插件市场和 Ultra 子代理模式。扩展请使用插件(Agent Plugins)、Skill 或 MCP 管理。自动提交信息通过自定义模型服务执行纯文本请求,不开放工具;原生 Codex 账号暂需手动填写提交信息。上游 API key 保留在服务端网关,子进程仅持有会话级随机网关凭证;本地网关不对外发布端口。
 
 也可使用 Codex 原生账号:在运行服务的系统用户下,将 `CODEX_HOME` 指向 `$CCA_DATA_DIR/codex-home` 后,执行 `node node_modules/@openai/codex/bin/codex.js login`。服务会在打开会话时同步该目录的认证信息,不使用旧 Copilot 登录态。修改/清除认证后应重启服务以关闭旧会话。可通过 `CCA_CODEX_PATH` 指定同版本 Codex 可执行文件。请勿把认证文件放到项目工作区。

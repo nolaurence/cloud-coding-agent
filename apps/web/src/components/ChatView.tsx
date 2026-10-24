@@ -6,7 +6,6 @@ import {
   Bot,
   Brain,
   Check,
-  ChevronDown,
   ChevronRight,
   Copy,
   Loader2,
@@ -14,7 +13,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import type { ChatMessage, SubagentActivity } from "@cca/protocol";
+import type { ChatMessage, SubagentActivity, ToolActivity } from "@cca/protocol";
 import { useImageObjectUrl } from "../hooks/useImageObjectUrl";
 import type { ImagePreviewTarget } from "../lib/imagePreview";
 import { useApp, useThreadState } from "../lib/store";
@@ -26,7 +25,14 @@ import {
   type ChatTimelineEntry,
 } from "../lib/chatTimeline";
 import { Markdown } from "./Markdown";
-import { ToolCallGroup } from "./ToolCallRow";
+import {
+  TOOL_LABELS,
+  ToolCallRow,
+  ToolKindIcon,
+  liveToolLabel,
+  toolCategoryKinds,
+  type ToolKind,
+} from "./ToolCallRow";
 import {
   SubagentTaskCard,
   subagentStatusText,
@@ -356,23 +362,22 @@ function UserMessage({ message }: { message: ChatMessage }) {
   );
 }
 
+function toolActivitiesOf(entries: readonly ChatTimelineEntry[]): ToolActivity[] {
+  return entries
+    .filter((entry): entry is Extract<ChatTimelineEntry, { kind: "tool" }> => entry.kind === "tool")
+    .map((entry) => entry.activity);
+}
+
 function ProcessEntries({
   entries,
-  expandedWorkGroups,
-  onToggleWorkGroup,
   onOpenSubagent,
 }: {
   entries: readonly ChatTimelineEntry[];
-  expandedWorkGroups: ReadonlySet<string>;
-  onToggleWorkGroup: (groupId: string) => void;
   onOpenSubagent: (subagentId: string) => void;
 }) {
   const rows: ReactNode[] = [];
 
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    if (!entry) continue;
-
+  for (const entry of entries) {
     if (entry.kind === "subagent") {
       rows.push(
         <SubagentTaskCard
@@ -385,22 +390,7 @@ function ProcessEntries({
     }
 
     if (entry.kind === "tool") {
-      const activities = [entry.activity];
-      let cursor = index + 1;
-      while (entries[cursor]?.kind === "tool") {
-        activities.push((entries[cursor] as Extract<ChatTimelineEntry, { kind: "tool" }>).activity);
-        cursor += 1;
-      }
-      const groupId = `work-group:${entry.id}`;
-      rows.push(
-        <ToolCallGroup
-          key={groupId}
-          activities={activities}
-          expanded={expandedWorkGroups.has(groupId)}
-          onToggle={() => onToggleWorkGroup(groupId)}
-        />,
-      );
-      index = cursor - 1;
+      rows.push(<ToolCallRow key={entry.id} activity={entry.activity} />);
       continue;
     }
 
@@ -414,6 +404,81 @@ function ProcessEntries({
   }
 
   return <div className="flex min-w-0 flex-col gap-2">{rows}</div>;
+}
+
+/** 回合过程行的标题:24px 行高,[图标] 标题 [点] 摘要。 */
+function ProcessGroupHeader({
+  open,
+  running,
+  iconKind,
+  label,
+  detail,
+  onToggle,
+}: {
+  open: boolean;
+  running: boolean;
+  iconKind: ToolKind | undefined;
+  label: string;
+  detail: string;
+  onToggle?: () => void;
+}) {
+  const content = (
+    <>
+      <span className="relative flex size-4 shrink-0 items-center justify-center text-label-3">
+        {iconKind === undefined
+          ? <Sparkles className="size-3.5" strokeWidth={1.8} />
+          : <ToolKindIcon kind={iconKind} />}
+        {onToggle && (
+          <ChevronRight
+            className={cn(
+              "absolute size-3.5 transition-all duration-100",
+              open ? "rotate-90 opacity-100" : "opacity-0 group-hover/process:opacity-100",
+            )}
+          />
+        )}
+      </span>
+      <span
+        className={cn(
+          "shrink-0 text-[13px] leading-6 text-label-2 transition-colors",
+          running && "text-shimmer",
+          onToggle && "group-hover/process:text-label-1",
+        )}
+      >
+        {label}
+      </span>
+      {detail && (
+        <>
+          <span aria-hidden="true" className="mx-2 size-0.5 shrink-0 rounded-full bg-label-caption" />
+          <span className="min-w-0 flex-1 truncate text-[13px] leading-6 text-label-3">{detail}</span>
+        </>
+      )}
+    </>
+  );
+  const className = "group/process flex h-6 w-full min-w-0 select-none items-center gap-1.5 text-left";
+  return onToggle ? (
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={onToggle}
+      className={cn(className, "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60")}
+    >
+      {content}
+    </button>
+  ) : (
+    <div className={className} aria-live="polite">{content}</div>
+  );
+}
+
+/** 运行中回合的已用时间,每秒刷新。 */
+function useElapsedLabel(startedAt: number | null): string | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (startedAt === null) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+  return startedAt === null ? null : formatDuration(now - startedAt);
 }
 
 function WorkingIndicator({ startedAt }: { startedAt: number | null }) {
@@ -441,17 +506,13 @@ function CompletedTurn({
   turnId,
   entries,
   expanded,
-  expandedWorkGroups,
   onToggleTurn,
-  onToggleWorkGroup,
   onOpenSubagent,
 }: {
   turnId: string;
   entries: readonly ChatTimelineEntry[];
   expanded: boolean;
-  expandedWorkGroups: ReadonlySet<string>;
   onToggleTurn: (turnId: string) => void;
-  onToggleWorkGroup: (groupId: string) => void;
   onOpenSubagent: (subagentId: string) => void;
 }) {
   const terminalAssistant = findTerminalAssistantEntry(entries);
@@ -465,17 +526,9 @@ function CompletedTurn({
       !(entry.kind === "message" && entry.message.role === "user") &&
       entry.id !== terminalAssistant?.id,
   );
-  const processSegments: ChatTimelineEntry[][] = [];
-  for (const entry of processEntries) {
-    if (entry.kind === "subagent") {
-      processSegments.push([entry]);
-      continue;
-    }
-    const current = processSegments.at(-1);
-    if (current && current[0]?.kind !== "subagent") current.push(entry);
-    else processSegments.push([entry]);
-  }
-  const hasCollapsibleEntries = processEntries.some((entry) => entry.kind !== "subagent");
+  const hasProcess = processEntries.length > 0;
+  const kinds = toolCategoryKinds(toolActivitiesOf(processEntries));
+  const detail = kinds.slice(0, 3).map((kind) => TOOL_LABELS[kind]).join("、");
   const startedAt = turnStartedAt(entries);
   const endedAt = turnEndedAt(entries);
   const durationLabel =
@@ -486,47 +539,21 @@ function CompletedTurn({
       {userEntries.map((entry) => (
         <UserMessage key={entry.id} message={entry.message} />
       ))}
-      {reasoning && (hasCollapsibleEntries ? expanded : true) && (
-        <ReasoningBlock text={reasoning} />
-      )}
-      {processSegments.map((segment) => {
-        const first = segment[0];
-        if (!first) return null;
-        if (first.kind === "subagent") {
-          return (
-            <SubagentTaskCard
-              key={first.id}
-              subagent={first.subagent}
-              onOpen={onOpenSubagent}
-            />
-          );
-        }
-        if (!expanded) return null;
-        return (
-          <ProcessEntries
-            key={`segment:${first.id}`}
-            entries={segment}
-            expandedWorkGroups={expandedWorkGroups}
-            onToggleWorkGroup={onToggleWorkGroup}
-            onOpenSubagent={onOpenSubagent}
+      {reasoning && (!hasProcess || expanded) && <ReasoningBlock text={reasoning} />}
+      {hasProcess && (
+        <div className={cn("flex min-w-0 flex-col", expanded ? "gap-4" : "gap-0")}>
+          <ProcessGroupHeader
+            open={expanded}
+            running={false}
+            iconKind={kinds[0]}
+            label={durationLabel}
+            detail={detail}
+            onToggle={() => onToggleTurn(turnId)}
           />
-        );
-      })}
-      {hasCollapsibleEntries && (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          data-scroll-anchor-ignore
-          onClick={() => onToggleTurn(turnId)}
-          className="flex h-6 w-fit cursor-pointer select-none items-center gap-1 text-[13px] leading-6 text-label-2 transition-colors hover:text-label-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
-        >
-          <span>{durationLabel}</span>
-          {expanded ? (
-            <ChevronDown className="size-3 shrink-0" />
-          ) : (
-            <ChevronRight className="size-3 shrink-0" />
+          {expanded && (
+            <ProcessEntries entries={processEntries} onOpenSubagent={onOpenSubagent} />
           )}
-        </button>
+        </div>
       )}
       {terminalAssistant && (
         <AssistantMessage message={terminalAssistant.message} showReasoning={false} />
@@ -539,15 +566,11 @@ function RunningTurn({
   entries,
   live,
   startedAt,
-  expandedWorkGroups,
-  onToggleWorkGroup,
   onOpenSubagent,
 }: {
   entries: readonly ChatTimelineEntry[];
   live: { text: string; reasoning: string };
   startedAt: number | null;
-  expandedWorkGroups: ReadonlySet<string>;
-  onToggleWorkGroup: (groupId: string) => void;
   onOpenSubagent: (subagentId: string) => void;
 }) {
   const hasLive = Boolean(live.text || live.reasoning);
@@ -560,17 +583,36 @@ function RunningTurn({
     turnId: "live",
     createdAt: Date.now(),
   };
+  const userEntries = entries.filter(
+    (entry): entry is Extract<ChatTimelineEntry, { kind: "message" }> =>
+      entry.kind === "message" && entry.message.role === "user",
+  );
+  const processEntries = entries.filter(
+    (entry) => !(entry.kind === "message" && entry.message.role === "user"),
+  );
+  const activities = toolActivitiesOf(processEntries);
+  const runningActivity = [...activities].reverse().find((activity) => activity.status === "running");
+  const kinds = toolCategoryKinds(activities);
+  const elapsed = useElapsedLabel(startedAt ?? turnStartedAt(entries));
 
   return (
     <section className="flex flex-col gap-4">
-      <ProcessEntries
-        entries={entries}
-        expandedWorkGroups={expandedWorkGroups}
-        onToggleWorkGroup={onToggleWorkGroup}
-        onOpenSubagent={onOpenSubagent}
-      />
+      {userEntries.map((entry) => (
+        <UserMessage key={entry.id} message={entry.message} />
+      ))}
+      <div className="flex min-w-0 flex-col gap-4">
+        <ProcessGroupHeader
+          open
+          running
+          iconKind={kinds[0]}
+          label={runningActivity ? liveToolLabel(runningActivity) : "正在工作"}
+          detail={elapsed ? `已工作 ${elapsed}` : ""}
+        />
+        {processEntries.length > 0 && (
+          <ProcessEntries entries={processEntries} onOpenSubagent={onOpenSubagent} />
+        )}
+      </div>
       {hasLive && <AssistantMessage message={liveMessage} streaming showMeta={false} />}
-      <WorkingIndicator startedAt={startedAt ?? turnStartedAt(entries)} />
     </section>
   );
 }
@@ -612,15 +654,11 @@ function subagentTimelineEntries(
 function SubagentDetail({
   subagent,
   allSubagents,
-  expandedWorkGroups,
-  onToggleWorkGroup,
   onOpenSubagent,
   onBack,
 }: {
   subagent: SubagentActivity;
   allSubagents: readonly SubagentActivity[];
-  expandedWorkGroups: ReadonlySet<string>;
-  onToggleWorkGroup: (groupId: string) => void;
   onOpenSubagent: (subagentId: string) => void;
   onBack: () => void;
 }) {
@@ -704,8 +742,6 @@ function SubagentDetail({
       <div className="flex flex-col gap-4">
         <ProcessEntries
           entries={entries}
-          expandedWorkGroups={expandedWorkGroups}
-          onToggleWorkGroup={onToggleWorkGroup}
           onOpenSubagent={onOpenSubagent}
         />
         {hasLive && subagent.live && (
@@ -783,7 +819,6 @@ export function ChatView({
   const [loadError, setLoadError] = useState("");
   const [internalSubagentId, setInternalSubagentId] = useState<string | null>(null);
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<string>>(new Set());
-  const [expandedWorkGroups, setExpandedWorkGroups] = useState<ReadonlySet<string>>(new Set());
 
   useEffect(() => {
     if (!manageSubscription) return;
@@ -794,7 +829,6 @@ export function ChatView({
     setInternalSubagentId(null);
     onSubagentViewChange?.(null);
     setExpandedTurnIds(new Set());
-    setExpandedWorkGroups(new Set());
     void openThread(threadId).catch((error: unknown) => {
       if (active) setLoadError(error instanceof Error ? error.message : "无法加载会话");
     });
@@ -861,15 +895,6 @@ export function ChatView({
       const next = new Set(existing);
       if (next.has(turnId)) next.delete(turnId);
       else next.add(turnId);
-      return next;
-    });
-  };
-
-  const toggleWorkGroup = (groupId: string) => {
-    setExpandedWorkGroups((existing) => {
-      const next = new Set(existing);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
       return next;
     });
   };
@@ -942,8 +967,6 @@ export function ChatView({
               <SubagentDetail
                 subagent={selectedSubagent}
                 allSubagents={state.subagents}
-                expandedWorkGroups={expandedWorkGroups}
-                onToggleWorkGroup={toggleWorkGroup}
                 onOpenSubagent={openSubagent}
                 onBack={leaveSubagent}
               />
@@ -971,8 +994,6 @@ export function ChatView({
                       entries={block.entries}
                       live={state.live}
                       startedAt={state.activeTurnStartedAt}
-                      expandedWorkGroups={expandedWorkGroups}
-                      onToggleWorkGroup={toggleWorkGroup}
                       onOpenSubagent={openSubagent}
                     />
                   ) : (
@@ -981,9 +1002,7 @@ export function ChatView({
                       turnId={block.turnId}
                       entries={block.entries}
                       expanded={expandedTurnIds.has(block.turnId)}
-                      expandedWorkGroups={expandedWorkGroups}
                       onToggleTurn={toggleTurn}
-                      onToggleWorkGroup={toggleWorkGroup}
                       onOpenSubagent={openSubagent}
                     />
                   );

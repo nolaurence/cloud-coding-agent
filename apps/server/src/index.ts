@@ -349,7 +349,6 @@ export async function startServer(options: { port?: number; host?: string; insta
 
   await app.listen({ port, host });
   console.log(`[cca] server listening on http://${host}:${port}`);
-  hub.warmupPlugins();
 
   let shuttingDown: Promise<void> | null = null;
   const close = () => {

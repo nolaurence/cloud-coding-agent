@@ -21,6 +21,16 @@ import { CopilotManager } from "./copilot.js";
 import { searchFiles } from "./files.js";
 import { deleteSkill, listSkills, saveSkill } from "./skills.js";
 import {
+  addPluginMarketplace,
+  browsePluginMarketplace,
+  installPlugin,
+  listInstalledPlugins,
+  listPluginMarketplaces,
+  removePluginMarketplace,
+  setPluginEnabled,
+  uninstallPlugin,
+} from "./agentPlugins.js";
+import {
   deleteScopedMcpServer,
   listScopedMcpServers,
   normalizeMcpServer,
@@ -117,11 +127,6 @@ export class Hub {
     void this.connectors.applySettings(store.settings.connectors).catch((error) => {
       console.error("[cca] 连接器启动失败", error);
     });
-  }
-
-  // 启动后后台预热插件市场缓存
-  warmupPlugins() {
-    void this.manager.warmupPlugins();
   }
 
   handleConnection(socket: WebSocket, token: string | undefined) {
@@ -313,6 +318,18 @@ export class Hub {
 
   private requireAdmin(conn: ClientConn) {
     if (conn.user.role !== "admin") throw new Error("仅管理员可以执行此操作");
+  }
+
+  private ensureNoRunningThreads(action: string) {
+    if (this.manager.runningThreadIds().length > 0) {
+      throw new Error(`当前仍有任务运行,请停止或等待完成后再${action}`);
+    }
+  }
+
+  /** 插件会改变技能目录与 MCP 服务器,重连已打开的会话使其重新加载。 */
+  private async reloadPlugins() {
+    await this.manager.reconfigureOpenSessions(store.settings, store.settings);
+    this.broadcastSkills();
   }
 
   private requireOwnedProject(conn: ClientConn, projectId: string) {
@@ -1069,47 +1086,51 @@ export class Hub {
         }
         case "plugins.marketplaces.list": {
           this.requireAdmin(conn);
-          this.reply(conn, msg.id, await this.manager.listPluginMarketplaces());
+          this.reply(conn, msg.id, listPluginMarketplaces());
           break;
         }
         case "plugins.marketplace.add": {
           this.requireAdmin(conn);
-          this.reply(conn, msg.id, await this.manager.addPluginMarketplace(msg.source));
+          this.reply(conn, msg.id, await addPluginMarketplace(msg.source));
           break;
         }
         case "plugins.marketplace.remove": {
           this.requireAdmin(conn);
-          this.reply(
-            conn,
-            msg.id,
-            await this.manager.removePluginMarketplace(msg.name, msg.force ?? false),
-          );
+          removePluginMarketplace(msg.marketplaceId);
+          this.reply(conn, msg.id);
           break;
         }
         case "plugins.marketplace.browse": {
           this.requireAdmin(conn);
-          this.reply(conn, msg.id, await this.manager.browsePluginMarketplace(msg.name));
+          this.reply(conn, msg.id, await browsePluginMarketplace(msg.marketplaceId));
           break;
         }
         case "plugins.list": {
           this.requireAdmin(conn);
-          this.reply(conn, msg.id, await this.manager.listInstalledPlugins());
+          this.reply(conn, msg.id, listInstalledPlugins());
           break;
         }
         case "plugins.install": {
           this.requireAdmin(conn);
-          this.reply(conn, msg.id, await this.manager.installPlugin(msg.source));
+          this.ensureNoRunningThreads("安装插件");
+          const installed = await installPlugin(msg.source, msg.subdirectory);
+          await this.reloadPlugins();
+          this.reply(conn, msg.id, installed);
           break;
         }
         case "plugins.uninstall": {
           this.requireAdmin(conn);
-          await this.manager.uninstallPlugin(msg.name, msg.directSourceId);
+          this.ensureNoRunningThreads("卸载插件");
+          uninstallPlugin(msg.name);
+          await this.reloadPlugins();
           this.reply(conn, msg.id);
           break;
         }
         case "plugins.setEnabled": {
           this.requireAdmin(conn);
-          await this.manager.setPluginEnabled(msg.name, msg.enabled);
+          this.ensureNoRunningThreads("切换插件");
+          setPluginEnabled(msg.name, msg.enabled);
+          await this.reloadPlugins();
           this.reply(conn, msg.id);
           break;
         }
