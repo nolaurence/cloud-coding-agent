@@ -13,8 +13,8 @@ type RailItem = {
 
 function railItemClass(active: boolean) {
   return cn(
-    "window-no-drag flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
-    active && "bg-zinc-200 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100",
+    "window-no-drag flex size-9 items-center justify-center rounded-[12px] text-label-2 transition-colors hover:bg-hover hover:text-label-1",
+    active && "bg-hover text-label-1",
   );
 }
 
@@ -63,10 +63,10 @@ export function NavRail({
 
   return (
     <nav
-      className="flex h-full w-[3.25rem] shrink-0 flex-col items-center gap-1 border-r border-[rgba(15,23,42,0.05)] bg-zinc-100 py-2 shadow-[inset_-2px_0_10px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-900 dark:shadow-[inset_-2px_0_10px_rgba(15,23,42,0.35)]"
+      className="flex h-full w-14 shrink-0 flex-col items-center gap-1 bg-panel px-2.5 pt-1.5 pb-2"
       aria-label="主导航"
     >
-      <div className="window-drag-region flex w-full shrink-0 items-center justify-center py-1">
+      <div className="window-drag-region flex w-full shrink-0 items-center justify-center pb-1">
         <WindowControls show="mac" />
       </div>
       {sidebarCollapsed && onExpandSidebar && (
@@ -77,7 +77,7 @@ export function NavRail({
           title="显示会话侧边栏 (⌘B)"
           onClick={onExpandSidebar}
         >
-          <PanelLeftOpen className="h-4 w-4" />
+          <PanelLeftOpen className="size-[18px]" strokeWidth={1.8} />
         </button>
       )}
       {items.map((item) => (
@@ -89,7 +89,7 @@ export function NavRail({
           aria-label={item.label}
           title={item.label}
         >
-          <item.icon className="h-4 w-4" />
+          <item.icon className="size-[18px]" strokeWidth={1.8} />
         </Link>
       ))}
       <div className="min-h-0 flex-1" />
@@ -100,7 +100,7 @@ export function NavRail({
         title="设置"
         onClick={() => go("/settings/general")}
       >
-        <Settings className="h-4 w-4" />
+        <Settings className="size-[18px]" strokeWidth={1.8} />
       </button>
     </nav>
   );

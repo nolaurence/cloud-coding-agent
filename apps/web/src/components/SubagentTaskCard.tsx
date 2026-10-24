@@ -45,30 +45,28 @@ export function SubagentTaskCard({
     <button
       type="button"
       data-subagent-id={subagent.id}
-      className="group/subagent flex w-full min-w-0 items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/60"
+      className="group/subagent flex h-6 w-full min-w-0 items-center gap-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
       aria-label={`查看子代理任务：${subagentTaskTitle(subagent)}`}
       title={metadata ? `${status} · ${metadata}` : status}
       onClick={() => onOpen(subagent.id)}
     >
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground/65">
+      <span className="flex size-4 shrink-0 items-center justify-center text-label-3">
         <Bot className="h-3.5 w-3.5 stroke-[1.8]" />
       </span>
-      <span className="min-w-0 flex-1 overflow-hidden">
-        <span className="flex min-w-0 items-baseline gap-1.5">
-          <span className="shrink-0 font-medium text-foreground/80">
-            {subagent.agentDisplayName || "子代理"}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-muted-foreground">
-            {subagentTaskTitle(subagent)}
-          </span>
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[13px] leading-6">
+        <span className="shrink-0 text-label-2 transition-colors group-hover/subagent:text-label-1">
+          {subagent.agentDisplayName || "子代理"}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-label-3">
+          {subagentTaskTitle(subagent)}
         </span>
       </span>
       {metadata && (
-        <span className="hidden max-w-44 shrink truncate text-[11px] text-muted-foreground sm:block">
+        <span className="hidden max-w-44 shrink truncate text-[12px] leading-5 text-label-3 sm:block">
           {metadata}
         </span>
       )}
-      <span className="flex h-4 shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+      <span className="flex h-4 shrink-0 items-center gap-1 text-[12px] leading-5 text-label-3">
         <span className="hidden sm:inline">{status}</span>
         {subagent.status === "running" ? (
           <Loader2 className="h-3 w-3 animate-spin" />
@@ -82,7 +80,7 @@ export function SubagentTaskCard({
           <Check className="h-3 w-3" />
         )}
       </span>
-      <ArrowUpRight className="h-3 w-3 shrink-0 text-muted-foreground/30 transition-colors group-hover/subagent:text-muted-foreground/70" />
+      <ArrowUpRight className="h-3 w-3 shrink-0 text-label-caption/60 transition-colors group-hover/subagent:text-label-2" />
     </button>
   );
 }

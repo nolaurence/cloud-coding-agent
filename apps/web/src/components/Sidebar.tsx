@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { BrandLogo } from "./BrandLogo";
 import {
@@ -93,86 +93,83 @@ export function Sidebar({
   };
 
   return (
-    <aside className="flex h-full w-full shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 md:w-[17rem] dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="window-drag-region flex h-12 shrink-0 items-center gap-2 px-4">
-        <BrandLogo className="h-6 w-6" />
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold">{appName}</span>
+    <aside className="flex h-full w-full min-w-0 shrink-0 flex-col border-r-[0.5px] border-line-3 bg-panel px-3 py-1.5 md:w-[280px]">
+      <div className="window-drag-region -mx-1 flex h-[60px] shrink-0 items-center gap-2 pl-1 pr-0">
+        <BrandLogo className="size-6 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-[17px] font-semibold leading-6 tracking-[0.02em] text-label-1">{appName}</span>
         {!connected && (
-          <WifiOff className="h-3.5 w-3.5 text-amber-500" aria-label="正在连接服务器" />
+          <WifiOff className="size-3.5 shrink-0 text-[var(--ds-label-caption)]" aria-label="正在连接服务器" />
         )}
         {onCollapse && (
-          <Button
+          <button
             type="button"
-            variant="ghost"
-            size="icon-sm"
             aria-label="隐藏会话侧边栏"
             title="隐藏会话侧边栏 (⌘B)"
-            className="window-no-drag text-zinc-400"
+            className="window-no-drag flex size-7 shrink-0 items-center justify-center rounded-[8px] text-label-2 transition-colors hover:bg-hover hover:text-label-1"
             onClick={onCollapse}
           >
-            <PanelLeftClose className="h-4 w-4" />
-          </Button>
+            <PanelLeftClose className="size-4" strokeWidth={1.8} />
+          </button>
         )}
         {onClose && (
-          <Button
+          <button
             type="button"
-            variant="ghost"
-            size="icon-sm"
             aria-label="关闭侧栏"
-            className="window-no-drag"
+            className="window-no-drag flex size-7 shrink-0 items-center justify-center rounded-[8px] text-label-2 transition-colors hover:bg-hover hover:text-label-1"
             onClick={onClose}
           >
-            <X className="h-4 w-4" />
-          </Button>
+            <X className="size-4" strokeWidth={1.8} />
+          </button>
         )}
       </div>
 
-      <div className="px-2 pb-2">
-        <Button
-          variant="ghost"
-          className="w-full justify-start font-normal text-foreground"
+      <div className="flex shrink-0 flex-col gap-1 pb-3">
+        <button
+          type="button"
+          className="flex h-[38px] w-full items-center justify-center gap-1.5 rounded-[12px] border-[0.5px] border-line-3 bg-elevated px-3 text-[14px] font-medium leading-[22px] text-label-1 transition-colors hover:bg-hover-solid"
           onClick={() => {
             navigate("/");
             onNavigate?.();
           }}
         >
-          <SquarePen className="h-4 w-4" /> 新聊天
-        </Button>
-        <Button
-          variant="ghost"
-          className="w-full justify-start text-muted-foreground"
+          <SquarePen className="size-3.5 shrink-0" strokeWidth={1.8} />
+          <span className="truncate">新聊天</span>
+        </button>
+        <button
+          type="button"
+          className="flex min-h-9 w-full items-center gap-2 rounded-[12px] px-2 py-[7px] text-left text-[14px] leading-[22px] text-label-1 transition-colors hover:bg-hover"
           onClick={() => setAddOpen(true)}
         >
-          <FolderPlus className="h-4 w-4" /> 创建工作区
-        </Button>
+          <FolderPlus className="size-4 shrink-0 text-label-3" strokeWidth={1.8} />
+          <span className="min-w-0 flex-1 truncate">创建工作区</span>
+        </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-        <div className="px-2 py-1 text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+        <div className="flex h-8 items-center px-2 text-[12px] font-medium leading-5 text-label-3">
           项目
         </div>
         {projects.length === 0 && (
-          <div className="px-2 py-6 text-center text-xs text-zinc-500">
+          <div className="px-2 py-4 text-[13px] leading-5 text-label-3">
             暂无工作区
           </div>
         )}
         {projects.map((project) => (
-          <div key={project.id} className="mt-1">
-            <div className="group flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-              <Folder className="h-3.5 w-3.5 shrink-0" />
+          <div key={project.id}>
+            <div className="group flex h-[34px] items-center gap-1.5 rounded-[12px] px-2 text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover">
+              <Folder className="size-3.5 shrink-0 text-[var(--ds-label-caption)]" strokeWidth={1.8} />
               <span className="min-w-0 flex-1 truncate">
                 {project.name}
               </span>
-              <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  className="opacity-100 md:opacity-0 md:group-hover:opacity-100"
-                  aria-label={`移除工作区 ${project.name}`}
-                  title="移除工作区"
-                  onClick={() => setConfirmTarget({ kind: "project", id: project.id, name: project.name })}
-                >
-                  <Trash2 className="h-3.5 w-3.5 text-zinc-400 hover:text-red-500" />
-                </Button>
+              <button
+                type="button"
+                aria-label={`移除工作区 ${project.name}`}
+                title="移除工作区"
+                className="flex size-4 shrink-0 items-center justify-center rounded-[4px] text-label-3 opacity-100 transition-colors hover:text-label-1 md:opacity-0 md:group-hover:opacity-100"
+                onClick={() => setConfirmTarget({ kind: "project", id: project.id, name: project.name })}
+              >
+                <Trash2 className="size-3.5" strokeWidth={1.8} />
+              </button>
             </div>
             {threadsByProject(project.id).map((thread) => {
               const active = location.pathname === `/thread/${thread.id}`;
@@ -191,34 +188,32 @@ export function Sidebar({
                           : thread.title
                     }
                     className={cn(
-                      buttonVariants({ variant: active ? "secondary" : "ghost", size: "sm" }),
-                      "w-full justify-start font-normal",
-                      canManageThread ? "pr-9" : "pr-2",
-                      active ? "font-medium" : "text-muted-foreground",
+                      "flex h-8 items-center gap-1.5 rounded-[12px] px-2 text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover",
+                      canManageThread ? "pr-8" : "pr-2",
+                      active && "bg-hover",
                     )}
                   >
                     {running ? (
-                      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />
+                      <Loader2 className="size-3.5 shrink-0 animate-spin text-[var(--ds-link)]" strokeWidth={1.8} />
                     ) : thread.access === "readonly" ? (
-                      <Eye className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                      <Eye className="size-3.5 shrink-0 text-label-3" strokeWidth={1.8} />
                     ) : thread.access === "collaborate" ? (
-                      <MessagesSquare className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                      <MessagesSquare className="size-3.5 shrink-0 text-label-3" strokeWidth={1.8} />
                     ) : (
-                      <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                      <MessageSquare className="size-3.5 shrink-0 text-label-3" strokeWidth={1.8} />
                     )}
                     <span className="min-w-0 flex-1 truncate">{thread.title}</span>
                   </Link>
                   {canManageThread && (
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      className="absolute top-1/2 right-1.5 -translate-y-1/2 opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                    <button
+                      type="button"
+                      className="absolute top-1/2 right-1.5 flex size-5 -translate-y-1/2 items-center justify-center rounded-[6px] text-label-3 opacity-100 transition-colors hover:bg-hover hover:text-label-1 md:opacity-0 md:group-hover:opacity-100"
                       aria-label={`删除会话 ${thread.title}`}
                       title="删除会话"
                       onClick={() => setConfirmTarget({ kind: "thread", id: thread.id, name: thread.title, active })}
                     >
-                      <Trash2 className="h-3.5 w-3.5 text-zinc-400 hover:text-red-500" />
-                    </Button>
+                      <Trash2 className="size-3.5" strokeWidth={1.8} />
+                    </button>
                   )}
                 </div>
               );
@@ -226,9 +221,9 @@ export function Sidebar({
           </div>
         ))}
         {sharedThreads.length > 0 && (
-          <div className="mt-4 border-t border-zinc-200 pt-3 dark:border-zinc-800">
-            <div className="flex items-center gap-1.5 px-2 py-1 text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-              <MessagesSquare className="h-3.5 w-3.5" />
+          <div className="mt-2">
+            <div className="flex h-8 items-center gap-1.5 px-2 text-[12px] font-medium leading-5 text-label-3">
+              <MessagesSquare className="size-3.5" strokeWidth={1.8} />
               共享会话
             </div>
             {sharedThreads.map((thread) => {
@@ -240,17 +235,16 @@ export function Sidebar({
                   to={`/thread/${thread.id}`}
                   onClick={onNavigate}
                   className={cn(
-                    buttonVariants({ variant: active ? "secondary" : "ghost", size: "sm" }),
-                    "w-full justify-start font-normal",
-                    active ? "font-medium" : "text-muted-foreground",
+                    "flex h-8 items-center gap-1.5 rounded-[12px] px-2 text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover",
+                    active && "bg-hover",
                   )}
                 >
                   {running ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+                    <Loader2 className="size-3.5 shrink-0 animate-spin text-[var(--ds-link)]" strokeWidth={1.8} />
                   ) : thread.access === "readonly" ? (
-                    <Eye className="h-3.5 w-3.5 opacity-60" />
+                    <Eye className="size-3.5 shrink-0 text-label-3" strokeWidth={1.8} />
                   ) : (
-                    <MessagesSquare className="h-3.5 w-3.5 opacity-60" />
+                    <MessagesSquare className="size-3.5 shrink-0 text-label-3" strokeWidth={1.8} />
                   )}
                   <span className="min-w-0 flex-1 truncate">{thread.title}</span>
                 </Link>
@@ -260,30 +254,29 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
-        <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
-          <User className="h-4 w-4 shrink-0 text-zinc-400" />
-          <span className="min-w-0 flex-1 truncate text-sm">{localMode ? "本地工作区" : user?.username}</span>
+      <div className="shrink-0 pb-0.5 pt-1">
+        <div className="flex h-9 items-center gap-2 rounded-[12px] px-2 text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover">
+          <User className="size-4 shrink-0 text-label-3" strokeWidth={1.8} />
+          <span className="min-w-0 flex-1 truncate">{localMode ? "本地工作区" : user?.username}</span>
           {user?.role === "admin" && (
-            <span title="管理员">
-              <ShieldCheck className="h-3.5 w-3.5 text-blue-500" />
+            <span title="管理员" className="flex size-4 shrink-0 items-center justify-center">
+              <ShieldCheck className="size-3.5 text-[var(--ds-link)]" strokeWidth={1.8} />
             </span>
           )}
           {!localMode && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
+            <button
+              type="button"
               aria-label="退出登录"
               title="退出登录"
-              className="text-zinc-400 hover:text-red-500"
+              className="flex size-7 shrink-0 items-center justify-center rounded-[8px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
               onClick={() => {
                 logout();
                 navigate("/");
                 onNavigate?.();
               }}
             >
-              <LogOut className="h-4 w-4" />
-            </Button>
+              <LogOut className="size-4" strokeWidth={1.8} />
+            </button>
           )}
         </div>
       </div>
@@ -337,7 +330,7 @@ export function Sidebar({
                   <FolderOpen className="h-4 w-4" />
                   {selectedFolder ? "重新选择本地文件夹" : "选择本地文件夹"}
                 </Button>
-                {selectedFolder && <div className="truncate rounded-md bg-zinc-100 px-2.5 py-2 text-xs text-zinc-500 dark:bg-zinc-900" title={selectedFolder}>{selectedFolder}</div>}
+                {selectedFolder && <div className="truncate rounded-[8px] bg-hover px-2.5 py-2 text-xs text-label-3" title={selectedFolder}>{selectedFolder}</div>}
               </>
             )}
             {workspaceError && <p className="text-xs text-red-600 dark:text-red-400">{workspaceError}</p>}

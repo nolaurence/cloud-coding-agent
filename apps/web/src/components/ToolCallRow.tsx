@@ -2,6 +2,7 @@ import { useMemo, useState, type KeyboardEvent } from "react";
 import {
   Brain,
   ChevronDown,
+  ChevronRight,
   Eye,
   Globe2,
   Search,
@@ -82,7 +83,7 @@ const labels: Record<ToolKind, string> = {
 };
 
 function ToolIcon({ kind, className }: { kind: ToolKind; className?: string }) {
-  const iconClassName = cn("block size-4 shrink-0 stroke-[1.8] opacity-70", className);
+  const iconClassName = cn("block size-3.5 shrink-0 stroke-[1.8]", className);
   if (kind === "reasoning") return <Brain className={iconClassName} />;
   if (kind === "modify") return <SquarePen className={iconClassName} />;
   if (kind === "read") return <Eye className={iconClassName} />;
@@ -178,37 +179,57 @@ export function ToolCallGroup({
   const iconKind = latestRunning ? toolKind(latestRunning) : summary.kind;
 
   return (
-    <div className="pb-2">
+    <div className="min-w-0">
       <button
         type="button"
-        className="group/tool-group flex min-h-6 w-full cursor-pointer items-center gap-1.5 rounded-md px-0.5 py-0.5 text-left text-sm leading-relaxed transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        className="group/tool-group flex h-6 w-full cursor-pointer items-center gap-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
         aria-label={hasFailure ? `${label}，工具调用失败` : undefined}
         aria-expanded={expanded}
         onClick={onToggle}
       >
         <span
           className={cn(
-            "flex size-6 shrink-0 items-center justify-center",
-            hasFailure ? "text-destructive" : "text-icon-muted",
+            "relative flex size-4 shrink-0 items-center justify-center",
+            hasFailure ? "text-destructive" : "text-label-3",
           )}
           role={hasFailure ? "img" : undefined}
           aria-label={hasFailure ? "工具调用失败" : undefined}
         >
           {hasFailure ? (
-            <X className="size-4 shrink-0 stroke-[1.8] opacity-70" aria-hidden />
+            <X className="block size-3.5 shrink-0 stroke-[1.8]" aria-hidden />
           ) : (
-            <ToolIcon kind={iconKind} />
+            <span
+              className={cn(
+                "inline-flex transition-opacity duration-100",
+                expanded ? "opacity-0" : "group-hover/tool-group:opacity-0",
+              )}
+            >
+              <ToolIcon kind={iconKind} />
+            </span>
           )}
+          <ChevronRight
+            className={cn(
+              "absolute size-3.5 shrink-0 transition-all duration-100",
+              expanded
+                ? "rotate-90 opacity-100"
+                : "opacity-0 group-hover/tool-group:opacity-100",
+            )}
+          />
         </span>
-        <span className="min-w-0 flex-1 truncate text-secondary-label">{label}</span>
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-[13px] leading-6",
+            hasFailure ? "text-destructive" : "text-label-2 group-hover/tool-group:text-label-1",
+          )}
+        >
+          {label}
+        </span>
       </button>
       {expanded ? (
-        <div className="-mx-1 px-1 py-0">
-          <div className="space-y-px">
-            {activities.map((activity) => (
-              <ToolCallRow key={activity.id} activity={activity} isExpandedToolGroupEntry />
-            ))}
-          </div>
+        <div className="flex flex-col pb-1 pl-[22px] pt-1">
+          {activities.map((activity) => (
+            <ToolCallRow key={activity.id} activity={activity} isExpandedToolGroupEntry />
+          ))}
         </div>
       ) : null}
     </div>
@@ -256,18 +277,16 @@ function ToolCallRow({
   return (
     <div
       className={cn(
-        "flex flex-col rounded-md px-0.5 transition-colors",
-        isExpandedToolGroupEntry ? "py-0" : "py-0.5",
-        canExpand &&
-          "cursor-pointer hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+        "group/tool flex flex-col",
+        canExpand && "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
       )}
       {...rowToggleProps}
     >
-      <div className="flex select-none items-center gap-1.5 transition-[opacity,translate] duration-200">
+      <div className="flex h-6 select-none items-center gap-1.5">
         <span
           className={cn(
-            "flex size-6 shrink-0 items-center justify-center",
-            failed ? "text-destructive" : "text-icon-muted",
+            "flex size-4 shrink-0 items-center justify-center",
+            failed ? "text-destructive" : "text-label-3",
             !showEntryIcon && "invisible",
           )}
           role={failed ? "img" : undefined}
@@ -275,52 +294,42 @@ function ToolCallRow({
           aria-hidden={!showEntryIcon}
         >
           {failed ? (
-            <X className="block size-4 shrink-0 stroke-[1.8] opacity-70" aria-hidden />
+            <X className="block size-3.5 shrink-0 stroke-[1.8]" aria-hidden />
           ) : (
             <ToolIcon kind={kind} />
           )}
         </span>
-        <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <p className="flex min-w-0 w-full items-baseline gap-1.5 text-sm leading-relaxed">
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate",
-                  failed ? "font-medium text-destructive" : "text-secondary-label",
-                )}
-              >
-                {displayText}
-              </span>
-            </p>
-          </div>
-          <span
-            className={cn(
-              "flex size-4 shrink-0 items-center justify-center",
-              !canExpand && "invisible",
-            )}
-            aria-hidden
-          >
-            <ChevronDown
-              className={cn(
-                "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
-                expanded && "rotate-180",
-              )}
-            />
-          </span>
-        </div>
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-[13px] leading-6",
+            failed
+              ? "font-medium text-destructive"
+              : "text-label-3 transition-colors group-hover/tool:text-label-2",
+          )}
+        >
+          {displayText}
+        </span>
+        <ChevronDown
+          className={cn(
+            "size-3 shrink-0 text-label-caption transition-all duration-150",
+            expanded ? "rotate-180 opacity-100" : "opacity-0 group-hover/tool:opacity-100",
+            !canExpand && "invisible",
+          )}
+          aria-hidden
+        />
       </div>
       {expanded && canExpand ? (
         <div
-          className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
+          className="mb-1 ml-[22px] cursor-default border-l border-line-2 pl-3 pt-0.5"
           onClick={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
         >
           {kind === "reasoning" ? (
-            <div className="max-h-64 cursor-text overflow-auto text-muted-foreground/75 select-text">
+            <div className="markdown-compact max-h-64 cursor-text overflow-auto select-text">
               <Markdown>{reasoningText}</Markdown>
             </div>
           ) : body ? (
-            <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-secondary-label select-text">
+            <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words text-[12px] leading-5 text-label-2 select-text [font-family:var(--ds-font-mono)]">
               {body}
             </pre>
           ) : null}

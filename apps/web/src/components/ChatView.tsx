@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Ban,
   Bot,
+  Brain,
   Check,
   ChevronDown,
   ChevronRight,
@@ -50,6 +51,12 @@ function formatDuration(milliseconds: number): string {
   return remainingMinutes > 0 ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
 }
 
+function firstLine(text: string): string {
+  const line = text.split("\n").map((part) => part.trim()).find((part) => part.length > 0) ?? "";
+  return line.replace(/^[#>*\-+\s]+/, "").slice(0, 160);
+}
+
+/** 对话流里的紧凑展开行：24px 行高、16px 图标槽、13px 次级文字。 */
 function ReasoningBlock({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const [open, setOpen] = useState(streaming);
 
@@ -57,32 +64,82 @@ function ReasoningBlock({ text, streaming = false }: { text: string; streaming?:
     setOpen(streaming);
   }, [streaming]);
 
+  const preview = firstLine(text);
+
   return (
-    <div className="assistant-reasoning mb-2">
+    <div className="min-w-0">
       <button
         type="button"
         aria-expanded={open}
-        className="flex min-h-6 items-center gap-1 rounded-md px-1 py-0.5 text-left text-[12px] font-medium leading-5 text-muted-foreground transition-colors hover:bg-accent/20 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/60"
+        className="group/think flex h-6 w-full min-w-0 items-center gap-1.5 text-left"
         onClick={() => setOpen((value) => !value)}
       >
-        <ChevronRight
-          className={cn("h-3.5 w-3.5 shrink-0 opacity-70 transition-transform", open && "rotate-90")}
-        />
-        <span>{streaming ? "正在思考" : "思考过程"}</span>
-        {streaming && (
-          <span className="inline-flex items-center gap-[3px] pl-0.5" aria-hidden="true">
-            <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/35" />
-            <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/35 [animation-delay:200ms]" />
-            <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/35 [animation-delay:400ms]" />
-          </span>
+        <span className="relative flex size-4 shrink-0 items-center justify-center text-label-3">
+          <Brain
+            className={cn(
+              "size-3.5 transition-opacity duration-100",
+              (open ? "opacity-0" : "opacity-100 group-hover/think:opacity-0"),
+            )}
+            strokeWidth={1.8}
+          />
+          <ChevronRight
+            className={cn(
+              "absolute size-3.5 transition-transform duration-100",
+              open ? "rotate-90 opacity-100" : "opacity-0 group-hover/think:opacity-100",
+            )}
+          />
+        </span>
+        <span
+          className={cn(
+            "shrink-0 text-[13px] leading-6 text-label-2",
+            streaming && "text-shimmer",
+          )}
+        >
+          {streaming ? "正在思考" : "思考"}
+        </span>
+        {preview && !open && (
+          <>
+            <span aria-hidden="true" className="mx-2 size-0.5 shrink-0 rounded-full bg-label-caption" />
+            <span className="min-w-0 flex-1 truncate text-[13px] leading-6 text-label-3">
+              {preview}
+            </span>
+          </>
         )}
       </button>
       {open && (
-        <div className="ml-2.5 mt-1 border-l border-border/60 pl-3 text-muted-foreground/75">
+        <div className="markdown-compact min-w-0 pb-1 pl-[22px] pt-1">
           <Markdown>{text}</Markdown>
         </div>
       )}
     </div>
+  );
+}
+
+/** 28px 的图标动作：对话流与气泡下方共用。 */
+function IconAction({
+  label,
+  onClick,
+  className,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex size-7 items-center justify-center rounded-[8px] text-label-3 transition-colors hover:bg-hover hover:text-label-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
+        className,
+      )}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -119,18 +176,13 @@ function CopyAction({
   };
 
   return (
-    <button
-      type="button"
-      className={cn(
-        "flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-200",
-        className,
-      )}
-      aria-label={copied ? "已复制" : label}
-      title={copied ? "已复制" : label}
+    <IconAction
+      label={copied ? "已复制" : label}
       onClick={() => void copy()}
+      className={className}
     >
-      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-    </button>
+      {copied ? <Check className="size-[15px]" /> : <Copy className="size-[15px]" />}
+    </IconAction>
   );
 }
 
@@ -167,27 +219,27 @@ function MessageImage({
 
   if (error) {
     return (
-      <div className="flex h-28 w-44 items-center justify-center rounded-xl bg-zinc-200 px-3 text-center text-xs text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
+      <div className="flex h-28 w-44 items-center justify-center rounded-[14px] bg-hover px-3 text-center text-[12px] leading-5 text-label-3">
         {error}
       </div>
     );
   }
   if (loading || !src) {
-    return <div className="h-28 w-44 animate-pulse rounded-xl bg-zinc-200 dark:bg-zinc-700" />;
+    return <div className="h-28 w-44 animate-pulse rounded-[14px] bg-hover" />;
   }
 
   const thumbnail = (
     <img
       src={src}
       alt={name}
-      className="max-h-64 max-w-full rounded-xl object-contain"
+      className="max-h-64 max-w-full rounded-[14px] object-contain"
     />
   );
 
   return onOpenImage ? (
     <button
       type="button"
-      className="cursor-zoom-in rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="cursor-zoom-in rounded-[14px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       aria-label={`在右侧栏打开图片：${name}`}
       title={`打开图片：${name}`}
       onClick={() => onOpenImage(image)}
@@ -216,7 +268,7 @@ function AssistantMessage({
   const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
   return (
     <article
-      className="assistant-message group/assistant min-w-0 px-1 py-0.5"
+      className="assistant-message group/assistant flex min-w-0 flex-col gap-4"
       aria-live={streaming ? "polite" : undefined}
     >
       {showReasoning && message.reasoning && (
@@ -224,16 +276,18 @@ function AssistantMessage({
       )}
       {message.text && <Markdown>{message.text}</Markdown>}
       {images.length > 0 && threadId && (
-        <div className={cn("my-2 grid max-w-2xl gap-2", images.length > 1 && "grid-cols-2")}>
+        <div className={cn("grid max-w-2xl gap-2", images.length > 1 && "grid-cols-2")}>
           {images.map((image) => (
             <MessageImage key={image.id} id={image.id} name={image.displayName} threadId={threadId} shareToken={shareToken} />
           ))}
         </div>
       )}
       {showMeta && !streaming && (message.text || images.length > 0) && (
-        <div className="mt-1.5 flex h-7 items-center gap-2 text-xs tabular-nums text-muted-foreground opacity-100 transition-opacity duration-200 sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
-          {message.text && <CopyAction text={message.text} label="复制回复" className="h-6 w-6 text-muted-foreground" />}
-          <MessageTime at={message.createdAt} />
+        <div className="-ml-1.5 flex h-7 items-center gap-2 text-label-3 opacity-100 transition-opacity duration-150 sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
+          {message.text && <CopyAction text={message.text} label="复制回复" />}
+          <span className="text-[13px] leading-6 tabular-nums">
+            <MessageTime at={message.createdAt} />
+          </span>
         </div>
       )}
     </article>
@@ -251,18 +305,13 @@ function UserMessage({ message }: { message: ChatMessage }) {
   const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
 
   return (
-    <article className="group/user flex flex-col items-end py-1">
+    <article className="group/user flex flex-col items-end gap-1.5">
       {message.authorId && showAuthors && (
         <div className="mb-1 px-2 text-[11px] text-muted-foreground">
           {message.authorId === currentUsername ? "你" : message.authorId}
         </div>
       )}
-      <div className="relative max-w-[80%] rounded-xl bg-muted px-3 py-2 text-foreground">
-        <CopyAction
-          text={message.text}
-          label="复制消息"
-          className="absolute -left-9 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100"
-        />
+      <div className="flex min-w-0 max-w-[min(82%,525px)] flex-col items-end gap-2">
         {images.length > 0 && (
           <div className={cn("grid gap-2", images.length > 1 && "grid-cols-2")}>
             {images.map((image) => (
@@ -278,20 +327,30 @@ function UserMessage({ message }: { message: ChatMessage }) {
             ))}
           </div>
         )}
-        {skills.length > 0 && (
-          <div className={cn("flex flex-wrap gap-1.5 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400", images.length > 0 && "mt-2")}>
-            {skills.map((skill) => (
-              <span key={skill} className="inline-flex items-center gap-1">
-                <Sparkles className="h-3 w-3" />/{skill}
-              </span>
-            ))}
+        {(content || skills.length > 0) && (
+          <div className="chat-bubble max-w-full rounded-[20px] bg-bubble px-4 py-[10px] text-[14px] leading-[22px] text-label-1">
+            {skills.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 text-[12px] leading-5 text-label-3">
+                {skills.map((skill) => (
+                  <span key={skill} className="inline-flex items-center gap-1">
+                    <Sparkles className="h-3 w-3" />/{skill}
+                  </span>
+                ))}
+              </div>
+            )}
+            {content && (
+              <div className={cn(skills.length > 0 && "mt-1")}>
+                <Markdown>{content}</Markdown>
+              </div>
+            )}
           </div>
         )}
-        {content && (
-          <div className={cn((images.length > 0 || skills.length > 0) && "mt-1.5")}>
-            <Markdown>{content}</Markdown>
-          </div>
-        )}
+      </div>
+      <div className="flex h-7 items-center gap-2 text-label-3 opacity-100 transition-opacity duration-150 md:opacity-0 md:group-hover/user:opacity-100 md:group-focus-within/user:opacity-100">
+        <span className="text-[13px] leading-6 tabular-nums">
+          <MessageTime at={message.createdAt} />
+        </span>
+        <CopyAction text={message.text} label="复制消息" />
       </div>
     </article>
   );
@@ -354,7 +413,7 @@ function ProcessEntries({
     }
   }
 
-  return <>{rows}</>;
+  return <div className="flex min-w-0 flex-col gap-2">{rows}</div>;
 }
 
 function WorkingIndicator({ startedAt }: { startedAt: number | null }) {
@@ -367,13 +426,13 @@ function WorkingIndicator({ startedAt }: { startedAt: number | null }) {
   }, [startedAt]);
 
   return (
-    <div className="flex items-center gap-2 px-1.5 py-1 text-[11px] tabular-nums text-muted-foreground" aria-live="polite">
-      <span className="inline-flex items-center gap-[3px]" aria-hidden="true">
-        <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30" />
-        <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30 [animation-delay:200ms]" />
-        <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/30 [animation-delay:400ms]" />
+    <div
+      className="flex h-6 items-center text-[13px] leading-6 tabular-nums text-label-3"
+      aria-live="polite"
+    >
+      <span className="text-shimmer text-label-2">
+        {startedAt ? `已工作 ${formatDuration(now - startedAt)}` : "正在工作"}
       </span>
-      <span>{startedAt ? `已工作 ${formatDuration(now - startedAt)}` : "正在工作"}</span>
     </div>
   );
 }
@@ -423,7 +482,7 @@ function CompletedTurn({
     startedAt !== null && endedAt !== null ? `工作了 ${formatDuration(endedAt - startedAt)}` : "工作过程";
 
   return (
-    <section className="flex flex-col gap-3" data-turn-id={turnId}>
+    <section className="flex flex-col gap-4" data-turn-id={turnId}>
       {userEntries.map((entry) => (
         <UserMessage key={entry.id} message={entry.message} />
       ))}
@@ -454,22 +513,20 @@ function CompletedTurn({
         );
       })}
       {hasCollapsibleEntries && (
-        <div className="border-b border-border/60 pb-2 pt-1">
-          <button
-            type="button"
-            aria-expanded={expanded}
-            data-scroll-anchor-ignore
-            onClick={() => onToggleTurn(turnId)}
-            className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-xs text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-          >
-            <span>{durationLabel}</span>
-            {expanded ? (
-              <ChevronDown className="size-3.5" />
-            ) : (
-              <ChevronRight className="size-3.5" />
-            )}
-          </button>
-        </div>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          data-scroll-anchor-ignore
+          onClick={() => onToggleTurn(turnId)}
+          className="flex h-6 w-fit cursor-pointer select-none items-center gap-1 text-[13px] leading-6 text-label-2 transition-colors hover:text-label-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+        >
+          <span>{durationLabel}</span>
+          {expanded ? (
+            <ChevronDown className="size-3 shrink-0" />
+          ) : (
+            <ChevronRight className="size-3 shrink-0" />
+          )}
+        </button>
       )}
       {terminalAssistant && (
         <AssistantMessage message={terminalAssistant.message} showReasoning={false} />
@@ -505,7 +562,7 @@ function RunningTurn({
   };
 
   return (
-    <section className="flex flex-col gap-3">
+    <section className="flex flex-col gap-4">
       <ProcessEntries
         entries={entries}
         expandedWorkGroups={expandedWorkGroups}
@@ -591,34 +648,34 @@ function SubagentDetail({
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 -mx-3 mb-5 border-b border-zinc-200 bg-white/95 px-3 pb-3 pt-1 backdrop-blur sm:-mx-5 sm:px-5 dark:border-border dark:bg-background/95">
-        <div className="flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+      <header className="sticky top-0 z-10 -mx-4 mb-5 border-b border-line-2 bg-background/95 px-4 pb-3 pt-1 backdrop-blur">
+        <div className="flex min-w-0 items-center gap-1.5 text-[13px] text-label-3">
           <button
             type="button"
-            className="flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+            className="flex h-7 shrink-0 items-center gap-1 rounded-[8px] px-1.5 transition-colors hover:bg-hover hover:text-label-1"
             onClick={onBack}
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             <span>{parent ? parent.agentDisplayName : "主会话"}</span>
           </button>
-          <ChevronRight className="h-3 w-3 shrink-0 text-zinc-300 dark:text-zinc-700" />
+          <ChevronRight className="h-3 w-3 shrink-0 text-label-caption" />
           <span className="min-w-0 truncate">{taskTitle}</span>
         </div>
       </header>
 
-      <section className="mb-5 border-b border-zinc-200 pb-5 dark:border-zinc-800">
+      <section className="mb-5 border-b border-line-2 pb-5">
         <div className="flex min-w-0 items-start gap-3">
-          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
-            <Bot className="h-4 w-4" />
+          <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-hover text-label-2">
+            <Bot className="h-4 w-4" strokeWidth={1.8} />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+            <div className="text-[12px] text-label-3">
               {subagent.agentDisplayName || "子代理"}
             </div>
-            <h2 className="mt-0.5 break-words text-base font-semibold text-zinc-900 dark:text-zinc-100">
+            <h2 className="mt-0.5 break-words text-[16px] font-semibold leading-6 text-label-1">
               {taskTitle}
             </h2>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-400">
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-label-3">
               <span className="inline-flex items-center gap-1">
                 {subagent.status === "running" ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -638,13 +695,13 @@ function SubagentDetail({
           </div>
         </div>
         {subagent.prompt && subagent.prompt !== taskTitle && !hasPromptMessage && (
-          <div className="mt-4 border-l-2 border-zinc-200 pl-3 text-sm leading-6 text-zinc-600 dark:border-zinc-800 dark:text-zinc-300">
+          <div className="mt-4 border-l-2 border-line-2 pl-3.5 text-[13px] leading-5 text-label-2">
             <Markdown>{subagent.prompt}</Markdown>
           </div>
         )}
       </section>
 
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-4">
         <ProcessEntries
           entries={entries}
           expandedWorkGroups={expandedWorkGroups}
@@ -670,7 +727,7 @@ function SubagentDetail({
           <WorkingIndicator startedAt={subagent.startedAt} />
         )}
         {subagent.status === "idle" && !hasLive && (
-          <div className="flex items-center gap-2 px-1.5 py-2 text-xs text-muted-foreground/70">
+          <div className="flex items-center gap-2 text-[13px] leading-6 text-label-3">
             <Pause className="h-3.5 w-3.5" />
             等待后续任务
           </div>
@@ -679,7 +736,7 @@ function SubagentDetail({
           <div
             role="alert"
             className={cn(
-              "flex items-start gap-2 px-1.5 py-1.5 text-sm",
+              "flex items-start gap-2 text-[13px] leading-5",
               subagent.status === "cancelled" ? "text-amber-600 dark:text-amber-400" : "text-destructive",
             )}
           >
@@ -688,7 +745,7 @@ function SubagentDetail({
           </div>
         )}
         {subagent.status !== "running" && subagent.status !== "idle" && !subagent.error && entries.length === 0 && !hasLive && (
-          <div className="py-8 text-center text-sm text-zinc-400">子代理没有返回可展示的内容</div>
+          <div className="py-8 text-center text-[13px] text-label-caption">子代理没有返回可展示的内容</div>
         )}
       </div>
     </div>
@@ -849,14 +906,14 @@ export function ChatView({
   if (loadError && !state.loaded) {
     return (
       <div className="flex h-full items-center justify-center px-6">
-        <div className="max-w-md text-center text-sm text-red-600 dark:text-red-400">{loadError}</div>
+        <div className="max-w-md text-center text-[13px] leading-5 text-destructive">{loadError}</div>
       </div>
     );
   }
 
   if (!state.loaded) {
     return (
-      <div className="flex h-full items-center justify-center text-zinc-400">
+      <div className="flex h-full items-center justify-center text-label-caption">
         <Loader2 className="h-5 w-5 animate-spin" />
       </div>
     );
@@ -875,11 +932,11 @@ export function ChatView({
           onWheel={(event) => {
             if (event.deltaY < 0) pinnedRef.current = false;
           }}
-          className="h-full min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain [scrollbar-gutter:stable_both-edges]"
+          className="h-full min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain [scrollbar-gutter:stable]"
         >
           <div
-            className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-3 pt-4 sm:px-5 sm:pt-5"
-            style={{ paddingBottom: Math.max(20, bottomInset + 16) }}
+            className="mx-auto flex min-h-full w-full max-w-[min(100%,calc(clamp(680px,64%,920px)+32px))] flex-col gap-4 px-4 pt-4"
+            style={{ paddingBottom: Math.max(24, bottomInset + 16) }}
           >
             {selectedSubagent ? (
               <SubagentDetail
@@ -893,7 +950,7 @@ export function ChatView({
             ) : (
               <>
                 {blocks.length === 0 && !hasLive && !state.running && (
-                  <div className="flex flex-1 items-center justify-center py-16 text-sm text-zinc-300 dark:text-zinc-700">
+                  <div className="flex flex-1 items-center justify-center py-16 text-[13px] text-label-caption">
                     新会话
                   </div>
                 )}
@@ -901,7 +958,7 @@ export function ChatView({
                 {blocks.map((block) => {
                   if (block.kind === "system") {
                     return (
-                      <div key={block.id} className="py-2 text-center text-xs text-zinc-400">
+                      <div key={block.id} className="py-2 text-center text-[12px] leading-5 text-label-3">
                         {block.message.text}
                       </div>
                     );
@@ -933,7 +990,7 @@ export function ChatView({
                 })}
 
                 {state.running && !hasActiveTurnBlock && (
-                  <section className="flex flex-col gap-3">
+                  <section className="flex flex-col gap-4">
                     {hasLive && (
                       <AssistantMessage
                         streaming
@@ -954,8 +1011,12 @@ export function ChatView({
                 )}
 
                 {state.error && (
-                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700 dark:border-red-950 dark:bg-red-950/30 dark:text-red-300">
-                    {state.error}
+                  <div role="status" className="flex items-start gap-2 text-[13px] leading-5">
+                    <span aria-hidden="true" className="mt-[5px] size-2.5 shrink-0 rounded-full bg-destructive" />
+                    <div className="min-w-0 [overflow-wrap:anywhere]">
+                      <span className="mr-1.5 font-semibold text-destructive">出错了</span>
+                      <span className="text-label-2">{state.error}</span>
+                    </div>
                   </div>
                 )}
               </>
@@ -968,12 +1029,11 @@ export function ChatView({
             type="button"
             aria-label="回到最新消息"
             title="回到最新消息"
-            className="absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-600 shadow-sm hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-            style={{ bottom: bottomInset + 6 }}
+            className="absolute right-[max(16px,calc((100%-clamp(680px,64%,920px))/2))] z-10 flex size-[34px] items-center justify-center rounded-full border border-line-3 bg-elevated text-label-1 shadow-[0_4px_16px_rgb(0_0_0_/_10%)] transition-colors hover:bg-hover-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+            style={{ bottom: bottomInset + 16 }}
             onClick={scrollToBottom}
           >
-            <ArrowDown className="h-3.5 w-3.5" />
-            回到最新消息
+            <ArrowDown className="h-4 w-4" />
           </button>
         )}
       </div>

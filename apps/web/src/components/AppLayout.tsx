@@ -111,7 +111,7 @@ export function AppLayout() {
         className="fixed right-1 top-1 z-50"
       />
       <main className="relative flex min-w-0 flex-1 flex-col">
-        <header className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-200 px-3 md:hidden dark:border-zinc-800">
+        <header className="flex h-12 shrink-0 items-center gap-3 border-b-[0.5px] border-line-3 bg-background px-3 md:hidden">
           <Button
             type="button"
             variant="ghost"
