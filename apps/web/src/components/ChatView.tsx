@@ -8,7 +8,6 @@ import {
   Check,
   ChevronRight,
   ChevronDown,
-  ChevronUp,
   Copy,
   Loader2,
   Pause,
@@ -600,32 +599,34 @@ function ChatTurn({
   return (
     <section className="flex min-w-0 flex-col gap-4" data-turn-id={turnId}>
       {firstUser && <UserMessage message={firstUser.message} />}
-      {!running && hasProcess && (
-        <button type="button" aria-expanded={expanded} aria-controls={bodyId}
-          onClick={() => onToggleTurn(turnId)}
-          className="flex min-h-6 w-fit items-center gap-1.5 text-left text-[13px] leading-6 text-label-2 transition-colors hover:text-label-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
-          <span>{`已完成${duration}`}</span>
-          {expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-        </button>
-      )}
-      <div id={bodyId} className="flex min-w-0 flex-col gap-4">
-        {content.filter((block) => block !== firstUser).map((block) => {
-          const independent = block.kind === "message" && block.message.role === "user";
-          const hidden = !running && hasProcess && !expanded && block.id !== finalReply?.id && !independent;
-          return (
-            <div key={block.id} hidden={hidden} className={cn("min-w-0", hidden && "hidden")}>
-              {block.kind === "process" ? (
-                <ToolProcessGroup entries={block.entries} closed={block.closed} onOpenSubagent={onOpenSubagent} />
-              ) : block.message.role === "user" ? (
-                <UserMessage message={block.message} />
-              ) : (
-                <AssistantMessage message={block.message} streaming={block.message.streaming}
-                  showReasoning={false} showMeta={!running && block.id === finalReply?.id} />
-              )}
-            </div>
-          );
-        })}
-        {running && <WorkingIndicator startedAt={start} />}
+      <div className={cn("flex min-w-0 flex-col", !running && hasProcess && !expanded ? "gap-2" : "gap-4")}>
+        {!running && hasProcess && (
+          <button type="button" aria-expanded={expanded} aria-controls={bodyId}
+            onClick={() => onToggleTurn(turnId)}
+            className="turn-process-header focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60">
+            <span className="turn-process-label">{`已完成${duration}`}</span>
+            <ChevronDown aria-hidden="true" className="turn-process-chevron" />
+          </button>
+        )}
+        <div id={bodyId} className="flex min-w-0 flex-col gap-4">
+          {content.filter((block) => block !== firstUser).map((block) => {
+            const independent = block.kind === "message" && block.message.role === "user";
+            const hidden = !running && hasProcess && !expanded && block.id !== finalReply?.id && !independent;
+            return (
+              <div key={block.id} hidden={hidden} className={cn("min-w-0", hidden && "hidden")}>
+                {block.kind === "process" ? (
+                  <ToolProcessGroup entries={block.entries} closed={block.closed} onOpenSubagent={onOpenSubagent} />
+                ) : block.message.role === "user" ? (
+                  <UserMessage message={block.message} />
+                ) : (
+                  <AssistantMessage message={block.message} streaming={block.message.streaming}
+                    showReasoning={false} showMeta={!running && block.id === finalReply?.id} />
+                )}
+              </div>
+            );
+          })}
+          {running && <WorkingIndicator startedAt={start} />}
+        </div>
       </div>
     </section>
   );

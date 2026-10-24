@@ -524,6 +524,61 @@ button:disabled,
   }
 }
 
+/* dsh TurnProcessNodeView: full-width disclosure with a bottom hairline. */
+.turn-process-header {
+  box-sizing: border-box;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: 33px;
+  padding: 0 0 8px;
+  border: none;
+  border-bottom: 0.5px solid var(--ds-line-2);
+  background: none;
+  color: var(--ds-label-3);
+  text-align: left;
+  transition: color 100ms ease;
+}
+
+.turn-process-header:hover {
+  color: var(--ds-label-1);
+}
+
+.turn-process-header[aria-expanded="false"] {
+  margin-bottom: 8px;
+}
+
+.turn-process-label {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 24px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turn-process-chevron {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+  color: var(--ds-label-caption);
+  transition: transform 100ms ease;
+}
+
+.turn-process-header[aria-expanded="true"] .turn-process-chevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-process-header,
+  .turn-process-chevron {
+    transition: none;
+  }
+}
+
 .tool-process-fade-top {
   mask-image: linear-gradient(to bottom, transparent, #000 24px);
 }
