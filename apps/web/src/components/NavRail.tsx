@@ -63,7 +63,7 @@ export function NavRail({
 
   return (
     <nav
-      className="flex h-full w-14 shrink-0 flex-col items-center gap-1 bg-panel px-2.5 pt-1.5 pb-2"
+      className="flex h-full w-14 shrink-0 flex-col items-center gap-1 border-r border-[rgba(15,23,42,0.05)] bg-panel px-2.5 pt-1.5 pb-2 shadow-[inset_-2px_0_10px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:shadow-[inset_-2px_0_10px_rgba(15,23,42,0.35)]"
       aria-label="主导航"
     >
       <div className="window-drag-region flex w-full shrink-0 items-center justify-center pb-1">
