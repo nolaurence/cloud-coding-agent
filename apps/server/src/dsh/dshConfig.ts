@@ -128,6 +128,10 @@ function providerRow(route: DshProviderRoute): unknown {
       id: model.id,
       ...(model.name ? { name: model.name } : {}),
       ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+      // 自定义路由不会继承 pi-ai 厂商目录的能力；切换强度时会重建此配置。
+      ...(reasoning && reasoning !== "off"
+        ? { reasoningEfforts: { [reasoning]: reasoning } }
+        : {}),
     })),
   };
 }

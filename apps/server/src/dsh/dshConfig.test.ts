@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { DeepSeekHarness } from "@deepseek-ai/dsh-sdk-client";
+import type { ReasoningEffort } from "@cca/protocol";
+import { sanitizedDshRuntimeEnv } from "../runtimeEnv.js";
 import {
   credentialEnvName,
   dshBinPath,
@@ -134,4 +138,65 @@ test("runtime command honours CCA_DSH_PATH and defaults to the installed CLI", (
   delete process.env.CCA_DSH_PATH;
   assert.match(dshCliEntry(), /dsh[\\/]lib[\\/]bin\.js$/);
   assert.equal(dshBinPath(), dshCliEntry());
+});
+
+test("DSH custom routes deliver the selected reasoning effort to the provider", { timeout: 60_000 }, async (t) => {
+  const requests: Record<string, unknown>[] = [];
+  const upstream = createServer((req, res) => {
+    void (async () => {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      requests.push(JSON.parse(body));
+      res.setHeader("content-type", "text/event-stream");
+      res.end('data: {"choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+    })().catch((error) => res.destroy(error));
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => {
+    upstream.closeAllConnections();
+    upstream.close(() => resolve());
+  }));
+  const address = upstream.address();
+  assert.ok(address && typeof address !== "string");
+  const efforts: Array<ReasoningEffort | undefined> = ["medium", "max", "none", undefined];
+  for (const reasoningEffort of efforts) {
+    await t.test(reasoningEffort ?? "provider default", async (t) => {
+      const root = tempDir(t);
+      const homeDir = path.join(root, "home");
+      const { patchPath } = prepareDshHome({
+        homeDir,
+        skillDirs: [],
+        disabledSkills: [],
+        mcpRows: [],
+        sandboxMode: "danger-full-access",
+        workspaceRoot: root,
+      }, [{
+        id: "cca-primary",
+        type: "openai",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        apiKey: "test-key",
+        reasoningEffort,
+        models: [{ id: "step-5-preview" }],
+      }]);
+      const harness = new DeepSeekHarness({
+        dshBin: dshCliEntry(),
+        dshHome: homeDir,
+        patches: [patchPath],
+        cwd: root,
+        processCwd: root,
+        provider: "cca-primary",
+        model: "step-5-preview",
+        env: sanitizedDshRuntimeEnv(homeDir, { [credentialEnvName("cca-primary")]: "test-key" }),
+        initializeTimeoutMs: 15_000,
+        requestTimeoutMs: 15_000,
+      });
+      t.after(() => harness.close());
+      const previousCount = requests.length;
+      const result = await harness.run("你好");
+      assert.equal(result.finalResponse, "你好");
+      assert.equal(requests.length, previousCount + 1);
+      assert.equal(requests.at(-1)?.model, "step-5-preview");
+      assert.equal(requests.at(-1)?.reasoning_effort, reasoningEffort === "none" ? undefined : reasoningEffort);
+    });
+  }
 });
