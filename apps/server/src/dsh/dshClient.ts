@@ -25,6 +25,7 @@ import {
   type PermissionMode,
   type PermissionRequest,
   type ReasoningEffort,
+  type RuntimeStats,
 } from "@cca/protocol";
 import type { AgentClient, AgentModelInfo, AgentSession } from "../agentRuntime.js";
 import { usingDatabase } from "../db.js";
@@ -34,6 +35,13 @@ import { ThreadEventStore, deleteThreadEvents } from "../threadEvents.js";
 import { object, array, startLlmGateway, text } from "../llmGateway.js";
 import { sanitizedDshRuntimeEnv } from "../runtimeEnv.js";
 import { DshEventMapper } from "./dshEvents.js";
+import {
+  applyDshStatsEvent,
+  dshRuntimeStats,
+  normalizeDshStats,
+  type DshStatsState,
+} from "./dshStats.js";
+import type { DshSessionEvent } from "./dshWire.js";
 import {
   credentialEnvName,
   dshBinPath,
@@ -56,6 +64,7 @@ type Config = (SessionConfig | ResumeSessionConfig) & {
   imageGenerationOwnerId?: string;
   permissionMode?: PermissionMode;
   onCodexPermissionRequest?: (request: PermissionRequest) => Promise<PermissionDecision>;
+  runtimeStats?: RuntimeStats;
 };
 
 type SetModelOptions = Parameters<AgentSession["setModel"]>[1];
@@ -151,6 +160,8 @@ export class DshSession implements AgentSession {
   private hasPrompted = false;
   private aborted = false;
   private waiters = new Set<IdleWaiter>();
+  private stats: DshStatsState;
+  private statsListeners = new Set<(stats: RuntimeStats) => void>();
 
   constructor(readonly sessionId: string, config: Config, release: () => void) {
     this.config = config;
@@ -170,6 +181,7 @@ export class DshSession implements AgentSession {
       rootSessionId: sessionId,
       contextWindowTokens: contextWindowOf(config),
     });
+    this.stats = normalizeDshStats(config.runtimeStats);
     this.eventStore = new ThreadEventStore(sessionId, () => {
       this.dispatch({
         type: "session.error",
@@ -189,6 +201,14 @@ export class DshSession implements AgentSession {
     this.listeners.add(handler);
     return () => {
       this.listeners.delete(handler);
+    };
+  }
+
+  /** 订阅 DSH 累计统计（轮/步、token、缓存命中、解码速度）。 */
+  onRuntimeStats(handler: (stats: RuntimeStats) => void) {
+    this.statsListeners.add(handler);
+    return () => {
+      this.statsListeners.delete(handler);
     };
   }
   async getEvents() {
@@ -414,11 +434,39 @@ export class DshSession implements AgentSession {
     return client;
   }
 
+  /** 累积 DSH sessionStats；只有会改变可见数字的事件才通知 UI。 */
+  private recordStats(notification: { method: string; params: Record<string, unknown> }) {
+    if (notification.method !== "session.event") return;
+    const params = notification.params as { sessionId?: unknown; event?: DshSessionEvent };
+    if (params.sessionId !== this.sessionId || !params.event) return;
+    const event = params.event;
+    const previous = this.stats;
+    const next = applyDshStatsEvent(previous, event);
+    this.stats = next;
+    if (next === previous) return;
+    if (
+      event.type !== "assistant/message" &&
+      event.type !== "step/end" &&
+      event.type !== "tool/result"
+    ) {
+      return;
+    }
+    const value = dshRuntimeStats(next);
+    for (const listener of this.statsListeners) {
+      try {
+        listener(value);
+      } catch (error) {
+        console.error("[cca] DSH stats listener failed", error);
+      }
+    }
+  }
+
   private async pump(subscription: NotificationSubscription) {
     try {
       for await (const notification of subscription) {
         if (this.closing) continue;
         try {
+          this.recordStats(notification);
           this.emitAll(this.mapper.mapNotification(notification.method, notification.params));
         } catch (error) {
           console.error("[cca] Harness event mapping failed", error);
@@ -548,6 +596,7 @@ export class DshSession implements AgentSession {
     this.closed = true;
     this.closing = true;
     this.notifyFailure(new Error("Harness 会话已断开"));
+    this.statsListeners.clear();
     try {
       await this.disposeRuntime();
     } finally {

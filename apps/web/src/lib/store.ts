@@ -26,6 +26,7 @@ import type {
   Workspace,
   ProviderModelDiscoveryConfig,
   RegistrationPolicy,
+  RuntimeStats,
   ServerMessage,
   ShellState,
   SkillInfo,
@@ -128,6 +129,7 @@ interface ThreadState {
   activities: ToolActivity[];
   subagents: SubagentActivity[];
   contextUsage: ContextUsage | null;
+  runtimeStats: RuntimeStats | null;
   running: boolean;
   loaded: boolean;
   activeTurnId: string | null;
@@ -142,6 +144,7 @@ const emptyThread: ThreadState = {
   activities: [],
   subagents: [],
   contextUsage: null,
+  runtimeStats: null,
   running: false,
   loaded: false,
   activeTurnId: null,
@@ -308,6 +311,7 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         activities: event.activities,
         subagents: event.subagents ?? [],
         contextUsage: event.contextUsage ?? null,
+        runtimeStats: event.runtimeStats ?? null,
         running: event.running,
         loaded: true,
         activeTurnId: activeTurn.turnId,
@@ -531,6 +535,11 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
       return {
         ...state,
         contextUsage: event.usage ?? null,
+      };
+    case "runtime.stats":
+      return {
+        ...state,
+        runtimeStats: event.stats ?? null,
       };
     case "error":
       return {

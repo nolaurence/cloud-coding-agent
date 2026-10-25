@@ -125,7 +125,20 @@ export interface DshAssistantMessageData {
   message: DshMessage;
   usage?: DshTokenUsage;
   /** 本步的原始流式块（0.2.1-rc.2 会随最终消息一起落库，而不是逐条通知）。 */
-  stream?: unknown[];
+  stream?: DshAssistantStreamRecord[];
+}
+export interface DshAssistantAttemptData {
+  turn: number;
+  step: number;
+  stream?: DshAssistantStreamRecord[];
+}
+export interface DshStepStartData {
+  turn: number;
+  step: number;
+}
+export interface DshStepEndData {
+  turn: number;
+  step: number;
 }
 export interface DshAssistantChunkData {
   turn: number;
@@ -140,6 +153,29 @@ export type DshStreamChunk =
   | { type: "block-end"; index: number; block: DshContentBlock }
   | { type: "usage"; usage: DshTokenUsage }
   | { type: "finish"; reason: { kind: string } };
+
+/** 一档打包后的流记录；时间由 time0 + dt 前缀和重建。 */
+export type DshPackedStreamRecord =
+  | {
+      type: "text-chunks" | "reasoning-chunks";
+      time0: number;
+      index: number;
+      dt: number[];
+      texts: string[];
+    }
+  | {
+      type: "tool-call-chunks";
+      time0: number;
+      index: number;
+      dt: number[];
+      id: string;
+      name?: string;
+      args: string[];
+    };
+
+export type DshAssistantStreamRecord =
+  | { type: "chunk"; time: number; chunk: DshStreamChunk }
+  | DshPackedStreamRecord;
 export interface DshToolCallData {
   turn: number;
   step: number;

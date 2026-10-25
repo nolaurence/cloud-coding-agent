@@ -34,6 +34,7 @@ apps/server (Fastify + Codex/DSH 适配层)
 
 - **Codex(默认)**:完整沿用原有模型、工具、浏览器、Git 授权、Office 与插件能力,使用 Codex 内置账号或配置的模型服务。
 - **DSH**:每个会话独立 `$DSH_HOME` 与 `dsh` 子进程,模型路由、MCP、技能与文件沙箱在启动前写入会话专属 patch;会话历史同时写入 `dsh-home/<会话 ID>/` 与应用事件库。DSH 会话必须选择「设置 → 模型服务」中配置的自定义模型(不能使用 Codex 内置模型,暂不支持 Azure 提供方)。
+- **DSH 会话统计**:DSH 会话底部显示轮/步、输出速度(tok/s)、token 总量、缓存命中率与上下文占比;数据来自 DSH 的 `sessionStats` 口径与每条 `assistant/message` 的 usage,跨进程会随线程元数据持久化。Codex 会话保持原布局。
 - DSH 的权限模式映射为文件沙箱(`request`/`auto` → `workspace-write`,`full` → `danger-full-access`),SDK 协议不支持交互式逐条审批,因此审批策略固定为拒绝升级、不阻塞执行。
 - DSH 当前限制:文本在回合结束时一次性到达(无逐 token 流式),不支持手动上下文压缩;`authenticated_git`、`browser_use` 与 Agent 资源工具仅对 Codex 会话可用;MCP 服务器会注册全部工具,暂不应用应用侧的 MCP 工具白名单;Agent Plugins 贡献的技能/MCP 也仅对 Codex 会话生效。删除会话时会同时清理 DSH 原生历史与应用事件记录。
 

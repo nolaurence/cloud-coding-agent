@@ -13,6 +13,7 @@ import type {
   DshMessageSource,
   DshToolCallData,
   DshToolResultData,
+  DshTokenUsage,
   DshTurnEndData,
   DshTurnStartData,
   DshUserMessageData,
@@ -181,8 +182,17 @@ export class DshEventMapper {
         }
         const usage = data.usage;
         if (usage && this.contextWindowTokens) {
+          // DSH 的 inputTokens 只含未命中缓存的输入；上下文用量应包含缓存读/写。
+          const total = usage.totalTokens;
+          const currentTokens =
+            typeof total === "number" && Number.isFinite(total) && total >= 0
+              ? total
+              : usage.inputTokens +
+                (usage.cacheReadTokens ?? 0) +
+                (usage.cacheWriteTokens ?? 0) +
+                usage.outputTokens;
           push("session.usage_info", {
-            currentTokens: usage.inputTokens + usage.outputTokens,
+            currentTokens,
             tokenLimit: this.contextWindowTokens,
           });
         }

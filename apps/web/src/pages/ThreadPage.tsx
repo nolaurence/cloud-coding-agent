@@ -9,6 +9,7 @@ import { ChatView } from "../components/ChatView";
 import { Composer } from "../components/Composer";
 import { ComposerModelPicker } from "../components/ComposerModelPicker";
 import { ComposerPermissionPicker } from "../components/ComposerPermissionPicker";
+import { RuntimeStatsBar } from "../components/RuntimeStatsBar";
 import { RightPanel } from "../components/RightPanel";
 import { RightPanelResizeHandle } from "../components/RightPanelResizeHandle";
 import { ThreadShareDialog } from "../components/ThreadShareDialog";
@@ -63,6 +64,9 @@ export function ThreadPage() {
   const effectiveModel = resolveThreadModel(thread, settings?.defaultModel);
   const agentMode = thread?.agentMode ?? "standard";
   const permissionMode = thread?.permissionMode ?? "full";
+  const showRuntimeStats = Boolean(
+    thread?.runtime === "dsh" && (state.runtimeStats || state.contextUsage),
+  );
   const panelMaxWidth = useMemo(() => {
     if (layoutWidth === 0) return RIGHT_PANEL_DEFAULT_WIDTH;
     return Math.max(
@@ -321,6 +325,14 @@ export function ThreadPage() {
                       onInterrupt={() => interrupt(threadId)}
                       onCompact={() => compactContext(threadId)}
                       footerError={canManageThread ? modelError : undefined}
+                      statusBar={
+                        showRuntimeStats ? (
+                          <RuntimeStatsBar
+                            stats={state.runtimeStats}
+                            contextUsage={state.contextUsage}
+                          />
+                        ) : undefined
+                      }
                       footerControls={canManageThread ? (
                         <>
                           <ComposerPermissionPicker

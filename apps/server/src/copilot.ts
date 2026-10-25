@@ -31,6 +31,7 @@ import type {
   PermissionRequest,
   ReasoningEffort,
   ResourceScope,
+  RuntimeStats,
   SubagentActivity,
   SubagentMessage,
   ThreadEvent,
@@ -58,6 +59,7 @@ interface ThreadRuntime {
   activities: ToolActivity[];
   subagents: SubagentActivity[];
   contextUsage: ContextUsage | undefined;
+  runtimeStats?: RuntimeStats;
   lastError: string | null;
   running: boolean;
   compacting: boolean;
@@ -382,6 +384,7 @@ export class CopilotManager {
           thread?.contextUsage,
           contextWindowTokensForThread(thread, store.settings),
         ),
+        runtimeStats: thread?.runtimeStats,
         lastError: null,
         running: false,
         compacting: false,
@@ -720,6 +723,7 @@ export class CopilotManager {
     const config: Record<string, unknown> & Pick<SessionConfig, "provider" | "model" | "systemMessage"> = {
       sessionId: thread.id,
       legacySession: thread.runtime !== "codex" && thread.runtime !== "dsh",
+      runtimeStats: thread.runtimeStats,
       agentMode: thread.agentMode ?? "standard",
       permissionMode: thread.permissionMode ?? "full",
       onCodexPermissionRequest: (request: PermissionRequest) =>
@@ -880,6 +884,18 @@ export class CopilotManager {
         console.error("event handler error", err);
       }
     });
+    session.onRuntimeStats?.((stats) => {
+      if (rt.session !== session) return;
+      rt.runtimeStats = stats;
+      this.emit(rt.threadId, { kind: "runtime.stats", stats });
+    });
+  }
+
+  private persistRuntimeStats(rt: ThreadRuntime) {
+    if (!rt.runtimeStats) return;
+    const thread = store.getThread(rt.threadId);
+    if (!thread || thread.runtimeStats?.updatedAt === rt.runtimeStats.updatedAt) return;
+    store.upsertThread({ ...thread, runtimeStats: rt.runtimeStats });
   }
 
   private finishTurn(rt: ThreadRuntime) {
@@ -890,6 +906,7 @@ export class CopilotManager {
     rt.running = false;
     rt.currentTurnId = null;
     this.emit(rt.threadId, { kind: "turn.end", turnId });
+    this.persistRuntimeStats(rt);
     this.shellChanged();
     if (rt.resourceConfigChanged) {
       rt.resourceConfigChanged = false;
@@ -1707,6 +1724,7 @@ export class CopilotManager {
       subagents: rt.subagents.map(copySubagent),
       running: rt.running,
       contextUsage: rt.contextUsage,
+      runtimeStats: rt.runtimeStats,
       error: rt.lastError ?? undefined,
       live: rt.pendingAssistant
         ? {
@@ -2150,6 +2168,7 @@ export class CopilotManager {
   async shutdown() {
     for (const rt of this.threads.values()) {
       this.clearDetachTimer(rt);
+      this.persistRuntimeStats(rt);
       const session = rt.session;
       rt.session = null;
       rt.sessionActorId = "";

@@ -1,6 +1,6 @@
 import type { CopilotClient, CopilotSession, SessionConfig, ResumeSessionConfig, SessionEvent, ModelInfo } from "@github/copilot-sdk";
 
-import type { ReasoningEffort } from "@cca/protocol";
+import type { ReasoningEffort, RuntimeStats } from "@cca/protocol";
 
 export type AgentModelInfo = Omit<ModelInfo, "supportedReasoningEfforts" | "defaultReasoningEffort"> & { supportedReasoningEfforts?: ReasoningEffort[]; defaultReasoningEffort?: ReasoningEffort };
 
@@ -8,6 +8,8 @@ export type AgentModelInfo = Omit<ModelInfo, "supportedReasoningEfforts" | "defa
 export type AgentSession = Pick<CopilotSession, "sessionId" | "send" | "sendAndWait" | "abort" | "disconnect" | "getEvents" | "setModel"> & {
   readonly runtimeDisconnected?: boolean;
   on(handler: (event: SessionEvent) => void): () => void;
+  /** 可选：引擎提供累计运行统计时订阅其更新。 */
+  onRuntimeStats?(handler: (stats: RuntimeStats) => void): () => void;
   rpc: { history: Pick<CopilotSession["rpc"]["history"], "compact"> };
 };
 export interface AgentClient {

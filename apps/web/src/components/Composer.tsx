@@ -163,6 +163,7 @@ export function Composer({
   placeholder,
   footerControls,
   footerError,
+  statusBar,
 }: {
   draftKey: string;
   threadId?: string;
@@ -179,6 +180,7 @@ export function Composer({
   placeholder?: string;
   footerControls?: ReactNode;
   footerError?: string;
+  statusBar?: ReactNode;
 }) {
   const skills = useApp((state) => state.skills);
   const projects = useApp((state) => state.projects);
@@ -772,6 +774,9 @@ export function Composer({
             )}
           </div>
         </div>
+        {statusBar && (
+          <div className="border-t border-zinc-200/70 dark:border-zinc-800/80">{statusBar}</div>
+        )}
       </div>
     </div>
   );

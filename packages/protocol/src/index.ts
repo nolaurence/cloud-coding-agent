@@ -258,6 +258,35 @@ export interface ContextUsage {
   maxTokens: number;
 }
 
+/**
+ * 运行时累计统计（当前由 DSH 提供）。
+ * 字段语义与 DSH 的 sessionStats 投影一致：token 计数是全程累计，
+ * decode 只统计有首 token 且报告 usage 的 step。
+ */
+export interface RuntimeStats {
+  runtime: AgentRuntime;
+  /** 至少关闭过一个 step 的不同 turn 数。 */
+  turns: number;
+  /** 已关闭的 step 数（完成、失败、取消都计）。 */
+  steps: number;
+  /** 未命中缓存的输入 token。 */
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  /** step/start → assistant/message 的累计模型用时。 */
+  llmMs: number;
+  /** tool/call → tool/result 的累计工具用时。 */
+  toolMs: number;
+  ttftMs: number;
+  ttftSteps: number;
+  decodeMs: number;
+  decodeTokens: number;
+  /** 仅用于跨进程恢复时避免同一 turn 被重复计数。 */
+  lastTurn?: number;
+  updatedAt: number;
+}
+
 export interface ContextCompactionResult {
   tokensRemoved: number;
   messagesRemoved: number;
@@ -278,6 +307,7 @@ export interface ThreadMeta {
   updatedAt: number;
   archived: boolean;
   contextUsage?: ContextUsage;
+  runtimeStats?: RuntimeStats;
   access?: ThreadAccess;
   shared?: boolean;
   messageAttachments?: Record<string, MessageAttachment[]>;
@@ -661,6 +691,7 @@ export type ThreadEvent =
       subagents?: SubagentActivity[];
       running: boolean;
       contextUsage?: ContextUsage;
+      runtimeStats?: RuntimeStats;
       error?: string;
       live?: { text: string; reasoning: string; turnId: string; startedAt: number };
       pendingPermission?: PermissionRequest;
@@ -688,6 +719,7 @@ export type ThreadEvent =
       startedAt: number;
     }
   | { kind: "context.usage"; usage?: ContextUsage }
+  | { kind: "runtime.stats"; stats?: RuntimeStats }
   | { kind: "permission.request"; request: PermissionRequest }
   | { kind: "permission.resolve"; requestId: string; decision: PermissionDecision }
   | { kind: "error"; message: string }

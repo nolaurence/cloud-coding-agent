@@ -112,6 +112,24 @@ test("assistant message carries text, reasoning, usage and stable ids", () => {
   assert.deepEqual(usage?.data, { currentTokens: 1500, tokenLimit: 100_000 });
 });
 
+test("context usage includes cached prompt tokens when totalTokens is absent", () => {
+  const events = mapper().mapSessionEvent(
+    wireEvent("assistant/message", {
+      turn: 1,
+      step: 1,
+      message: {
+        id: "a1",
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        source: { kind: "model" },
+      },
+      usage: { inputTokens: 200, cacheReadTokens: 1_000, cacheWriteTokens: 0, outputTokens: 50 },
+    }) as never,
+  );
+  const usage = events.find((event) => event.type === "session.usage_info");
+  assert.deepEqual(usage?.data, { currentTokens: 1_250, tokenLimit: 100_000 });
+});
+
 test("assistant chunks become deltas with the final message id", () => {
   const text = mapper().mapSessionEvent(
     wireEvent("assistant/chunk", {
