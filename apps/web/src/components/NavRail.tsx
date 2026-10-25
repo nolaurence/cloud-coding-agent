@@ -1,4 +1,4 @@
-import { House, Package, PanelLeftOpen, Settings, Sparkles } from "lucide-react";
+import { House, Package, PanelLeftClose, PanelLeftOpen, Settings, Sparkles } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
@@ -21,11 +21,11 @@ function railItemClass(active: boolean) {
 export function NavRail({
   onNavigate,
   sidebarCollapsed,
-  onExpandSidebar,
+  onToggleSidebar,
 }: {
   onNavigate?: () => void;
   sidebarCollapsed?: boolean;
-  onExpandSidebar?: () => void;
+  onToggleSidebar?: () => void;
 }) {
   const user = useApp((s) => s.user);
   const navigate = useNavigate();
@@ -60,24 +60,27 @@ export function NavRail({
     navigate(to);
     onNavigate?.();
   };
+  const SidebarIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
+  const sidebarToggleLabel = sidebarCollapsed ? "显示会话侧边栏" : "隐藏会话侧边栏";
 
   return (
     <nav
-      className="flex h-full w-14 shrink-0 flex-col items-center gap-1 border-r border-[rgba(15,23,42,0.05)] bg-panel px-2.5 pt-1.5 pb-2 shadow-[inset_-2px_0_10px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:shadow-[inset_-2px_0_10px_rgba(0,0,0,0.7)]"
+      className="flex h-full w-11 shrink-0 flex-col items-center gap-1 bg-panel px-1 pt-1.5 pb-2 max-md:border-r max-md:border-line-1 md:w-[52px] md:px-2"
       aria-label="主导航"
     >
       <div className="window-drag-region flex w-full shrink-0 items-center justify-center pb-1">
-        <WindowControls show="mac" />
+        <WindowControls show="mac" className="scale-[0.8]" />
       </div>
-      {sidebarCollapsed && onExpandSidebar && (
+      {onToggleSidebar && (
         <button
           type="button"
           className={railItemClass(false)}
-          aria-label="显示会话侧边栏"
-          title="显示会话侧边栏 (⌘B)"
-          onClick={onExpandSidebar}
+          aria-label={sidebarToggleLabel}
+          aria-expanded={!sidebarCollapsed}
+          title={`${sidebarToggleLabel} (⌘B)`}
+          onClick={onToggleSidebar}
         >
-          <PanelLeftOpen className="size-[18px]" strokeWidth={1.8} />
+          <SidebarIcon className="size-[18px]" strokeWidth={1.8} />
         </button>
       )}
       {items.map((item) => (

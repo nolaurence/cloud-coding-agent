@@ -175,6 +175,7 @@ function setupStore(
   };
   const project: Project = { id: "project-1", name: "Project", path: projectPath, ownerId: "admin" };
   const thread: ThreadMeta = {
+    runtime: "codex",
     id: threadId,
     projectId: project.id,
     title: "会话",
@@ -1886,4 +1887,41 @@ test("assistant image-only messages are emitted, persisted and restored", async 
   const snapshot = await restored.subscribe(threadId, "admin");
   assert.equal(snapshot.kind, "snapshot");
   assert.deepEqual(snapshot.kind === "snapshot" ? snapshot.messages[0]?.attachments : undefined, [attachment]);
+});
+
+test("routes threads to the Codex or DSH client by runtime", async (t) => {
+  const dshId = randomUUID();
+  setupStore(t, dshId);
+  store.threads[0]!.runtime = "dsh";
+  const codexId = randomUUID();
+  store.upsertThread({ ...store.threads[0]!, id: codexId, runtime: "codex" });
+
+  const dshSession = new FakeSession();
+  const codexSession = new FakeSession();
+  const dshClient = new FakeClient(dshSession);
+  const codexClient = new FakeClient(codexSession);
+  const manager = new CopilotManager(
+    () => codexClient as unknown as CopilotClient,
+    () => dshClient as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(dshId, "admin");
+  assert.equal(dshClient.startCalls, 1);
+  assert.equal(codexClient.startCalls, 0);
+  assert.equal(
+    (dshClient.createdConfigs[0] as { legacySession?: boolean }).legacySession,
+    false,
+  );
+
+  await manager.subscribe(codexId, "admin");
+  assert.equal(codexClient.startCalls, 1);
+
+  await manager.sendMessage(dshId, "hi");
+  assert.equal(dshSession.sent.length, 1);
+  await manager.interrupt(dshId);
+
+  await manager.deleteThread(dshId);
+  assert.deepEqual(dshClient.deletedSessionIds, [dshId]);
+  assert.deepEqual(codexClient.deletedSessionIds, []);
 });

@@ -46,7 +46,7 @@ export function ThreadPage() {
   const thread = threads.find((t) => t.id === threadId);
   const project = projects.find((candidate) => candidate.id === thread?.projectId);
   const canManageThread = thread?.access === "owner";
-  const legacySession = Boolean(thread && thread.runtime !== "codex");
+  const legacySession = Boolean(thread && thread.runtime !== "codex" && thread.runtime !== "dsh");
   const canInteract = !legacySession && (canManageThread || thread?.access === "collaborate");
   const [switchingModel, setSwitchingModel] = useState(false);
   const [switchingMode, setSwitchingMode] = useState(false);
@@ -245,7 +245,7 @@ export function ThreadPage() {
             )}
           </div>
         </header>
-        {legacySession && <p className="border-b px-4 py-2 text-sm text-muted-foreground">旧 Copilot 会话仅保留历史浏览，请新建 Codex 会话继续工作。</p>}
+        {legacySession && <p className="border-b px-4 py-2 text-sm text-muted-foreground">旧 Copilot 会话仅保留历史浏览，请新建 Codex 或 DSH 会话继续工作。</p>}
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <ChatView
             threadId={threadId}
@@ -381,7 +381,7 @@ export function ThreadPage() {
             id="thread-workspace-panel"
             aria-hidden={!panelOpen}
             className={panelOpen
-              ? `fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto lg:my-[10px] ${panelPlacement === "right" ? "lg:order-last lg:mr-[10px]" : "lg:order-first lg:ml-[10px]"} lg:w-[var(--right-panel-width)] lg:shrink-0 lg:rounded-lg lg:border lg:border-zinc-200 lg:shadow-md lg:shadow-zinc-950/10 dark:bg-zinc-950 lg:dark:border-zinc-800 lg:dark:shadow-black/30 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`
+              ? `fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto ${panelPlacement === "right" ? "lg:order-last lg:border-l" : "lg:order-first lg:border-r"} lg:w-[var(--right-panel-width)] lg:shrink-0 lg:border-zinc-200 dark:bg-zinc-950 lg:dark:border-zinc-800 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`
               : "hidden"}
             style={{ "--right-panel-width": `${panelWidth}px` } as CSSProperties}
           >

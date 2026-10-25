@@ -128,6 +128,15 @@ export interface AppSettings {
 
 export const DEFAULT_MODEL_PROVIDER_ID = "codex";
 
+/** 会话执行引擎：Codex app-server 或 DeepSeek Harness 运行时。 */
+export const AGENT_RUNTIMES = ["codex", "dsh"] as const;
+export type AgentRuntime = (typeof AGENT_RUNTIMES)[number];
+export const DEFAULT_AGENT_RUNTIME: AgentRuntime = "codex";
+
+export function isAgentRuntime(value: unknown): value is AgentRuntime {
+  return typeof value === "string" && AGENT_RUNTIMES.includes(value as AgentRuntime);
+}
+
 export interface ModelRef {
   providerId: string;
   modelId: string;
@@ -256,7 +265,7 @@ export interface ContextCompactionResult {
 }
 
 export interface ThreadMeta {
-  runtime?: "codex";
+  runtime?: AgentRuntime;
   id: string;
   projectId: string;
   title: string;
@@ -695,6 +704,7 @@ export type ClientMessage =
       model?: ModelRef;
       agentMode?: AgentMode;
       permissionMode?: PermissionMode;
+      runtime?: AgentRuntime;
       initialTurn?: TurnInput;
     }
   | { id: string; type: "thread.delete"; threadId: string }

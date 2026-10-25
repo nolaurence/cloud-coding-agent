@@ -10,7 +10,6 @@ import {
   Loader2,
   LogOut,
   MessagesSquare,
-  PanelLeftClose,
   Search,
   ShieldCheck,
   SquarePen,
@@ -52,11 +51,9 @@ function relativeTime(at: number): string {
 export function Sidebar({
   onNavigate,
   onClose,
-  onCollapse,
 }: {
   onNavigate?: () => void;
   onClose?: () => void;
-  onCollapse?: () => void;
 }) {
   const projects = useApp((s) => s.projects);
   const threads = useApp((s) => s.threads);
@@ -193,17 +190,6 @@ export function Sidebar({
         <span className="min-w-0 flex-1 truncate text-[17px] font-semibold leading-6 tracking-[0.02em] text-label-1">{appName}</span>
         {!connected && (
           <WifiOff className="size-3.5 shrink-0 text-[var(--ds-label-caption)]" aria-label="正在连接服务器" />
-        )}
-        {onCollapse && (
-          <button
-            type="button"
-            aria-label="隐藏会话侧边栏"
-            title="隐藏会话侧边栏 (⌘B)"
-            className="window-no-drag flex size-7 shrink-0 items-center justify-center rounded-[8px] text-label-2 transition-colors hover:bg-hover hover:text-label-1"
-            onClick={onCollapse}
-          >
-            <PanelLeftClose className="size-4" strokeWidth={1.8} />
-          </button>
         )}
         {onClose && (
           <button

@@ -1,13 +1,22 @@
 import { useState } from "react";
 import { Folder, FolderOpen, FolderPlus, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import type { AgentMode, ModelRef, PermissionMode, TurnAttachment } from "@cca/protocol";
+import {
+  DEFAULT_AGENT_RUNTIME,
+  DEFAULT_MODEL_PROVIDER_ID,
+  type AgentMode,
+  type AgentRuntime,
+  type ModelRef,
+  type PermissionMode,
+  type TurnAttachment,
+} from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { NEW_CHAT_DRAFT_KEY } from "../lib/composerDrafts";
 import { BrandLogo } from "../components/BrandLogo";
 import { Composer } from "../components/Composer";
 import { ComposerModelPicker } from "../components/ComposerModelPicker";
 import { ComposerPermissionPicker } from "../components/ComposerPermissionPicker";
+import { ComposerRuntimePicker } from "../components/ComposerRuntimePicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,6 +30,7 @@ import {
 export function NewChatPage() {
   const projects = useApp((s) => s.projects);
   const settings = useApp((s) => s.settings);
+  const models = useApp((s) => s.models);
   const localMode = useApp((s) => s.localMode);
   const createWorkspace = useApp((s) => s.createWorkspace);
   const selectLocalFolder = useApp((s) => s.selectLocalFolder);
@@ -28,20 +38,71 @@ export function NewChatPage() {
   const navigate = useNavigate();
   const [projectId, setProjectId] = useState<string>("");
   const [model, setModel] = useState<ModelRef | undefined>(undefined);
+  const [runtime, setRuntime] = useState<AgentRuntime>(DEFAULT_AGENT_RUNTIME);
   const [agentMode, setAgentMode] = useState<AgentMode>("standard");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("full");
   const [creating, setCreating] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
   const [selectedFolder, setSelectedFolder] = useState("");
   const [workspaceError, setWorkspaceError] = useState("");
+  const [runtimeError, setRuntimeError] = useState("");
 
   const effectiveProjectId = projectId || projects[0]?.id || "";
   const effectiveModel = model ?? settings?.defaultModel;
   const effectiveProjectName =
     projects.find((project) => project.id === effectiveProjectId)?.name ?? "";
 
+  /** DSH 只能使用应用侧配置的自定义模型服务，切到 DSH 时自动落到第一个可用模型。 */
+  const selectRuntime = (next: AgentRuntime) => {
+    setRuntime(next);
+    setRuntimeError("");
+    if (next !== "dsh") return;
+    const current = effectiveModel;
+    if (current && current.providerId !== DEFAULT_MODEL_PROVIDER_ID) return;
+    const fallback = models.find((option) => {
+      if (option.ref.providerId === DEFAULT_MODEL_PROVIDER_ID) return false;
+      const provider = settings?.providers.find(
+        (candidate) => candidate.id === option.ref.providerId,
+      );
+      return provider?.type !== "azure";
+    });
+    if (!fallback) {
+      setRuntimeError("DSH 引擎需要先在「设置 → 模型服务」中配置自定义模型");
+      return;
+    }
+    setModel({
+      ...fallback.ref,
+      reasoningEffort: fallback.defaultReasoningEffort,
+    });
+  };
+
+  const selectModel = (next: ModelRef) => {
+    setModel(next);
+    setRuntimeError("");
+  };
+
+  const dshModelIssue = (): string => {
+    if (runtime !== "dsh") return "";
+    if (!effectiveModel) return "DSH 引擎需要选择已配置的模型服务";
+    if (effectiveModel.providerId === DEFAULT_MODEL_PROVIDER_ID) {
+      return "DSH 引擎不能使用 Codex 内置模型，请选择自定义模型服务";
+    }
+    const provider = settings?.providers.find((candidate) => candidate.id === effectiveModel.providerId);
+    if (!provider) return "DSH 引擎使用的模型提供方不存在";
+    if (provider.type === "azure") {
+      return "DSH 引擎暂不支持 Azure 模型提供方，请改用 OpenAI 兼容或 Anthropic 提供方";
+    }
+    return "";
+  };
+
   const onSend = async (text: string, attachments: TurnAttachment[]) => {
     if (!effectiveProjectId || creating) return;
+    const issue = dshModelIssue();
+    if (issue) {
+      setRuntimeError(issue);
+      return;
+    }
+    setRuntimeError("");
     setCreating(true);
     try {
       const thread = await createThread(
@@ -50,8 +111,11 @@ export function NewChatPage() {
         agentMode,
         permissionMode,
         { text, attachments },
+        runtime,
       );
       navigate(`/thread/${thread.id}`);
+    } catch (error) {
+      setRuntimeError(error instanceof Error ? error.message : "创建会话失败");
     } finally {
       setCreating(false);
     }
@@ -167,8 +231,14 @@ export function NewChatPage() {
               onSend={(text, attachments) => onSend(text, attachments)}
               autoFocus
               placeholder="描述你的编码任务，@ 引用文件，/ 使用技能"
+              footerError={runtimeError || undefined}
               footerControls={
                 <>
+                  <ComposerRuntimePicker
+                    value={runtime}
+                    onChange={selectRuntime}
+                    disabled={creating}
+                  />
                   <ComposerPermissionPicker
                     value={permissionMode}
                     onChange={setPermissionMode}
@@ -176,7 +246,7 @@ export function NewChatPage() {
                   />
                   <ComposerModelPicker
                     value={effectiveModel}
-                    onChange={setModel}
+                    onChange={selectModel}
                     disabled={creating}
                     agentMode={agentMode}
                     onAgentModeChange={setAgentMode}

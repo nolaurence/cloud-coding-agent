@@ -37,9 +37,11 @@ import {
   saveScopedMcpServer,
 } from "./mcpServers.js";
 import {
+  DEFAULT_AGENT_RUNTIME,
   DEFAULT_MODEL_PROVIDER_ID,
   flattenModels,
   isAgentMode,
+  isAgentRuntime,
   isPermissionDecision,
   isPermissionMode,
   isReasoningEffort,
@@ -632,10 +634,14 @@ export class Hub {
           let initialTurnAccepted = false;
           try {
             const project = this.requireOwnedProject(conn, msg.projectId);
+            if (msg.runtime !== undefined && !isAgentRuntime(msg.runtime)) {
+              throw new Error("执行引擎无效");
+            }
+            const runtime = msg.runtime ?? DEFAULT_AGENT_RUNTIME;
             if (msg.agentMode !== undefined && !isAgentMode(msg.agentMode)) {
               throw new Error("会话模式无效");
             }
-            if (msg.agentMode === "ultra") throw new Error("Codex 暂不支持 Ultra 子代理模式");
+            if (msg.agentMode === "ultra") throw new Error("暂不支持 Ultra 子代理模式");
             if (msg.permissionMode !== undefined && !isPermissionMode(msg.permissionMode)) {
               throw new Error("权限模式无效");
             }
@@ -649,6 +655,19 @@ export class Hub {
               }
               model = normalizeModelRefReasoning(requestedModel, modelOptions);
               await this.validateReasoningEffort(model, store.settings, modelOptions);
+            }
+            if (runtime === "dsh") {
+              if (!model) throw new Error("DSH 引擎需要选择已配置的模型服务");
+              if (model.providerId === DEFAULT_MODEL_PROVIDER_ID) {
+                throw new Error("DSH 引擎不能使用 Codex 内置模型，请在设置中配置自定义模型服务");
+              }
+              const provider = store.settings.providers.find(
+                (candidate) => candidate.id === model.providerId,
+              );
+              if (!provider) throw new Error("DSH 引擎使用的模型提供方不存在");
+              if (provider.type === "azure") {
+                throw new Error("DSH 引擎暂不支持 Azure 模型提供方，请改用 OpenAI 兼容或 Anthropic 提供方");
+              }
             }
 
             if (
@@ -670,7 +689,7 @@ export class Hub {
             }
 
             thread = {
-              runtime: "codex",
+              runtime,
               id: randomUUID(),
               projectId: msg.projectId,
               title: "新会话",

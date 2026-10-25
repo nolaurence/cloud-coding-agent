@@ -78,13 +78,12 @@ export function AppLayout() {
   }, []);
 
   return (
-    <div className="relative flex h-dvh overflow-hidden bg-background">
+    <div className="relative flex h-dvh overflow-hidden bg-panel">
       <div className="hidden h-full min-h-0 shrink-0 md:flex">
         <NavRail
           sidebarCollapsed={sidebarCollapsed}
-          onExpandSidebar={toggleSidebarCollapsed}
+          onToggleSidebar={toggleSidebarCollapsed}
         />
-        {!sidebarCollapsed && <Sidebar onCollapse={toggleSidebarCollapsed} />}
       </div>
 
       <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
@@ -110,76 +109,83 @@ export function AppLayout() {
         show="windows"
         className="fixed right-1 top-1 z-50"
       />
-      <main className="relative flex min-w-0 flex-1 flex-col">
-        <header className="flex h-12 shrink-0 items-center gap-3 border-b-[0.5px] border-line-3 bg-background px-3 md:hidden">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="打开侧栏"
-            title="打开侧栏"
-            className="text-muted-foreground"
-            onClick={() => setSidebarOpen(true)}
-          >
-            <Menu className="h-5 w-5" />
-          </Button>
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <BrandLogo className="h-5 w-5" />
-            <span className="truncate text-sm font-medium">{mobileTitle}</span>
+      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:my-2 md:mr-2 md:rounded-[12px] md:border md:border-line-2 md:shadow-[0_2px_12px_rgba(15,23,42,0.08)] md:dark:shadow-[0_2px_12px_rgba(0,0,0,0.32)]">
+        {!sidebarCollapsed && (
+          <div className="hidden h-full min-h-0 shrink-0 md:flex">
+            <Sidebar />
           </div>
-          {routeThreadId && canManageThread && (
-            <>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="分享会话"
-                title="分享会话"
-                className="text-muted-foreground"
-                onClick={() => setShareDialogOpen(true)}
-              >
-                <Share2 className="h-4 w-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="打开工作区面板"
-                title="打开工作区面板"
-                aria-controls="thread-workspace-panel"
-                aria-expanded={workspacePanelOpen}
-                className="text-muted-foreground"
-                onClick={() => setWorkspacePanelOpen(true)}
-              >
-                <PanelRightOpen className="h-4 w-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="互换对话区与工作区位置"
-                title={panelPlacement === "right" ? "将工作区移到左侧" : "将工作区移到右侧"}
-                className="text-muted-foreground"
-                onClick={() => setPanelPlacement(panelPlacement === "right" ? "left" : "right")}
-              >
-                <ArrowLeftRight className="h-4 w-4" />
-              </Button>
-            </>
-          )}
-          {!connected && (
-            <span
-              className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
-              title="正在连接服务器"
+        )}
+        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <header className="flex h-12 shrink-0 items-center gap-3 border-b-[0.5px] border-line-3 bg-background px-3 md:hidden">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="打开侧栏"
+              title="打开侧栏"
+              className="text-muted-foreground"
+              onClick={() => setSidebarOpen(true)}
             >
-              <WifiOff className="h-3.5 w-3.5" />
-              连接中
-            </span>
-          )}
-        </header>
-        <div className="relative min-h-0 flex-1">
-          <Outlet />
-        </div>
-      </main>
+              <Menu className="h-5 w-5" />
+            </Button>
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <BrandLogo className="h-5 w-5" />
+              <span className="truncate text-sm font-medium">{mobileTitle}</span>
+            </div>
+            {routeThreadId && canManageThread && (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="分享会话"
+                  title="分享会话"
+                  className="text-muted-foreground"
+                  onClick={() => setShareDialogOpen(true)}
+                >
+                  <Share2 className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="打开工作区面板"
+                  title="打开工作区面板"
+                  aria-controls="thread-workspace-panel"
+                  aria-expanded={workspacePanelOpen}
+                  className="text-muted-foreground"
+                  onClick={() => setWorkspacePanelOpen(true)}
+                >
+                  <PanelRightOpen className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="互换对话区与工作区位置"
+                  title={panelPlacement === "right" ? "将工作区移到左侧" : "将工作区移到右侧"}
+                  className="text-muted-foreground"
+                  onClick={() => setPanelPlacement(panelPlacement === "right" ? "left" : "right")}
+                >
+                  <ArrowLeftRight className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+            {!connected && (
+              <span
+                className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
+                title="正在连接服务器"
+              >
+                <WifiOff className="h-3.5 w-3.5" />
+                连接中
+              </span>
+            )}
+          </header>
+          <div className="relative min-h-0 flex-1">
+            <Outlet />
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import type {
   AdminRegistrationState,
   AdminUser,
   AgentMode,
+  AgentRuntime,
   AppSettings,
   AuthUser,
   ChatMessage,
@@ -249,6 +250,7 @@ interface AppState {
     agentMode?: AgentMode,
     permissionMode?: PermissionMode,
     initialTurn?: TurnInput,
+    runtime?: AgentRuntime,
   ) => Promise<ThreadMeta>;
   deleteThread: (threadId: string) => Promise<void>;
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
@@ -800,13 +802,14 @@ export const useApp = create<AppState>((set, get) => {
       await request({ type: "workspace.remove", projectId });
     },
 
-    createThread: async (projectId, model, agentMode, permissionMode, initialTurn) => {
+    createThread: async (projectId, model, agentMode, permissionMode, initialTurn, runtime) => {
       const created = await request<ThreadCreateResult>({
         type: "thread.create",
         projectId,
         model,
         agentMode,
         permissionMode,
+        runtime,
         initialTurn,
       });
       const { initialTurnAccepted, ...thread } = created;

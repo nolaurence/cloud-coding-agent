@@ -17,5 +17,11 @@ export interface AgentClient {
   resumeSession(id: string, config: ResumeSessionConfig): Promise<AgentSession>;
   deleteSession(id: string): Promise<void>;
   listModels(): Promise<AgentModelInfo[]>;
+  /** 无工具的一次性文本生成（提交信息等）；不支持的引擎省略即可。 */
+  generateText?(
+    config: Pick<SessionConfig, "provider" | "model" | "systemMessage">,
+    prompt: string,
+    timeout: number,
+  ): Promise<string>;
   rpc: Pick<CopilotClient["rpc"], "plugins">;
 }

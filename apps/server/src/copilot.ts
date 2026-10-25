@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { CodexClient, SessionNotFoundError } from "./codex.js";
+import { DshClient } from "./dsh/dshClient.js";
 import type { AgentClient as CopilotClient, AgentSession as CopilotSession } from "./agentRuntime.js";
 import type {
   ModelCapabilitiesOverride,
@@ -17,6 +18,7 @@ import {
 } from "@cca/protocol";
 import type {
   AgentMode,
+  AgentRuntime,
   AppSettings,
   ChatMessage,
   ContextCompactionResult,
@@ -305,8 +307,8 @@ function deniedWorkspacePaths(workspacePath: string): string[] {
 }
 
 export class CopilotManager {
-  private client: CopilotClient | null = null;
-  private starting: Promise<void> | null = null;
+  private clients = new Map<AgentRuntime, CopilotClient>();
+  private startings = new Map<AgentRuntime, Promise<void>>();
   private threads = new Map<string, ThreadRuntime>();
   private sinks = new Set<ThreadEventSink>();
   private shellChanged: ShellChangedSink = () => {};
@@ -315,6 +317,8 @@ export class CopilotManager {
   constructor(
     private readonly createClient: CopilotClientFactory = () =>
       new CodexClient(),
+    private readonly createDshClient: CopilotClientFactory = () =>
+      new DshClient(),
   ) {}
 
   onThreadEvent(sink: ThreadEventSink) {
@@ -330,27 +334,37 @@ export class CopilotManager {
     this.resourcesChanged = sink;
   }
 
-  private async ensureClient(): Promise<CopilotClient> {
-    if (this.client) return this.client;
-    if (!this.starting) {
-      const starting = (async () => {
-        const client = this.createClient();
+  /** 线程未标注 runtime 的历史数据按 Codex/Copilot 兼容路径处理。 */
+  private runtimeOf(thread: Pick<ThreadMeta, "runtime"> | undefined): AgentRuntime {
+    return thread?.runtime === "dsh" ? "dsh" : "codex";
+  }
+
+  private async ensureClient(runtime: AgentRuntime = "codex"): Promise<CopilotClient> {
+    const ready = this.clients.get(runtime);
+    if (ready) return ready;
+    let starting = this.startings.get(runtime);
+    if (!starting) {
+      starting = (async () => {
+        const client = runtime === "dsh" ? this.createDshClient() : this.createClient();
         await client.start();
-        this.client = client;
+        this.clients.set(runtime, client);
       })();
-      this.starting = starting;
-      void starting.then(
-        () => {
-          if (this.starting === starting) this.starting = null;
-        },
-        () => {
-          if (this.starting === starting) this.starting = null;
-        },
-      );
+      this.startings.set(runtime, starting);
+      const clear = () => {
+        if (this.startings.get(runtime) === starting) this.startings.delete(runtime);
+      };
+      void starting.then(clear, clear);
     }
-    await this.starting;
-    if (!this.client) throw new Error("Copilot 客户端启动失败");
-    return this.client;
+    await starting;
+    const client = this.clients.get(runtime);
+    if (!client) {
+      throw new Error(runtime === "dsh" ? "DeepSeek Harness 客户端启动失败" : "Codex 客户端启动失败");
+    }
+    return client;
+  }
+
+  private clientForThread(threadId: string): Promise<CopilotClient> {
+    return this.ensureClient(this.runtimeOf(store.getThread(threadId)));
   }
 
   private runtime(threadId: string): ThreadRuntime {
@@ -705,7 +719,7 @@ export class CopilotManager {
 
     const config: Record<string, unknown> & Pick<SessionConfig, "provider" | "model" | "systemMessage"> = {
       sessionId: thread.id,
-      legacySession: thread.runtime !== "codex",
+      legacySession: thread.runtime !== "codex" && thread.runtime !== "dsh",
       agentMode: thread.agentMode ?? "standard",
       permissionMode: thread.permissionMode ?? "full",
       onCodexPermissionRequest: (request: PermissionRequest) =>
@@ -798,7 +812,7 @@ export class CopilotManager {
     if (!thread) throw new Error("会话不存在");
     if (!patch.trim()) throw new Error("没有已暂存的更改可用于生成提交信息");
 
-    const client = await this.ensureClient();
+    const client = await this.clientForThread(threadId);
     const sessionId = `commit-message-${randomUUID()}`;
     const config = this.buildSessionConfig(thread, store.settings, actorId);
     Object.assign(config, {
@@ -823,7 +837,11 @@ export class CopilotManager {
       truncated ? "The staged diff was truncated. Infer conservatively from the visible portion." : "The staged diff is complete.",
       "<staged_diff>", patch, "</staged_diff>",
     ].join("\n");
-    if (client instanceof CodexClient) return normalizeGeneratedCommitMessage(await client.generateText(config, prompt, COMMIT_MESSAGE_TIMEOUT_MS));
+    if (typeof client.generateText === "function") {
+      return normalizeGeneratedCommitMessage(
+        await client.generateText(config, prompt, COMMIT_MESSAGE_TIMEOUT_MS),
+      );
+    }
     let session: CopilotSession | null = null;
     let generationError: unknown;
     try {
@@ -1328,11 +1346,13 @@ export class CopilotManager {
     }
 
     const attaching = (async () => {
-      const client = await this.ensureClient();
+      const runtime = this.runtimeOf(thread);
+      const client = await this.ensureClient(runtime);
       const settings = store.settings;
       const modelRef = resolveThreadModel(thread, settings.defaultModel);
       let capabilityModels: ModelOption[] = [];
       if (
+        runtime === "codex" &&
         thread.agentMode === "ultra" &&
         modelRef?.providerId === DEFAULT_MODEL_PROVIDER_ID &&
         !highestSupportedReasoningEffort(settings, modelRef)
@@ -1344,7 +1364,7 @@ export class CopilotManager {
           defaultReasoningEffort: model.defaultReasoningEffort,
         }));
       }
-      const config = client instanceof CodexClient && thread.runtime !== "codex"
+      const config = runtime === "codex" && client instanceof CodexClient && thread.runtime !== "codex"
         ? { sessionId: thread.id, legacySession: true }
         : this.buildSessionConfig(
         thread,
@@ -1354,20 +1374,25 @@ export class CopilotManager {
       );
 
       let session: CopilotSession;
-      const hasHistory =
-        client instanceof CodexClient ||
-        rt.sdkSessionEstablished ||
-        thread.createdAt < Date.now() - 1000 ||
-        rt.messages.length > 0;
-      try {
-        if (hasHistory) {
-          session = await client.resumeSession(threadId, config as never);
-        } else {
-          throw new Error("create");
-        }
-      } catch (error) {
-        if (client instanceof CodexClient && hasHistory && !(error instanceof SessionNotFoundError)) throw error;
+      if (runtime === "dsh") {
+        // DshClient.createSession 对已存在的会话目录执行恢复，因此重连/重启都走同一入口。
         session = await client.createSession(config as never);
+      } else {
+        const hasHistory =
+          client instanceof CodexClient ||
+          rt.sdkSessionEstablished ||
+          thread.createdAt < Date.now() - 1000 ||
+          rt.messages.length > 0;
+        try {
+          if (hasHistory) {
+            session = await client.resumeSession(threadId, config as never);
+          } else {
+            throw new Error("create");
+          }
+        } catch (error) {
+          if (client instanceof CodexClient && hasHistory && !(error instanceof SessionNotFoundError)) throw error;
+          session = await client.createSession(config as never);
+        }
       }
 
       rt.session = session;
@@ -1869,7 +1894,9 @@ export class CopilotManager {
 
   private async assertThreadEditable(threadId: string) {
     const thread = store.getThread(threadId);
-    if (thread && thread.runtime !== "codex" && (await this.ensureClient()) instanceof CodexClient) throw new Error("旧 Copilot 会话只读,请新建 Codex 会话");
+    if (thread && thread.runtime !== "codex" && thread.runtime !== "dsh") {
+      throw new Error("旧 Copilot 会话只读,请新建 Codex 或 DSH 会话");
+    }
   }
 
   async setThreadModel(
@@ -1893,6 +1920,7 @@ export class CopilotManager {
     const session = rt.session ?? (rt.attaching ? await rt.attaching : null);
     let capabilityModels: ModelOption[] = [];
     if (
+      this.runtimeOf(thread) === "codex" &&
       thread?.agentMode === "ultra" &&
       nextModel.providerId === DEFAULT_MODEL_PROVIDER_ID &&
       !highestSupportedReasoningEffort(store.settings, nextModel)
@@ -1973,9 +2001,15 @@ export class CopilotManager {
 
   async setThreadAgentMode(threadId: string, nextMode: AgentMode): Promise<void> {
     await this.assertThreadEditable(threadId);
-    if (nextMode === "ultra" && (await this.ensureClient()) instanceof CodexClient) throw new Error("Codex 暂不支持 Ultra 子代理模式");
     const thread = store.getThread(threadId);
     if (!thread) throw new Error("会话不存在");
+    if (
+      nextMode === "ultra" &&
+      this.runtimeOf(thread) === "codex" &&
+      (await this.ensureClient("codex")) instanceof CodexClient
+    ) {
+      throw new Error("Codex 暂不支持 Ultra 子代理模式");
+    }
     if ((thread.agentMode ?? "standard") === nextMode) return;
 
     const rt = this.threads.get(threadId);
@@ -2007,6 +2041,7 @@ export class CopilotManager {
   }
 
   async deleteThread(threadId: string): Promise<void> {
+    const thread = store.getThread(threadId);
     const rt = this.threads.get(threadId);
     if (rt) {
       this.clearDetachTimer(rt);
@@ -2020,12 +2055,12 @@ export class CopilotManager {
       }
     }
     this.threads.delete(threadId);
-    const client = await this.ensureClient();
+    const client = await this.ensureClient(this.runtimeOf(thread));
     await client.deleteSession(threadId);
   }
 
   async listModels() {
-    const client = await this.ensureClient();
+    const client = await this.ensureClient("codex");
     try {
       const models = await client.listModels();
       return models.map((m) => ({
@@ -2125,10 +2160,10 @@ export class CopilotManager {
       }
     }
     this.threads.clear();
-    if (this.client) {
-      await this.client.stop();
-      this.client = null;
-      this.starting = null;
+    for (const client of this.clients.values()) {
+      await client.stop();
     }
+    this.clients.clear();
+    this.startings.clear();
   }
 }
