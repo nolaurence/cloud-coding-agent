@@ -19,6 +19,7 @@ import { array, object, startLlmGateway, text, type GatewayProvider, type JsonOb
 import { sanitizedCopilotRuntimeEnv } from "./runtimeEnv.js";
 import { IMAGE_EXTENSIONS, MAX_IMAGE_SIZE, hasImageSignature, storeUploadedImage } from "./uploads.js";
 import { startImageGenerationServer, type ImageGenerationProvider } from "./imageGeneration.js";
+import { attachmentReferenceText } from "./attachmentPrompt.js";
 
 const CODEX_HOME = path.join(DATA_DIR, "codex-home");
 const MAX_CONTEXT_OUTPUT_RESERVE_TOKENS = 16_000;
@@ -621,7 +622,11 @@ export class CodexSession implements AgentSession {
     for (const attachment of options.attachments ?? []) {
       if (attachment.type !== "file") throw new Error("Unsupported attachment type");
       if (/\.(png|jpe?g|gif|webp)$/i.test(attachment.path)) inputs.push({ type: "localImage", path: attachment.path });
-      else inputs.push({ type: "mention", name: attachment.displayName ?? path.basename(attachment.path), path: attachment.path });
+      else {
+        inputs.push({ type: "mention", name: attachment.displayName ?? path.basename(attachment.path), path: attachment.path });
+        // Native mentions preserve references but omit ordinary file paths from model input.
+        inputs.push({ type: "text", text: attachmentReferenceText(attachment.displayName, attachment.path), text_elements: [] });
+      }
     }
     this.pendingTurn = true;
     const message = this.emit({ type: "user.message", data: { content: options.prompt } });

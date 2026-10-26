@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { HarnessClient, type NotificationSubscription } from "@deepseek-ai/dsh-sdk-client";
+import { attachmentReferenceText } from "../attachmentPrompt.js";
 import type {
   MessageOptions,
   ModelCapabilitiesOverride,
@@ -511,9 +512,9 @@ export class DshSession implements AgentSession {
     const blocks: { type: "text"; text: string }[] = [{ type: "text", text: options.prompt }];
     for (const attachment of options.attachments ?? []) {
       // DSH 的图片块需要附件服务引用；v1 以文本提及携带路径，模型侧可用文件工具读取
-      const label = attachment.displayName ?? "附件";
-      const location = "path" in attachment ? `（${attachment.path}）` : "";
-      blocks.push({ type: "text", text: `\n<附件：${label}${location}>` });
+      blocks.push({ type: "text", text: attachmentReferenceText(
+        attachment.displayName, "path" in attachment ? attachment.path : undefined,
+      ) });
     }
     return blocks as Parameters<HarnessClient["prompt"]>[1];
   }

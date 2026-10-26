@@ -1811,15 +1811,13 @@ export class CopilotManager {
     rt.running = true;
     rt.currentTurnId = turnId;
     rt.pendingAssistant = null;
-    rt.pendingUserAttachments =
-      attachments
-        ?.filter((attachment): attachment is TurnAttachment & { imageId: string } => Boolean(attachment.imageId))
-        .map((attachment) => ({
-          id: attachment.imageId,
-          displayName: attachment.displayName ?? "图片",
-          kind: "image" as const,
-          ownerId: actorId,
-        })) ?? [];
+    rt.pendingUserAttachments = attachments?.flatMap((attachment): MessageAttachment[] => {
+      const id = attachment.imageId ?? attachment.fileId;
+      if (!id) return [];
+      const kind = attachment.imageId ? "image" : "file";
+      return [{ id, displayName: attachment.displayName ?? (kind === "image" ? "图片" : "文件"),
+        kind, ownerId: actorId }];
+    }) ?? [];
     rt.pendingUserAuthorId = actorId;
     this.emit(threadId, { kind: "turn.start", turnId });
     this.shellChanged();

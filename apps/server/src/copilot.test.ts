@@ -1011,6 +1011,35 @@ test("attaches uploaded images to the emitted and restored user message", async 
   });
 });
 
+test("records mixed uploaded attachments and restores files with the original author", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(() => new FakeClient(session) as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+  const attachments = [
+    { path: "/uploads/file.txt", displayName: "report.txt", fileId: "uploaded.txt" },
+    { path: "/uploads/image.png", displayName: "screen.png", imageId: "uploaded.png" },
+    { path: "/workspace/src/index.ts", displayName: "index.ts" },
+  ];
+  await manager.sendMessage(threadId, "检查附件", attachments, "collaborator");
+  assert.deepEqual(session.sent[0], { prompt: "检查附件", attachments: attachments.map(({ path, displayName }) =>
+    ({ type: "file", path, displayName })) });
+  const event = sessionEvent("user.message", { content: "检查附件" });
+  session.emit(event);
+  const expected = [
+    { id: "uploaded.txt", displayName: "report.txt", kind: "file", ownerId: "collaborator" },
+    { id: "uploaded.png", displayName: "screen.png", kind: "image", ownerId: "collaborator" },
+  ];
+  assert.deepEqual(store.getThread(threadId)?.messageAttachments?.[event.id], expected);
+  assert.deepEqual(manager.snapshot(threadId).messages[0]?.attachments, expected);
+  const restored = new CopilotManager(() => new FakeClient(new FakeSession([event])) as unknown as CopilotClient);
+  t.after(() => restored.shutdown());
+  await restored.subscribe(threadId, "admin");
+  assert.deepEqual(restored.snapshot(threadId).messages[0]?.attachments, expected);
+  assert.equal(restored.snapshot(threadId).messages[0]?.authorId, "collaborator");
+});
+
 test("keeps attachments when the first image message updates the title", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
@@ -1917,8 +1946,15 @@ test("routes threads to the Codex or DSH client by runtime", async (t) => {
   await manager.subscribe(codexId, "admin");
   assert.equal(codexClient.startCalls, 1);
 
-  await manager.sendMessage(dshId, "hi");
-  assert.equal(dshSession.sent.length, 1);
+  const attachment = { path: "/uploads/report.txt", displayName: "report.txt", fileId: "report.txt" };
+  await manager.sendMessage(dshId, "hi", [attachment], "admin");
+  assert.deepEqual(dshSession.sent[0], { prompt: "hi", attachments: [
+    { type: "file", path: attachment.path, displayName: attachment.displayName },
+  ] });
+  dshSession.emit(sessionEvent("user.message", { content: "hi" }));
+  assert.deepEqual(manager.snapshot(dshId).messages[0]?.attachments, [
+    { id: "report.txt", kind: "file", displayName: "report.txt", ownerId: "admin" },
+  ]);
   await manager.interrupt(dshId);
 
   await manager.deleteThread(dshId);

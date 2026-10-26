@@ -153,13 +153,13 @@ export async function request<T = unknown>(msg: ClientMessageNoId, timeoutMs?: n
   });
 }
 
-export async function uploadImage(file: File): Promise<{ path: string; displayName: string; imageId: string }> {
+async function uploadAttachment(file: File, kind: "images" | "files") {
   if (!currentToken) throw new Error("未登录");
-  const response = await fetch("/api/uploads/images", {
+  const response = await fetch(`/api/uploads/${kind}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${currentToken}`,
-      "Content-Type": file.type,
+      "Content-Type": kind === "images" ? file.type : "application/octet-stream",
       "X-File-Name": encodeURIComponent(file.name),
     },
     body: file,
@@ -171,9 +171,51 @@ export async function uploadImage(file: File): Promise<{ path: string; displayNa
     error?: string;
   };
   if (!response.ok || !data.path || !data.id) {
-    throw new Error(data.error ?? `图片上传失败 (${response.status})`);
+    throw new Error(data.error ?? `附件上传失败 (${response.status})`);
   }
-  return { path: data.path, displayName: data.displayName ?? file.name, imageId: data.id };
+  return { path: data.path, displayName: data.displayName ?? file.name, id: data.id };
+}
+
+export async function uploadImage(file: File): Promise<{ path: string; displayName: string; imageId: string }> {
+  const { id, ...attachment } = await uploadAttachment(file, "images");
+  return { ...attachment, imageId: id };
+}
+
+export async function uploadFile(file: File): Promise<{ path: string; displayName: string; fileId: string }> {
+  const { id, ...attachment } = await uploadAttachment(file, "files");
+  return { ...attachment, fileId: id };
+}
+
+export async function discardUpload(attachment: { imageId?: string; fileId?: string }): Promise<void> {
+  const id = attachment.imageId ?? attachment.fileId;
+  if (!id || !currentToken) return;
+  const kind = attachment.imageId ? "images" : "files";
+  await fetch(`/api/uploads/${kind}/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${currentToken}` },
+  });
+}
+
+export async function downloadFile(id: string, name: string, threadId: string, shareToken?: string): Promise<void> {
+  if (!currentToken) throw new Error("未登录");
+  const headers: Record<string, string> = { Authorization: `Bearer ${currentToken}` };
+  if (shareToken) headers["X-Thread-Share-Token"] = shareToken;
+  const response = await fetch(
+    `/api/uploads/files/${encodeURIComponent(id)}?threadId=${encodeURIComponent(threadId)}`,
+    { headers },
+  );
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(data.error ?? `文件下载失败 (${response.status})`);
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 export async function loadImage(

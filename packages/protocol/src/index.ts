@@ -472,7 +472,7 @@ export interface ChatMessage {
 export interface MessageAttachment {
   id: string;
   displayName: string;
-  kind: "image";
+  kind: "image" | "file";
   ownerId: string;
 }
 
@@ -480,6 +480,7 @@ export interface TurnAttachment {
   path: string;
   displayName?: string;
   imageId?: string;
+  fileId?: string;
 }
 
 export interface ProjectFileEntry {

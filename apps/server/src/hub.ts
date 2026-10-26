@@ -199,19 +199,21 @@ export class Hub {
     }
   }
 
-  private initialTurnImageAttachments(value: unknown): TurnAttachment[] | undefined {
+  private initialTurnUploadAttachments(value: unknown): TurnAttachment[] | undefined {
     if (!value || typeof value !== "object") return undefined;
     const attachments = (value as { attachments?: unknown }).attachments;
     if (!Array.isArray(attachments)) return undefined;
     return attachments.flatMap((attachment) => {
       if (!attachment || typeof attachment !== "object") return [];
-      const imageId = (attachment as { imageId?: unknown }).imageId;
-      return typeof imageId === "string" ? [{ path: "", imageId }] : [];
+      const { imageId, fileId } = attachment as { imageId?: unknown; fileId?: unknown };
+      return [{ path: "", ...(typeof imageId === "string" ? { imageId } : {}),
+        ...(typeof fileId === "string" ? { fileId } : {}) }];
     });
   }
 
-  private cleanupInitialTurnUploads(conn: ClientConn, initialTurn: unknown) {
-    removeUploadedImages(conn.user.username, this.initialTurnImageAttachments(initialTurn));
+  private cleanupInitialTurnUploads(conn: ClientConn, initialTurn: unknown, failedThreadId?: string) {
+    removeUploadedImages(conn.user.username, this.initialTurnUploadAttachments(initialTurn),
+      store.threads.filter((thread) => thread.id !== failedThreadId));
   }
 
   private errorMessage(error: unknown): string {
@@ -249,7 +251,7 @@ export class Hub {
     }
 
     try {
-      this.cleanupInitialTurnUploads(conn, initialTurn);
+      this.cleanupInitialTurnUploads(conn, initialTurn, thread?.id);
     } catch (error) {
       recordFailure("清理上传", error);
     }
@@ -779,7 +781,7 @@ export class Hub {
           this.terminals.closeThread(msg.threadId);
           await browserPool.stopThread(msg.threadId);
           await this.manager.deleteThread(msg.threadId);
-          if (thread) removeThreadUploads(thread);
+          if (thread) removeThreadUploads(thread, store.threads.filter((item) => item.id !== thread.id));
           await deleteThreadShare(msg.threadId);
           store.deleteThread(msg.threadId);
           this.reconcileThreadClients(msg.threadId);
@@ -927,18 +929,18 @@ export class Hub {
           break;
         }
         case "turn.start": {
-          if (!this.canInteract(conn, store.getThread(msg.threadId))) throw new Error("当前分享仅允许查看");
-          const thread = store.getThread(msg.threadId);
-          if (!thread) throw new Error("会话不存在");
-          const project = store.projects.find((candidate) => candidate.id === thread.projectId);
-          if (!project || project.ownerId !== thread.userId) {
-            throw new Error("会话关联的工作区无效");
-          }
-          validateTurnAttachments(conn.user.username, project.path, msg.attachments);
           try {
+            if (!this.canInteract(conn, store.getThread(msg.threadId))) throw new Error("当前分享仅允许查看");
+            const thread = store.getThread(msg.threadId);
+            if (!thread) throw new Error("会话不存在");
+            const project = store.projects.find((candidate) => candidate.id === thread.projectId);
+            if (!project || project.ownerId !== thread.userId) {
+              throw new Error("会话关联的工作区无效");
+            }
+            validateTurnAttachments(conn.user.username, project.path, msg.attachments);
             await this.manager.sendMessage(msg.threadId, msg.text, msg.attachments, conn.user.username);
           } catch (error) {
-            removeUploadedImages(conn.user.username, msg.attachments);
+            removeUploadedImages(conn.user.username, msg.attachments, store.threads);
             throw error;
           }
           this.broadcastShell();

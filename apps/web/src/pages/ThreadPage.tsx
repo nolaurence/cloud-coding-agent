@@ -333,24 +333,24 @@ export function ThreadPage() {
                           />
                         ) : undefined
                       }
+                      leadingControls={canManageThread ? (
+                        <ComposerPermissionPicker
+                          value={permissionMode}
+                          onChange={onPermissionModeChange}
+                          disabled={state.running || switchingMode || switchingModel}
+                          updating={switchingPermission}
+                        />
+                      ) : undefined}
                       footerControls={canManageThread ? (
-                        <>
-                          <ComposerPermissionPicker
-                            value={permissionMode}
-                            onChange={onPermissionModeChange}
-                            disabled={state.running || switchingMode || switchingModel}
-                            updating={switchingPermission}
-                          />
-                          <ComposerModelPicker
-                            value={effectiveModel}
-                            onChange={(ref) => void onModelChange(ref)}
-                            disabled={state.running || switchingMode || switchingPermission}
-                            updating={switchingModel}
-                            lockedProviderId={modelProviderId}
-                            agentMode={agentMode}
-                            onAgentModeChange={onAgentModeChange}
-                          />
-                        </>
+                        <ComposerModelPicker
+                          value={effectiveModel}
+                          onChange={(ref) => void onModelChange(ref)}
+                          disabled={state.running || switchingMode || switchingPermission}
+                          updating={switchingModel}
+                          lockedProviderId={modelProviderId}
+                          agentMode={agentMode}
+                          onAgentModeChange={onAgentModeChange}
+                        />
                       ) : undefined}
                     />
                   </div>

@@ -232,7 +232,7 @@ export function NewChatPage() {
               autoFocus
               placeholder="描述你的编码任务，@ 引用文件，/ 使用技能"
               footerError={runtimeError || undefined}
-              footerControls={
+              leadingControls={
                 <>
                   <ComposerRuntimePicker
                     value={runtime}
@@ -244,14 +244,16 @@ export function NewChatPage() {
                     onChange={setPermissionMode}
                     disabled={creating}
                   />
-                  <ComposerModelPicker
-                    value={effectiveModel}
-                    onChange={selectModel}
-                    disabled={creating}
-                    agentMode={agentMode}
-                    onAgentModeChange={setAgentMode}
-                  />
                 </>
+              }
+              footerControls={
+                <ComposerModelPicker
+                  value={effectiveModel}
+                  onChange={selectModel}
+                  disabled={creating}
+                  agentMode={agentMode}
+                  onAgentModeChange={setAgentMode}
+                />
               }
             />
           </>

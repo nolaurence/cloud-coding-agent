@@ -9,6 +9,8 @@ import {
   ChevronRight,
   ChevronDown,
   Copy,
+  Download,
+  FileText,
   Loader2,
   Pause,
   Sparkles,
@@ -16,6 +18,7 @@ import {
 } from "lucide-react";
 import type { ChatMessage, SubagentActivity, ToolActivity } from "@cca/protocol";
 import { useImageObjectUrl } from "../hooks/useImageObjectUrl";
+import { downloadFile } from "../lib/client";
 import type { ImagePreviewTarget } from "../lib/imagePreview";
 import { useApp, useThreadState } from "../lib/store";
 import {
@@ -260,6 +263,44 @@ function MessageImage({
   );
 }
 
+function MessageFile({ id, name }: { id: string; name: string }) {
+  const { threadId, shareToken } = useContext(MessageContext);
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState("");
+  const download = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    setError("");
+    try {
+      await downloadFile(id, name, threadId, shareToken);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "文件下载失败");
+    } finally {
+      setDownloading(false);
+    }
+  };
+  return (
+    <div className="max-w-full">
+      <button
+        type="button"
+        className="flex h-16 w-60 max-w-full items-center gap-3 rounded-xl border border-line-2 bg-card px-3 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+        aria-label={`下载文件 ${name}`}
+        title={name}
+        disabled={downloading}
+        onClick={() => void download()}
+      >
+        <FileText className="size-7 shrink-0 text-label-2" strokeWidth={1.5} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-medium text-label-1">{name}</span>
+          <span className="block text-[11px] leading-5 text-label-3">{downloading ? "正在下载…" : "点击下载文件"}</span>
+        </span>
+        {downloading ? <Loader2 className="size-4 shrink-0 animate-spin text-label-3" /> : <Download className="size-4 shrink-0 text-label-3" />}
+      </button>
+      {error && <p className="mt-1 text-xs text-destructive" role="alert">{error}</p>}
+    </div>
+  );
+}
+
 function AssistantMessage({
   message,
   streaming = false,
@@ -273,6 +314,7 @@ function AssistantMessage({
 }) {
   const { threadId, shareToken } = useContext(MessageContext);
   const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
+  const files = message.attachments?.filter((attachment) => attachment.kind === "file") ?? [];
   return (
     <article
       className="assistant-message group/assistant flex min-w-0 flex-col gap-4"
@@ -289,7 +331,12 @@ function AssistantMessage({
           ))}
         </div>
       )}
-      {showMeta && !streaming && (message.text || images.length > 0) && (
+      {files.length > 0 && threadId && (
+        <div className="flex max-w-full flex-wrap gap-2">
+          {files.map((file) => <MessageFile key={file.id} id={file.id} name={file.displayName} />)}
+        </div>
+      )}
+      {showMeta && !streaming && (message.text || images.length > 0 || files.length > 0) && (
         <div className="-ml-1.5 flex h-7 items-center gap-2 text-label-3 opacity-100 transition-opacity duration-150 sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
           {message.text && <CopyAction text={message.text} label="复制回复" />}
           <span className="text-[13px] leading-6 tabular-nums">
@@ -310,6 +357,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
   const skills = skillMatch?.[1]?.split(", ").filter(Boolean) ?? [];
   const content = skillMatch?.[2] ?? message.text;
   const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
+  const files = message.attachments?.filter((attachment) => attachment.kind === "file") ?? [];
 
   return (
     <article className="group/user flex flex-col items-end gap-1.5">
@@ -332,6 +380,11 @@ function UserMessage({ message }: { message: ChatMessage }) {
                 />
               ) : null
             ))}
+          </div>
+        )}
+        {files.length > 0 && threadId && (
+          <div className="flex max-w-full flex-wrap justify-end gap-2">
+            {files.map((file) => <MessageFile key={file.id} id={file.id} name={file.displayName} />)}
           </div>
         )}
         {(content || skills.length > 0) && (

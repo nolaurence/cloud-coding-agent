@@ -26,14 +26,8 @@ import {
 import { isLocalMode } from "./env.js";
 import { closeDb, initDb } from "./db.js";
 import { store } from "./store.js";
-import {
-  IMAGE_EXTENSIONS,
-  ImageUploadError,
-  MAX_IMAGE_SIZE,
-  storeUploadedImage,
-  uploadDirectory,
-} from "./uploads.js";
-import { initThreadShares, validateThreadShareToken } from "./threadShares.js";
+import { registerUploadRoutes } from "./uploadRoutes.js";
+import { initThreadShares } from "./threadShares.js";
 import { getThreadAccess } from "./threadAccess.js";
 import { browserPool, NOVNC_ROOT } from "./browser.js";
 import WebSocket from "ws";
@@ -72,11 +66,7 @@ export async function startServer(options: { port?: number; host?: string; insta
   const app = Fastify({ logger: false });
   await app.register(fastifyCors, { origin: true });
   await app.register(fastifyWebsocket);
-  app.addContentTypeParser(
-    Object.keys(IMAGE_EXTENSIONS),
-    { parseAs: "buffer", bodyLimit: MAX_IMAGE_SIZE },
-    (_req, body, done) => done(null, body),
-  );
+  registerUploadRoutes(app, authenticate);
 
   const hub = new Hub();
 
@@ -268,66 +258,6 @@ export async function startServer(options: { port?: number; host?: string; insta
     } catch (error) {
       return reply.code(404).send({ error: error instanceof Error ? error.message : "邀请码不存在" });
     }
-  });
-
-  app.post("/api/uploads/images", async (req, reply) => {
-    const payload = authenticate(req.headers.authorization);
-    if (!payload) return reply.code(401).send({ error: "未授权" });
-
-    const mimeType = req.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-    const extension = IMAGE_EXTENSIONS[mimeType as keyof typeof IMAGE_EXTENSIONS];
-    if (!extension) return reply.code(415).send({ error: "仅支持 JPG、PNG、GIF 和 WebP 图片" });
-    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      return reply.code(400).send({ error: "图片内容为空" });
-    }
-
-    const rawName = req.headers["x-file-name"];
-    let displayName = "图片" + extension;
-    if (typeof rawName === "string") {
-      try {
-        displayName = path.basename(decodeURIComponent(rawName)).slice(0, 200) || displayName;
-      } catch {
-        return reply.code(400).send({ error: "图片文件名无效" });
-      }
-    }
-    try {
-      const attachment = storeUploadedImage(payload.username, req.body, mimeType, displayName);
-      return { id: attachment.imageId, path: attachment.path, displayName: attachment.displayName };
-    } catch (error) {
-      if (error instanceof ImageUploadError) {
-        return reply.code(error.statusCode).send({ error: error.message });
-      }
-      throw error;
-    }
-  });
-
-  app.get("/api/uploads/images/:id", async (req, reply) => {
-    const payload = authenticate(req.headers.authorization);
-    if (!payload) return reply.code(401).send({ error: "未授权" });
-
-    const { id } = req.params as { id: string };
-    const { threadId } = req.query as { threadId?: string };
-    if (!/^[0-9a-f-]+\.(?:jpg|png|gif|webp)$/.test(id)) {
-      return reply.code(400).send({ error: "图片标识无效" });
-    }
-    if (!threadId) return reply.code(400).send({ error: "缺少会话标识" });
-    const thread = store.getThread(threadId);
-    const rawShareToken = req.headers["x-thread-share-token"];
-    const shareToken = typeof rawShareToken === "string" ? rawShareToken : undefined;
-    if (
-      !thread ||
-      (getThreadAccess(payload, thread) === null &&
-        validateThreadShareToken(threadId, shareToken) === null)
-    ) {
-      return reply.code(403).send({ error: "无权访问该图片" });
-    }
-    const attachment = Object.values(thread.messageAttachments ?? {}).flat().find((item) => item.id === id);
-    if (!attachment) return reply.code(404).send({ error: "图片不存在" });
-    const imagePath = path.join(uploadDirectory(attachment.ownerId || thread.userId || ""), id);
-    if (!fs.existsSync(imagePath)) return reply.code(404).send({ error: "图片不存在" });
-    const extension = path.extname(id);
-    const mimeType = extension === ".jpg" ? "image/jpeg" : `image/${extension.slice(1)}`;
-    return reply.type(mimeType).send(fs.createReadStream(imagePath));
   });
 
   app.register(async (scope) => {

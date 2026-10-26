@@ -4,6 +4,7 @@
 // （copilot.ts 的 handleSessionEvent / rebuildHistory）认识的事件形状。
 // 只映射应用消费的事件；inbox/step/request/system 等纯日志事件忽略。
 import { randomUUID } from "node:crypto";
+import { isAttachmentReferenceText } from "../attachmentPrompt.js";
 import type { SessionEvent } from "@github/copilot-sdk";
 import type {
   DshAssistantChunkData,
@@ -146,7 +147,9 @@ export class DshEventMapper {
         const message = data.message ?? (data as DshMessage);
         // agent-instructions / runtime-context / skill 注入不是用户可见消息。
         if (!message?.content || !isHumanMessage(message.source)) break;
-        push("user.message", { content: textOfContent(message.content), source: undefined });
+        const visibleContent = message.content.filter((block, index) => index === 0 ||
+          block.type !== "text" || !isAttachmentReferenceText(block.text ?? ""));
+        push("user.message", { content: textOfContent(visibleContent), source: undefined });
         break;
       }
       case "assistant/chunk": {

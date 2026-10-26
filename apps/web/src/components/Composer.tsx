@@ -9,11 +9,12 @@ import {
   Plus,
   Sparkles,
   Square,
-  X,
+  Upload,
 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { buildFileMentionPayload } from "../lib/composerDrafts";
-import { uploadImage } from "../lib/client";
+import { useComposerAttachments } from "../lib/composerAttachments";
+import { ComposerAttachments } from "./ComposerAttachments";
 import type { ContextCompactionResult, ContextUsage, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
@@ -33,13 +34,8 @@ interface CompletionItem {
   kind: "file" | "skill" | "command";
 }
 
-const actionButtonClass =
-  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-black text-white transition-[background-color,color,transform] hover:bg-zinc-800 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:bg-zinc-200 disabled:text-zinc-400 dark:bg-white dark:text-black dark:hover:bg-zinc-200 dark:focus-visible:ring-offset-zinc-900 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-400";
+const actionButtonClass = "composer-primary-button";
 
-const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
-const MAX_IMAGES = 4;
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
-let nextImageId = 0;
 const CONTEXT_RING_RADIUS = 7;
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
 const tokenFormatter = new Intl.NumberFormat("zh-CN");
@@ -130,12 +126,6 @@ function ContextUsageIndicator({ usage }: { usage: ContextUsage | null }) {
   );
 }
 
-interface PendingImage {
-  id: string;
-  file: File;
-  previewUrl: string;
-}
-
 function detectTrigger(text: string, caret: number): Trigger | null {
   const before = text.slice(0, caret);
   const match = before.match(/(^|\s)([@/])([^\s@/]*)$/);
@@ -161,6 +151,7 @@ export function Composer({
   onCompact,
   autoFocus,
   placeholder,
+  leadingControls,
   footerControls,
   footerError,
   statusBar,
@@ -178,6 +169,7 @@ export function Composer({
   onCompact?: () => ContextCompactionResult | Promise<ContextCompactionResult>;
   autoFocus?: boolean;
   placeholder?: string;
+  leadingControls?: ReactNode;
   footerControls?: ReactNode;
   footerError?: string;
   statusBar?: ReactNode;
@@ -197,10 +189,13 @@ export function Composer({
   const [compacting, setCompacting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submitNotice, setSubmitNotice] = useState("");
-  const [images, setImages] = useState<PendingImage[]>([]);
-  const [draggingImage, setDraggingImage] = useState(false);
+  const { attachments: draftAttachments, addFiles, removeAttachment, retryAttachment, clearSentAttachments, invalidateAttachments } = useComposerAttachments(draftKey);
+  const uploadsPending = draftAttachments.some((item) => item.status !== "ready");
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const dragDepthRef = useRef(0);
   const [contentMenuOpen, setContentMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const focusAfterMenuRef = useRef(false);
   const completionId = useId();
@@ -212,7 +207,7 @@ export function Composer({
     const element = textareaRef.current;
     if (!element) return;
     element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, 192)}px`;
+    element.style.height = `${Math.min(element.scrollHeight, 336)}px`;
   }, []);
 
   useEffect(() => {
@@ -323,43 +318,11 @@ export function Composer({
     });
   };
 
-  const addImages = (files: Iterable<File>) => {
-    const candidates = [...files].filter((file) => file.type.startsWith("image/"));
-    if (candidates.length === 0) return;
-    setSubmitError("");
+  const intakeFiles = (files: Iterable<File>) => {
+    if (submitting || compacting) return;
     setSubmitNotice("");
-    const valid: File[] = [];
-    for (const file of candidates) {
-      if (!ACCEPTED_IMAGE_TYPES.has(file.type)) {
-        setSubmitError("仅支持 JPG、PNG、GIF 和 WebP 图片");
-        continue;
-      }
-      if (file.size > MAX_IMAGE_SIZE) {
-        setSubmitError(`图片 ${file.name} 超过 10 MB`);
-        continue;
-      }
-      valid.push(file);
-    }
-    setImages((current) => {
-      const available = MAX_IMAGES - current.length;
-      if (valid.length > available) setSubmitError(`一次最多添加 ${MAX_IMAGES} 张图片`);
-      return [
-        ...current,
-        ...valid.slice(0, Math.max(0, available)).map((file) => ({
-          id: `image-${++nextImageId}`,
-          file,
-          previewUrl: URL.createObjectURL(file),
-        })),
-      ];
-    });
-  };
-
-  const removeImage = (id: string) => {
-    setImages((current) => {
-      const removed = current.find((image) => image.id === id);
-      if (removed) URL.revokeObjectURL(removed.previewUrl);
-      return current.filter((image) => image.id !== id);
-    });
+    setSubmitError(addFiles(files));
+    textareaRef.current?.focus();
   };
 
   const buildPayload = () => {
@@ -383,8 +346,8 @@ export function Composer({
 
   const compact = async () => {
     if (!onCompact || compacting || running) return;
-    if (images.length > 0) {
-      setSubmitError("主动压缩命令不能与图片一起使用");
+    if (draftAttachments.length > 0) {
+      setSubmitError("主动压缩命令不能与附件一起使用");
       return;
     }
     setCompacting(true);
@@ -422,18 +385,24 @@ export function Composer({
       return;
     }
     const { prompt, attachments } = buildPayload();
-    if (!prompt && attachments.length === 0 && images.length === 0) return;
+    if (!prompt && attachments.length === 0 && draftAttachments.length === 0) return;
+    if (uploadsPending) {
+      setSubmitError(draftAttachments.some((item) => item.status === "error")
+        ? "请重试或移除上传失败的附件后再发送"
+        : "附件正在上传，请稍候");
+      return;
+    }
+    const uploadedAttachments = draftAttachments.flatMap((item) => item.uploaded ? [item.uploaded] : []);
     setSubmitting(true);
     setSubmitError("");
     setSubmitNotice("");
     try {
-      const imageAttachments = await Promise.all(images.map((image) => uploadImage(image.file)));
-      await onSend(prompt, [...attachments, ...imageAttachments]);
+      await onSend(prompt, [...attachments, ...uploadedAttachments]);
       clearComposerDraft(draftKey, text);
       setTrigger(null);
-      images.forEach((image) => URL.revokeObjectURL(image.previewUrl));
-      setImages([]);
+      clearSentAttachments(draftAttachments);
     } catch (error) {
+      invalidateAttachments(draftAttachments);
       setSubmitError(error instanceof Error ? error.message : "消息发送失败");
     } finally {
       setSubmitting(false);
@@ -454,7 +423,12 @@ export function Composer({
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
+      event.preventDefault();
+      if (!submitting && !compacting) fileInputRef.current?.click();
+      return;
+    }
     if (popupVisible && items.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -550,50 +524,50 @@ export function Composer({
       <div
         className={cn(
           "composer-surface relative",
-          draggingImage && "is-dragging",
+          draggingFiles && "is-dragging",
         )}
         onDragEnter={(event) => {
-          if (!submitting && !compacting && [...event.dataTransfer.items].some((item) => item.type.startsWith("image/"))) {
-            event.preventDefault();
-            setDraggingImage(true);
-          }
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          dragDepthRef.current++;
+          setDraggingFiles(true);
         }}
         onDragOver={(event) => {
-          if ([...event.dataTransfer.items].some((item) => item.type.startsWith("image/"))) {
-            event.preventDefault();
-          }
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = submitting || compacting ? "none" : "copy";
         }}
-        onDragLeave={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingImage(false);
+        onDragLeave={() => {
+          dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+          if (dragDepthRef.current === 0) setDraggingFiles(false);
         }}
         onDrop={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
           event.preventDefault();
-          setDraggingImage(false);
-          if (!submitting && !compacting) addImages(event.dataTransfer.files);
+          dragDepthRef.current = 0;
+          setDraggingFiles(false);
+          if (submitting || compacting) return;
+          if ([...event.dataTransfer.items].some((item) => item.webkitGetAsEntry?.()?.isDirectory)) {
+            setSubmitError("请添加单个文件，暂不支持上传文件夹");
+            return;
+          }
+          intakeFiles(event.dataTransfer.files);
         }}
       >
-        {images.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto px-4 pt-4 pb-1">
-            {images.map((image) => (
-              <div className="group relative h-16 w-16 shrink-0" key={image.id}>
-                <img
-                  src={image.previewUrl}
-                  alt={image.file.name}
-                  className="h-full w-full rounded-lg border border-zinc-200 object-cover dark:border-zinc-700"
-                />
-                <button
-                  type="button"
-                  aria-label={`移除图片 ${image.file.name}`}
-                  title="移除图片"
-                  className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-zinc-800 text-white shadow hover:bg-black"
-                  onClick={() => removeImage(image.id)}
-                  disabled={submitting}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
+        {draggingFiles && (
+          <div className="composer-drop-overlay" role="status">
+            <Upload className="size-7" strokeWidth={1.5} />
+            <strong>{submitting || compacting ? "请稍候再添加附件" : "松开以添加文件或图片"}</strong>
+            <span>文件最大 20 MB · 图片最大 10 MB，最多 4 张</span>
           </div>
+        )}
+        {draftAttachments.length > 0 && (
+          <ComposerAttachments
+            attachments={draftAttachments}
+            disabled={submitting || compacting}
+            onRemove={(id) => { removeAttachment(id); setSubmitError(""); }}
+            onRetry={(id) => { retryAttachment(id); setSubmitError(""); }}
+          />
         )}
         <textarea
           ref={textareaRef}
@@ -604,8 +578,8 @@ export function Composer({
           aria-activedescendant={popupVisible && items[activeIndex] ? `${completionId}-${activeIndex}` : undefined}
           disabled={submitting || compacting}
           rows={1}
-          className="block min-h-[76px] w-full resize-none overflow-y-auto bg-transparent px-4 pt-3.5 pb-2 text-sm leading-6 outline-none placeholder:text-muted-foreground/70 disabled:opacity-60"
-          placeholder={placeholder ?? "输入消息，@ 引用文件，/ 使用技能"}
+          className={cn("composer-textarea", !threadId && "is-hero")}
+          placeholder={placeholder ?? "发送消息，或添加文件和图片；@ 引用文件，/ 使用技能"}
           value={text}
           onChange={(event) => {
             setComposerDraft(draftKey, event.target.value);
@@ -615,12 +589,9 @@ export function Composer({
           }}
           onKeyDown={onKeyDown}
           onPaste={(event) => {
-            const pastedImages = [...event.clipboardData.files].filter((file) =>
-              file.type.startsWith("image/"),
-            );
-            if (pastedImages.length > 0) {
-              event.preventDefault();
-              addImages(pastedImages);
+            if (event.clipboardData.files.length > 0) {
+              if (!event.clipboardData.getData("text/plain")) event.preventDefault();
+              intakeFiles(event.clipboardData.files);
             }
           }}
           onClick={updateTrigger}
@@ -630,6 +601,11 @@ export function Composer({
           }}
         />
 
+        {!submitError && draftAttachments.some((item) => item.status === "error") && (
+          <div className="px-4 pb-2 text-xs text-destructive" role="alert">
+            {draftAttachments.find((item) => item.status === "error")?.error}。请重试或移除该附件。
+          </div>
+        )}
         {submitError && (
           <div className="px-4 pb-2 text-xs text-red-600 dark:text-red-400" role="alert">
             {submitError}
@@ -646,8 +622,20 @@ export function Composer({
           </div>
         )}
 
-        <div className="flex min-h-11 items-center justify-between gap-1 px-2.5 pb-2.5">
-          <div className="flex min-w-0 flex-1 items-center gap-1">
+        <div className="composer-toolbar">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              aria-label="上传文件或图片"
+              className="hidden"
+              disabled={submitting || compacting}
+              onChange={(event) => {
+                if (event.target.files) intakeFiles(event.target.files);
+                event.target.value = "";
+              }}
+            />
             <input
               ref={imageInputRef}
               type="file"
@@ -655,8 +643,9 @@ export function Composer({
               multiple
               aria-label="上传图片"
               className="hidden"
+              disabled={submitting || compacting}
               onChange={(event) => {
-                if (event.target.files) addImages(event.target.files);
+                if (event.target.files) intakeFiles(event.target.files);
                 event.target.value = "";
               }}
             />
@@ -664,8 +653,8 @@ export function Composer({
               <DropdownMenu.Trigger asChild>
                 <button
                   type="button"
-                  aria-label="添加内容"
-                  title="添加图片、文件引用或技能"
+                  aria-label="添加文件或调用指令"
+                  title="添加文件或调用指令（Ctrl/⌘ + O）"
                   className="composer-icon-button"
                   disabled={submitting || compacting}
                 >
@@ -688,10 +677,23 @@ export function Composer({
                     }
                   }}
                 >
-                  <DropdownMenu.Label className="composer-menu-heading">添加内容</DropdownMenu.Label>
+                  <DropdownMenu.Label className="composer-menu-heading">添加附件</DropdownMenu.Label>
                   <DropdownMenu.Item
                     className="composer-action-item"
-                    disabled={images.length >= MAX_IMAGES}
+                    onSelect={() => {
+                      focusAfterMenuRef.current = true;
+                      fileInputRef.current?.click();
+                    }}
+                  >
+                    <Upload aria-hidden="true" />
+                    <span>
+                      <strong>添加文件或图片</strong>
+                      <small>支持文档、代码等文件，单个最大 20 MB</small>
+                    </span>
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    className="composer-action-item"
+                    disabled={draftAttachments.filter((item) => item.kind === "image").length >= 4}
                     onSelect={() => {
                       focusAfterMenuRef.current = true;
                       imageInputRef.current?.click();
@@ -700,7 +702,7 @@ export function Composer({
                     <ImagePlus aria-hidden="true" />
                     <span>
                       <strong>添加图片</strong>
-                      <small>选择、粘贴或拖入图片，最多 4 张</small>
+                      <small>JPG、PNG、GIF、WebP，最多 4 张，每张 10 MB</small>
                     </span>
                   </DropdownMenu.Item>
                   <DropdownMenu.Label className="composer-menu-heading">工作区与技能</DropdownMenu.Label>
@@ -734,10 +736,11 @@ export function Composer({
                 </DropdownMenu.Content>
               </DropdownMenu.Portal>
             </DropdownMenu.Root>
-            {footerControls && <div className="ml-auto flex min-w-0 items-center gap-1">{footerControls}</div>}
+            {leadingControls}
           </div>
 
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="composer-trailing-tools">
+            {footerControls}
             {threadId && <ContextUsageIndicator usage={contextUsage ?? null} />}
             {running && onInterrupt ? (
               <button
@@ -762,8 +765,8 @@ export function Composer({
                 title="发送消息"
                 className={actionButtonClass}
                 onClick={() => void submit()}
-                disabled={(!text.trim() && images.length === 0) || busy}
-                aria-busy={submitting || compacting}
+                disabled={(!text.trim() && draftAttachments.length === 0) || busy || uploadsPending}
+                aria-busy={submitting || compacting || draftAttachments.some((item) => item.status === "uploading")}
               >
                 {submitting || compacting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />

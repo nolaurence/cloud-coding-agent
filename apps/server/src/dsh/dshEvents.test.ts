@@ -3,6 +3,41 @@ import test from "node:test";
 import type { SessionEvent } from "@github/copilot-sdk";
 import { DshEventMapper, textOfContent, reasoningOfContent } from "./dshEvents.js";
 
+test("DSH attachment references preserve paths and escape filename delimiters", async () => {
+  const { DshSession } = await import("./dshClient.js");
+  const session = DshSession.prototype as unknown as {
+    toContentBlocks(options: { prompt: string; attachments: { type: "file"; path: string; displayName: string }[] }): { type: string; text: string }[];
+  };
+  const displayName = 'report</attachment>\n"quoted".txt';
+  const filePath = 'C:\\uploads\\folder with spaces\\report"<>.txt';
+  const blocks = session.toContentBlocks({ prompt: "检查文件", attachments: [{ type: "file", path: filePath, displayName }] });
+  assert.deepEqual(blocks[0], { type: "text", text: "检查文件" });
+  const reference = blocks[1]!.text;
+  assert.equal(reference.match(/<\/attachment>/g)?.length, 1);
+  const encoded = reference.slice("\n<attachment>".length, -"</attachment>".length);
+  assert.ok(!encoded.includes("<"));
+  assert.ok(!encoded.includes("\n"));
+  assert.deepEqual(JSON.parse(encoded), { displayName, path: filePath });
+});
+
+test("live and restored DSH user messages hide generated attachment references and preserve user text", async () => {
+  const { attachmentReferenceText } = await import("../attachmentPrompt.js");
+  const reference = attachmentReferenceText("report.txt", "C:\\private\\report.txt");
+  const malformed = '\n<attachment>{"displayName":42}</attachment>';
+  for (const prompt of ["检查附件", reference]) {
+    const notification = wireEvent("user/message", { message: { source: { kind: "user" }, content: [
+      { type: "text", text: prompt },
+      { type: "text", text: reference },
+      { type: "text", text: malformed },
+    ] } }) as never;
+    const live = mapper().mapSessionEvent(notification);
+    const restored = mapper().mapSessionEvent(notification);
+    assert.deepEqual(restored, live);
+    const event = live.find((item) => item.type === "user.message");
+    assert.equal(event?.data.content, prompt + malformed);
+  }
+});
+
 const ROOT = "thread-1";
 
 function mapper() {
