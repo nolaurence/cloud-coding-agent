@@ -3,9 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { isDeepStrictEqual } from "node:util";
+import { pathToFileURL } from "node:url";
 import { DEFAULT_SETTINGS } from "@cca/protocol";
 import type { ModelEntry, ModelProviderConfig } from "@cca/protocol";
 import {
+  assertDshTrajectoryBundle,
+  DSH_TRAJECTORY_ENTRY_URL,
   buildDshIntegration,
   ensureDshProfile,
   ensureDshWorkspace,
@@ -62,6 +66,8 @@ test("DSH integration uses the configured default model and sandbox providers", 
   assert.match(serialized, /danger-full-access/);
   assert.match(serialized, /"defaultPreset":"danger-full-access"/);
   assert.match(serialized, /"id":"open-in-app","disabled":true/);
+  assert.match(serialized, /"id":"ui-settings","disabled":false,"config":\{"enabled":true\}/);
+  assert.match(serialized, /"id":"ui-trajectory","disabled":true/);
 });
 
 test("DSH integration falls back to the first usable provider", () => {
@@ -75,6 +81,40 @@ test("DSH integration falls back to the first usable provider", () => {
     model: "coding-model",
   });
   assert.doesNotMatch(JSON.stringify(integration.patch), /dsh-ssh/);
+});
+
+for (const sandboxEnabled of [true, false]) {
+  test(`DSH loads CCA's source bundle with sandbox ${sandboxEnabled ? "enabled" : "disabled"}`, () => {
+    const integration = buildDshIntegration(
+      { ...DEFAULT_SETTINGS, providers: [provider] },
+      [route],
+      { ...sandbox, enabled: sandboxEnabled },
+    );
+    assert.ok(integration.patch.some((patch) =>
+      isDeepStrictEqual(patch, { id: "ui-trajectory", disabled: true }),
+    ));
+    assert.ok(integration.patch.some((patch) =>
+      isDeepStrictEqual(patch, { insert: [{ id: "cca-ui-trajectory", name: DSH_TRAJECTORY_ENTRY_URL }] }),
+    ));
+    assert.equal(DSH_TRAJECTORY_ENTRY_URL, new URL("../dist/dsh-ui-trajectory/index.js", import.meta.url).href);
+  });
+}
+
+test("DSH refuses an incomplete CCA trajectory bundle instead of falling back to npm", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cca-dsh-trajectory-"));
+  const directory = path.join(root, "plugin with spaces");
+  fs.mkdirSync(directory);
+  const entryUrl = pathToFileURL(path.join(directory, "index.js")).href;
+  try {
+    assert.throws(() => assertDshTrajectoryBundle(entryUrl), /npm run build:dsh/);
+    fs.writeFileSync(path.join(directory, "index.js"), "export function apply() {}\n");
+    fs.writeFileSync(path.join(directory, "package.json"), "{}\n");
+    assert.throws(() => assertDshTrajectoryBundle(entryUrl), /缺少 client\.js/);
+    fs.writeFileSync(path.join(directory, "client.js"), "// browser bundle\n");
+    assert.doesNotThrow(() => assertDshTrajectoryBundle(entryUrl));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("DSH integration maps CCA reasoning efforts without inventing capabilities", () => {

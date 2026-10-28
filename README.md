@@ -146,6 +146,14 @@ DeepSeek Harness 的 workspace 实际运行在 sandbox 主机上。首次启动�
 
 绑定令牌使用服务端密钥加密保存,按会话所属用户读取。Agent 通过受控的 `authenticated_git` 工具执行远程 Git 操作;令牌不会写入仓库 URL、`.gitconfig` 或 Web 终端环境。HTTPS 和常见 SSH remote 会统一通过对应平台的 HTTPS 认证执行。
 
+### DSH 对话轨迹
+
+首页内嵌 DeepSeek Harness。打开一个会话后,在顶部「对话 / 轨迹」中选择「轨迹」,即可查看时长时间线、轮次、模型请求和工具调用记录。点击记录可展开参数、结果、思考、用量与计时详情,并可搜索轨迹、收起或展开轮次和调用、加载更早的历史。`deepseek-harness/packages/client/ui-trajectory` 的源码已纳入本仓库 `packages/dsh-ui-trajectory/src`,页面读取同一 DSH 会话的实时事件与持久化历史。
+
+标准服务端构建和开发启动会将这份源码及样式直接 bundle 到 `apps/server/dist/dsh-ui-trajectory/`,也可单独运行 `npm run build:dsh`。构建元数据和源码映射随产物保存。CCA 启动 DSH 时启用 `ui-settings.enabled`,关闭发行包自带的 `ui-trajectory`,并加载 CCA 构建出的 `cca-ui-trajectory`;缺少本地产物会明确提示先构建,不会回退使用 npm 页面。源码版本、共享基础模块和更新方式见 [轨迹源码说明](packages/dsh-ui-trajectory/README.md)。
+
+开发模式的 Vite 会将 `/dsh` 页面、资源和 WebSocket 一起转发至 `8787`;使用其他访问地址时需将 `CCA_PUBLIC_URL` 设为浏览器实际访问的源地址,以满足 DSH 的 Host 校验。
+
 ### Codex 模型接入与兼容范围
 
 推荐在「设置 → 模型服务」添加 OpenAI 兼容服务,Base URL 填 API 根路径(例如含 `/v1`),选择 `completions` 或 `responses`,再设置默认模型。Chat 上游必须支持 `stream: true` 和 function tool calling;网关转换文字、图片输入、推理增量、并行工具调用和工具结果,并把 Codex 的 free-form `apply_patch` 包装成带 `input` 字符串的 JSON 函数参数。兼容 Codex 的客户端 `tool_search`、搜索返回的 MCP 工具和命名空间调用。工具参数截断或流异常会报错,不会伪装成成功。手动压缩使用 Codex 的本地摘要流程,不伪造远程加密压缩结果。

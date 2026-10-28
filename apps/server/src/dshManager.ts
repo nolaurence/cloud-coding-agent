@@ -8,6 +8,8 @@ import { DATA_DIR, WORKSPACE_ROOT } from "./env.js";
 import { startLlmGateway, type GatewayProvider } from "./llmGateway.js";
 import {
   apiKeyEnvName,
+  assertDshTrajectoryBundle,
+  DSH_TRAJECTORY_ENTRY_URL,
   buildDshIntegration,
   ensureDshProfile,
   ensureDshWorkspace,
@@ -310,6 +312,7 @@ export class DshManager {
   private async launch(): Promise<void> {
     const config = this.config;
     if (!config) throw new Error("DeepSeek Harness 配置尚未初始化");
+    assertDshTrajectoryBundle(DSH_TRAJECTORY_ENTRY_URL);
     let sshBinDir: string | undefined;
     if (config.sandbox.enabled) {
       if (!fs.existsSync(config.sandbox.identityFile)) {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveModelContextWindowTokens } from "@cca/protocol";
 import type { AppSettings, ModelEntry, ModelProviderConfig } from "@cca/protocol";
 
@@ -38,6 +39,21 @@ export interface DshProfileOptions {
 export interface DshIntegration {
   defaultModel: { provider: string; model: string };
   patch: unknown[];
+}
+
+// Both src/dshProfile.ts and the bundled dist/index.js resolve this location.
+export const DSH_TRAJECTORY_ENTRY_URL = new URL("../dist/dsh-ui-trajectory/index.js", import.meta.url).href;
+
+/** Verify the CCA-built plugin before starting its DSH host. */
+export function assertDshTrajectoryBundle(entryUrl: string): void {
+  const missing = ["package.json", "index.js", "client.js"].filter((name) =>
+    !fs.statSync(fileURLToPath(new URL(name, entryUrl)), { throwIfNoEntry: false })?.isFile(),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `本地 DSH 轨迹插件产物不完整（缺少 ${missing.join("、")}）。请先在项目根目录执行 npm run build:dsh，再重启服务。产物目录：${fileURLToPath(new URL(".", entryUrl))}`,
+    );
+  }
 }
 
 const SSH_PROVIDER_ROWS = [
@@ -168,6 +184,10 @@ export function buildDshIntegration(
           },
         },
       },
+      // Load CCA's compiled trajectory source in place of the npm plugin.
+      { id: "ui-settings", disabled: false, config: { enabled: true } },
+      { id: "ui-trajectory", disabled: true },
+      { insert: [{ id: "cca-ui-trajectory", name: DSH_TRAJECTORY_ENTRY_URL }] },
       { id: "open-in-app", disabled: true },
       { id: "ui-open-in-app", disabled: true },
       ...(sandbox.enabled

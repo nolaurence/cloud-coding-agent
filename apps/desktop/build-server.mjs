@@ -1,7 +1,9 @@
 import { build } from "esbuild";
 import { builtinModules } from "node:module";
 import { fileURLToPath } from "node:url";
+import { buildDshTrajectory } from "../../scripts/build-dsh-trajectory.mjs";
 
+await buildDshTrajectory();
 const serverRoot = fileURLToPath(new URL("../server/", import.meta.url));
 await build({
   absWorkingDir: serverRoot,

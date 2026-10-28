@@ -7,6 +7,7 @@ COPY package.json package-lock.json* ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/protocol/package.json packages/protocol/
+COPY packages/dsh-ui-trajectory/package.json packages/dsh-ui-trajectory/
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build -w @cca/web \

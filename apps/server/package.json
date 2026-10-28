@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node ../../scripts/build-dsh-trajectory.mjs",
     "dev": "tsx watch src/index.ts",
     "build": "node ../desktop/build-server.mjs",
     "start": "node dist/index.js",
