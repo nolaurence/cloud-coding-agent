@@ -347,8 +347,10 @@ export class Hub {
 
   private requireOwnedThreadProject(conn: ClientConn, threadId: string, projectId: string) {
     const thread = store.getThread(threadId);
+    // 新对话页还没有会话，工作区所有者仍可浏览和修改自己的文件。
+    if (!thread) return { thread: undefined, project: this.requireOwnedProject(conn, projectId) };
     if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以执行此操作");
-    if (thread?.projectId !== projectId) throw new Error("操作与当前会话工作区不匹配");
+    if (thread.projectId !== projectId) throw new Error("操作与当前会话工作区不匹配");
     return { thread, project: this.requireOwnedProject(conn, projectId) };
   }
 
@@ -1343,8 +1345,16 @@ export class Hub {
         }
         case "terminal.open": {
           const thread = store.getThread(msg.threadId);
-          if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以使用终端");
-          const project = store.projects.find((candidate) => candidate.id === thread?.projectId);
+          const project = thread
+            ? store.projects.find((candidate) => candidate.id === thread.projectId)
+            : msg.projectId
+              ? this.requireOwnedProject(conn, msg.projectId)
+              : undefined;
+          if (thread) {
+            if (!this.canManage(conn, thread)) throw new Error("只有会话所有者可以使用终端");
+          } else if (!project) {
+            throw new Error("只有会话所有者可以使用终端");
+          }
           if (!project || project.ownerId !== conn.user.username) {
             throw new Error("工作区不存在或无权访问");
           }

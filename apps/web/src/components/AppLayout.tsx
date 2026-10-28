@@ -22,6 +22,7 @@ function readSidebarCollapsed(): boolean {
 export function AppLayout() {
   const connected = useApp((s) => s.connected);
   const threads = useApp((s) => s.threads);
+  const projects = useApp((s) => s.projects);
   const workspacePanelOpen = useApp((s) => s.workspacePanelOpen);
   const setWorkspacePanelOpen = useApp((s) => s.setWorkspacePanelOpen);
   const setShareDialogOpen = useApp((s) => s.setShareDialogOpen);
@@ -49,6 +50,8 @@ export function AppLayout() {
   const appName = localMode ? "Kloud Work" : "Kloud Coding Agent";
   const mobileTitle = routeThread?.title ?? appName;
   const canManageThread = routeThread?.access === "owner";
+  const onNewChat = location.pathname === "/";
+  const canOpenWorkspacePanel = Boolean(routeThreadId && canManageThread) || (onNewChat && projects.length > 0);
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -133,18 +136,20 @@ export function AppLayout() {
               <span className="truncate text-sm font-medium">{mobileTitle}</span>
             </div>
             {routeThreadId && canManageThread && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="分享会话"
+                title="分享会话"
+                className="text-muted-foreground"
+                onClick={() => setShareDialogOpen(true)}
+              >
+                <Share2 className="h-4 w-4" />
+              </Button>
+            )}
+            {canOpenWorkspacePanel && (
               <>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label="分享会话"
-                  title="分享会话"
-                  className="text-muted-foreground"
-                  onClick={() => setShareDialogOpen(true)}
-                >
-                  <Share2 className="h-4 w-4" />
-                </Button>
                 <Button
                   type="button"
                   variant="ghost"

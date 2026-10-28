@@ -66,8 +66,9 @@ export function RightPanel({
   const [openTabs, setOpenTabs] = useState<PanelTab[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const thread = useApp((state) => state.threads.find((candidate) => candidate.id === threadId));
+  const ownsProject = useApp((state) => Boolean(projectId && state.projects.some((candidate) => candidate.id === projectId)));
   const draftOwner = useApp((state) => state.user?.username ?? "anonymous");
-  const canManageWorkspace = thread?.access === "owner";
+  const canManageWorkspace = thread ? thread.access === "owner" : ownsProject;
 
   const openTab = (tabId: StaticPanelTab) => {
     const option = panelOptions.find((candidate) => candidate.id === tabId);
@@ -114,7 +115,7 @@ export function RightPanel({
       case "browser":
         return <BrowserPanel threadId={threadId} visible={shouldShowNativeBrowser(panelVisible, activeTab)} />;
       case "terminal":
-        return <TerminalPanel threadId={threadId} />;
+        return <TerminalPanel threadId={threadId} projectId={projectId} />;
       case "files":
         return projectId ? (
           <FilesPanel

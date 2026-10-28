@@ -864,6 +864,8 @@ export type ClientMessage =
       id: string;
       type: "terminal.open";
       threadId: string;
+      /** 新对话还没有会话时，用已选工作区打开终端。 */
+      projectId?: string;
       terminalId: string;
       cols?: number;
       rows?: number;

@@ -70,7 +70,7 @@ function errorMessage(reason: unknown, fallback: string) {
   return reason instanceof Error ? reason.message : fallback;
 }
 
-export function TerminalPanel({ threadId }: { threadId: string }) {
+export function TerminalPanel({ threadId, projectId }: { threadId: string; projectId?: string }) {
   const terminalId = useMemo(() => `thread-${threadId}`, [threadId]);
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -145,6 +145,7 @@ export function TerminalPanel({ threadId }: { threadId: string }) {
         const snapshot = await request<TerminalSnapshot>({
           type: "terminal.open",
           threadId,
+          ...(projectId ? { projectId } : {}),
           terminalId,
           cols: Math.min(500, Math.max(2, terminal.cols)),
           rows: Math.min(200, Math.max(1, terminal.rows)),
@@ -272,7 +273,7 @@ export function TerminalPanel({ threadId }: { threadId: string }) {
       actionsRef.current = null;
       // Deliberately keep the backend session alive across tab and panel switches.
     };
-  }, [terminalId, threadId]);
+  }, [projectId, terminalId, threadId]);
 
   const statusLabel = {
     opening: "连接中",
