@@ -1,15 +1,17 @@
 # Cloud Coding Agent
 
-基于 [OpenAI Codex](https://github.com/openai/codex) app-server 的云端编码 Agent,提供 Web 对话界面。固定使用 `@openai/codex@0.114.0`,通过 stdio JSON-RPC 接入会话、文件编辑和命令执行,不解析交互终端输出。现有业务事件和工具定义仍复用 Copilot SDK 类型,但新会话不再启动 Copilot CLI。
+基于 [OpenAI Codex](https://github.com/openai/codex) app-server 与 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) SDK 运行时的云端编码 Agent,提供 Web 对话界面。新建会话时可选择执行引擎:Codex 沿用现有 stdio JSON-RPC 适配;DSH 通过 `dsh --profile sdk` 子进程运行。现有业务事件和工具定义仍复用 Copilot SDK 类型。
 
 ## 功能
 
+- **执行引擎**:新建任务时可选 Codex(默认)或 DeepSeek Harness(DSH);同一套对话、工具时间线与历史存储
 - **对话流**(自研,非 assistant-ui):流式输出、思考过程折叠、工具调用时间线、Markdown 渲染
 - **Office 查看器**:工作区内的 DOCX、XLSX、PPTX 可在右侧 tab 中只读预览
 - **工作台布局**:右上角按钮可将对话区与工作区面板互换,位置会在本机记住
 - **模型配置**:支持 OpenAI(Chat Completions)与 OpenAI Responses 两种 wire 协议,以及 Azure 的 OpenAI 兼容接口;BYOK,会话内可切换同一提供方的模型。暂不支持 Anthropic 原生 Messages 协议
 - **MCP 模块**:本地 stdio / 远程 HTTP MCP 服务器管理,支持平台级配置和 workspace 根目录 `.mcp.json`,按工具白名单启用
 - **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用
+- **插件市场**:兼容 [Agent Plugins 1.0.0](https://agent-plugins.org/specification) 标准(`plugin.json` + `skills/` + `mcp.json`),也兼容 Claude/Codex/Copilot 布局的插件目录;内置一方法插件与官方仓库精选,支持从 git 地址、`owner/repo` 或本地目录安装,插件贡献的技能与 MCP 服务器自动进入会话,可随时停用/卸载
 - **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
 - **项目管理**:一个项目 = 服务器上的一个工作目录,会话在其 cwd 中执行
 - **代码托管账户**:在「设置 → 通用」绑定 GitHub / Gitee,Agent 可使用当前用户的授权执行 clone、fetch、pull、push
@@ -21,14 +23,24 @@
 ```
 apps/web (React 19 + Vite + Tailwind v4 + zustand + react-router)
       │  WebSocket /ws (JSON 协议,见 packages/protocol)
-apps/server (Fastify + Codex adapter)
-      │  stdio JSON-RPC
-Codex app-server(会话、工具、MCP、技能)
-      │  Responses
-本地鉴权网关 → 原生 Responses / Chat Completions 上游
+apps/server (Fastify + Codex/DSH 适配层)
+      ├─ Codex app-server(stdio JSON-RPC:会话、工具、MCP、技能)
+      │     └─ 本地鉴权网关 → 原生 Responses / Chat Completions 上游
+      └─ DSH SDK 运行时(dsh --profile sdk,stdio JSON-RPC)
+            └─ pi-ai 路由 → 自定义 OpenAI 兼容 / Anthropic 模型服务
 ```
 
+### 执行引擎
+
+- **Codex(默认)**:完整沿用原有模型、工具、浏览器、Git 授权、Office 与插件能力,使用 Codex 内置账号或配置的模型服务。
+- **DSH**:每个会话独立 `$DSH_HOME` 与 `dsh` 子进程,模型路由、MCP、技能与文件沙箱在启动前写入会话专属 patch;会话历史同时写入 `dsh-home/<会话 ID>/` 与应用事件库。DSH 会话必须选择「设置 → 模型服务」中配置的自定义模型(不能使用 Codex 内置模型,暂不支持 Azure 提供方)。
+- **DSH 会话统计**:DSH 会话底部显示轮/步、输出速度(tok/s)、token 总量、缓存命中率与上下文占比;数据来自 DSH 的 `sessionStats` 口径与每条 `assistant/message` 的 usage,跨进程会随线程元数据持久化。Codex 会话保持原布局。
+- DSH 的权限模式映射为文件沙箱(`request`/`auto` → `workspace-write`,`full` → `danger-full-access`),SDK 协议不支持交互式逐条审批,因此审批策略固定为拒绝升级、不阻塞执行。
+- DSH 当前限制:文本在回合结束时一次性到达(无逐 token 流式),不支持手动上下文压缩;`authenticated_git`、`browser_use` 与 Agent 资源工具仅对 Codex 会话可用;MCP 服务器会注册全部工具,暂不应用应用侧的 MCP 工具白名单;Agent Plugins 贡献的技能/MCP 也仅对 Codex 会话生效。删除会话时会同时清理 DSH 原生历史与应用事件记录。
+
 数据存储支持三种模式:`DATABASE_URL=sqlite:/path/to/cca.db` 使用内置 SQLite,`DATABASE_URL=h2:/path/to/cca.db` 是桌面本地模式使用的内置嵌入式数据库别名,`DATABASE_URL=mysql://...` 使用 MySQL;两者都会自动建表并从旧 JSON 文件迁移。未配置时继续使用 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。新会话在数据目录的 `codex-home/<会话 ID>/` 中保存原生历史、线程映射和应用事件,每个会话使用独立进程和 CODEX_HOME。配置 MySQL/SQLite 时,新会话消息、工具调用/结果及其时间戳写入 `thread_events` 表,按会话内序号读取,事件 ID 去重;写入串行分批提交。`cca-events.jsonl` 保留为故障补录日志,已有 Codex 会话在下次打开时自动补录,数据库故障会明确报错。未配置数据库时继续使用 JSONL。流式正文增量不逐 token 入库,完成消息保存全文;工具开始/完成事件保留参数、结果、状态和时间。Codex 原生状态仍用于续聊,数据库不能替代它,备份仍须覆盖数据库和数据目录。旧 `copilot-home/` 历史保留只读,不自动转换或续写;升级前应备份整个数据目录。旧 Copilot 默认模型会清空,请重新选择模型;连接器请重新选择非 Copilot 模型。
+
+插件同样落在数据目录:安装的插件包在 `agent-plugins/<name>/`,每个插件的私有持久化目录在 `agent-plugin-data/<name>/`(作为 `PLUGIN_DATA` 传给插件的 MCP 子进程),安装记录与自定义市场源在 `agent-plugins.json`。插件安装时会校验清单、组件位置与包内路径边界,未知顶层字段只提示不拒绝;停用或卸载后对应技能与 MCP 立即从后续会话中移除。`skills/` 里由插件带来的技能是只读的,修改请改插件本身或卸载后自建。
 
 ## 本地开发
 
@@ -131,8 +143,6 @@ docker compose -f docker-compose-prod.yml up -d --build
 生产 Compose 只启动 `agent`,不会拉起 MySQL。默认使用宿主机端口 `7001`;可用 `APP_PORT` 修改宿主机端口,用 `WORKSPACE_DIR` 修改挂载到 `/workspace` 的代码目录;容器内服务固定监听 `8787`。当前 Compose 还将宿主机 `/home/nolaurence/dev` 挂载到容器 `/codeprojects`,因此本项目在界面中应添加为 `/codeprojects/cloud-coding-agent`。`.env` 已被 git 忽略。
 外部 MySQL 用户需要目标数据库的 `CREATE`/`SELECT`/`INSERT`/`UPDATE`/`DELETE` 权限;`DATABASE_URL` 密码中的 URL 保留字符需要百分号编码。
 
-DeepSeek Harness 的 workspace 实际运行在 sandbox 主机上。首次启动时,服务会把容器 `/workspace` 通过受限 `rrsync` 增量种子同步到 `DSH_SANDBOX_HOST_WORKSPACE`(默认 `/home/nolaurence/cca-workspaces/default`),使用 `--ignore-existing` 保留 sandbox 中已经生成的文件。成功后写入 `$DSH_HOME/.workspace-sync-v1.json`;需要重新导入时删除该标记并重启。安装 sandbox 时使用 `deploy/dsh/sandbox-install.sh <sandbox-pubkey> [workspace-sync-pubkey]` 同时登记网关密钥和同步密钥。
-
 ## 使用
 
 1. 打开页面,使用管理员账户登录(开发 Compose 默认 `admin`/`admin123`;生产 Compose 使用 `.env` 中的配置),或注册普通账户
@@ -148,11 +158,11 @@ DeepSeek Harness 的 workspace 实际运行在 sandbox 主机上。首次启动�
 
 ### DSH 对话轨迹
 
-首页内嵌 DeepSeek Harness。打开一个会话后,在顶部「对话 / 轨迹」中选择「轨迹」,即可查看时长时间线、轮次、模型请求和工具调用记录。点击记录可展开参数、结果、思考、用量与计时详情,并可搜索轨迹、收起或展开轮次和调用、加载更早的历史。`deepseek-harness/packages/client/ui-trajectory` 的源码已纳入本仓库 `packages/dsh-ui-trajectory/src`,页面读取同一 DSH 会话的实时事件与持久化历史。
+新建会话时选择 DSH 执行引擎,进入会话后在顶部「对话 / 轨迹」中选择「轨迹」,即可查看时间线、轮次、模型请求和工具调用。点击记录可展开参数、结果、思考与计时详情,也可搜索、收起或展开轮次和调用、加载更早的历史。页面源码位于本仓库 `packages/dsh-ui-trajectory/src`,由 Web 的 Vite 构建直接编译进 `apps/web/dist` 的按需加载产物,无需单独的 DSH Web 页面或 iframe。
 
-标准服务端构建和开发启动会将这份源码及样式直接 bundle 到 `apps/server/dist/dsh-ui-trajectory/`,也可单独运行 `npm run build:dsh`。构建元数据和源码映射随产物保存。CCA 启动 DSH 时启用 `ui-settings.enabled`,关闭发行包自带的 `ui-trajectory`,并加载 CCA 构建出的 `cca-ui-trajectory`;缺少本地产物会明确提示先构建,不会回退使用 npm 页面。源码版本、共享基础模块和更新方式见 [轨迹源码说明](packages/dsh-ui-trajectory/README.md)。
+轨迹通过受会话权限保护的 `thread.trajectory.load` 读取当前会话的 DSH 原生持久日志,使用官方读取器处理压缩、日志代际和打包流记录。只有打开轨迹标签页才会每两秒检查版本并增量同步,版本未变时不重复解码;更早历史按需分页读取。SDK 文本仍在回合结束时到达,轨迹中的首 token、解码等计时来自最终日志保留的真实流时间戳。读取历史不会另起 Agent 进程。
 
-开发模式的 Vite 会将 `/dsh` 页面、资源和 WebSocket 一起转发至 `8787`;使用其他访问地址时需将 `CCA_PUBLIC_URL` 设为浏览器实际访问的源地址,以满足 DSH 的 Host 校验。
+`npm run build` 或 `npm run build:dsh` 会构建这份本地页面源码及样式。构建会确认轨迹组件来自本仓库,并输出来源及许可证到 `apps/web/dist/licenses/`。源码版本、适配边界和更新方式见 [轨迹源码说明](packages/dsh-ui-trajectory/README.md)。
 
 ### Codex 模型接入与兼容范围
 
@@ -160,6 +170,6 @@ DeepSeek Harness 的 workspace 实际运行在 sandbox 主机上。首次启动�
 
 图片生成通过 Codex 原生 MCP 工具通道注册 `cca_imagegen.image_gen`,新会话和恢复的旧会话均可发现并调用。仅当已配置的 OpenAI 提供商中存在 `gpt-image` 或 `gpt-image-*` 模型时启用;优先使用当前聊天提供商,否则按配置顺序选择第一个有 GPT Image 模型的提供商,并使用该提供商列表中第一个匹配的模型。生图通过所选提供商的 `/images/generations` 接口执行,使用服务端已有凭据,无需在运行环境配置额外的 `OPENAI_API_KEY` 或确认 CLI 回退;当前入口仅支持生成新图片。生成结果作为助手图片附件保存,支持聊天内预览、刷新恢复和 QQ 私聊/群聊/频道原生图片回传;单张图片限制 10 MB,计入现有图片存储额度。
 
-不保证所有 OpenAI 兼容服务的扩展字段兼容;暂不支持依赖 `previous_response_id` 的服务端状态、原生 Anthropic、跨协议加密推理历史、Copilot 插件市场和 Ultra 子代理模式。扩展请使用现有 Skill/MCP 管理。自动提交信息通过自定义模型服务执行纯文本请求,不开放工具;原生 Codex 账号暂需手动填写提交信息。上游 API key 保留在服务端网关,子进程仅持有会话级随机网关凭证;本地网关不对外发布端口。
+不保证所有 OpenAI 兼容服务的扩展字段兼容;暂不支持依赖 `previous_response_id` 的服务端状态、原生 Anthropic、跨协议加密推理历史、Copilot CLI 插件市场和 Ultra 子代理模式。扩展请使用插件(Agent Plugins)、Skill 或 MCP 管理。自动提交信息通过自定义模型服务执行纯文本请求,不开放工具;原生 Codex 账号暂需手动填写提交信息。上游 API key 保留在服务端网关,子进程仅持有会话级随机网关凭证;本地网关不对外发布端口。
 
 也可使用 Codex 原生账号:在运行服务的系统用户下,将 `CODEX_HOME` 指向 `$CCA_DATA_DIR/codex-home` 后,执行 `node node_modules/@openai/codex/bin/codex.js login`。服务会在打开会话时同步该目录的认证信息,不使用旧 Copilot 登录态。修改/清除认证后应重启服务以关闭旧会话。可通过 `CCA_CODEX_PATH` 指定同版本 Codex 可执行文件。请勿把认证文件放到项目工作区。

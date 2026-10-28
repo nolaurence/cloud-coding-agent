@@ -67,6 +67,7 @@ export function applyTheme(preference: ThemePreference, suppressTransitions = fa
   const resolved = resolveTheme(preference);
   if (suppressTransitions) root.classList.add("no-transitions");
   root.classList.toggle("dark", resolved === "dark");
+  document.body?.toggleAttribute("data-ds-dark-theme", resolved === "dark");
   root.dataset.theme = preference;
   syncBrowserTheme(resolved);
   if (suppressTransitions) {

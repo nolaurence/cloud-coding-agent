@@ -112,7 +112,7 @@ function applySplice(
   }
 }
 
-const trajectoryInboxDefinition: ConversationNodeDefinition<InboxState> = {
+export const trajectoryInboxDefinition: ConversationNodeDefinition<InboxState> = {
   kind: 'trajectory-inbox-next-step',
   match: (event) => {
     if (event.type === 'agent/inbox/spliced' && event.data.target === 'next-step') {
@@ -133,7 +133,7 @@ const trajectoryInboxDefinition: ConversationNodeDefinition<InboxState> = {
   publication: () => 'none',
 }
 
-const trajectoryMessageDefinition: ConversationNodeDefinition<MessageNode> = {
+export const trajectoryMessageDefinition: ConversationNodeDefinition<MessageNode> = {
   kind: 'trajectory-input-message',
   target: 'trajectory',
   match: (event) => {

@@ -21,15 +21,27 @@ import { CopilotManager } from "./copilot.js";
 import { searchFiles } from "./files.js";
 import { deleteSkill, listSkills, saveSkill } from "./skills.js";
 import {
+  addPluginMarketplace,
+  browsePluginMarketplace,
+  installPlugin,
+  listInstalledPlugins,
+  listPluginMarketplaces,
+  removePluginMarketplace,
+  setPluginEnabled,
+  uninstallPlugin,
+} from "./agentPlugins.js";
+import {
   deleteScopedMcpServer,
   listScopedMcpServers,
   normalizeMcpServer,
   saveScopedMcpServer,
 } from "./mcpServers.js";
 import {
+  DEFAULT_AGENT_RUNTIME,
   DEFAULT_MODEL_PROVIDER_ID,
   flattenModels,
   isAgentMode,
+  isAgentRuntime,
   isPermissionDecision,
   isPermissionMode,
   isReasoningEffort,
@@ -40,6 +52,7 @@ import {
 } from "@cca/protocol";
 import { verifyToken, type TokenPayload } from "./auth.js";
 import { getThreadAccess } from "./threadAccess.js";
+import { readDshTrajectory } from "./dsh/dshTrajectory.js";
 import { discoverProviderModels } from "./providers.js";
 import {
   listProjectDirectory,
@@ -103,7 +116,7 @@ export class Hub {
     }
   });
 
-  constructor(private readonly onSettingsApplied?: () => void) {
+  constructor() {
     this.manager.onThreadEvent((threadId, event) => {
       this.broadcastThread(threadId, event);
     });
@@ -117,11 +130,6 @@ export class Hub {
     void this.connectors.applySettings(store.settings.connectors).catch((error) => {
       console.error("[cca] 连接器启动失败", error);
     });
-  }
-
-  // 启动后后台预热插件市场缓存
-  warmupPlugins() {
-    void this.manager.warmupPlugins();
   }
 
   handleConnection(socket: WebSocket, token: string | undefined) {
@@ -192,19 +200,21 @@ export class Hub {
     }
   }
 
-  private initialTurnImageAttachments(value: unknown): TurnAttachment[] | undefined {
+  private initialTurnUploadAttachments(value: unknown): TurnAttachment[] | undefined {
     if (!value || typeof value !== "object") return undefined;
     const attachments = (value as { attachments?: unknown }).attachments;
     if (!Array.isArray(attachments)) return undefined;
     return attachments.flatMap((attachment) => {
       if (!attachment || typeof attachment !== "object") return [];
-      const imageId = (attachment as { imageId?: unknown }).imageId;
-      return typeof imageId === "string" ? [{ path: "", imageId }] : [];
+      const { imageId, fileId } = attachment as { imageId?: unknown; fileId?: unknown };
+      return [{ path: "", ...(typeof imageId === "string" ? { imageId } : {}),
+        ...(typeof fileId === "string" ? { fileId } : {}) }];
     });
   }
 
-  private cleanupInitialTurnUploads(conn: ClientConn, initialTurn: unknown) {
-    removeUploadedImages(conn.user.username, this.initialTurnImageAttachments(initialTurn));
+  private cleanupInitialTurnUploads(conn: ClientConn, initialTurn: unknown, failedThreadId?: string) {
+    removeUploadedImages(conn.user.username, this.initialTurnUploadAttachments(initialTurn),
+      store.threads.filter((thread) => thread.id !== failedThreadId));
   }
 
   private errorMessage(error: unknown): string {
@@ -242,7 +252,7 @@ export class Hub {
     }
 
     try {
-      this.cleanupInitialTurnUploads(conn, initialTurn);
+      this.cleanupInitialTurnUploads(conn, initialTurn, thread?.id);
     } catch (error) {
       recordFailure("清理上传", error);
     }
@@ -313,6 +323,18 @@ export class Hub {
 
   private requireAdmin(conn: ClientConn) {
     if (conn.user.role !== "admin") throw new Error("仅管理员可以执行此操作");
+  }
+
+  private ensureNoRunningThreads(action: string) {
+    if (this.manager.runningThreadIds().length > 0) {
+      throw new Error(`当前仍有任务运行,请停止或等待完成后再${action}`);
+    }
+  }
+
+  /** 插件会改变技能目录与 MCP 服务器,重连已打开的会话使其重新加载。 */
+  private async reloadPlugins() {
+    await this.manager.reconfigureOpenSessions(store.settings, store.settings);
+    this.broadcastSkills();
   }
 
   private requireOwnedProject(conn: ClientConn, projectId: string) {
@@ -615,10 +637,14 @@ export class Hub {
           let initialTurnAccepted = false;
           try {
             const project = this.requireOwnedProject(conn, msg.projectId);
+            if (msg.runtime !== undefined && !isAgentRuntime(msg.runtime)) {
+              throw new Error("执行引擎无效");
+            }
+            const runtime = msg.runtime ?? DEFAULT_AGENT_RUNTIME;
             if (msg.agentMode !== undefined && !isAgentMode(msg.agentMode)) {
               throw new Error("会话模式无效");
             }
-            if (msg.agentMode === "ultra") throw new Error("Codex 暂不支持 Ultra 子代理模式");
+            if (msg.agentMode === "ultra") throw new Error("暂不支持 Ultra 子代理模式");
             if (msg.permissionMode !== undefined && !isPermissionMode(msg.permissionMode)) {
               throw new Error("权限模式无效");
             }
@@ -632,6 +658,19 @@ export class Hub {
               }
               model = normalizeModelRefReasoning(requestedModel, modelOptions);
               await this.validateReasoningEffort(model, store.settings, modelOptions);
+            }
+            if (runtime === "dsh") {
+              if (!model) throw new Error("DSH 引擎需要选择已配置的模型服务");
+              if (model.providerId === DEFAULT_MODEL_PROVIDER_ID) {
+                throw new Error("DSH 引擎不能使用 Codex 内置模型，请在设置中配置自定义模型服务");
+              }
+              const provider = store.settings.providers.find(
+                (candidate) => candidate.id === model.providerId,
+              );
+              if (!provider) throw new Error("DSH 引擎使用的模型提供方不存在");
+              if (provider.type === "azure") {
+                throw new Error("DSH 引擎暂不支持 Azure 模型提供方，请改用 OpenAI 兼容或 Anthropic 提供方");
+              }
             }
 
             if (
@@ -653,7 +692,7 @@ export class Hub {
             }
 
             thread = {
-              runtime: "codex",
+              runtime,
               id: randomUUID(),
               projectId: msg.projectId,
               title: "新会话",
@@ -743,7 +782,7 @@ export class Hub {
           this.terminals.closeThread(msg.threadId);
           await browserPool.stopThread(msg.threadId);
           await this.manager.deleteThread(msg.threadId);
-          if (thread) removeThreadUploads(thread);
+          if (thread) removeThreadUploads(thread, store.threads.filter((item) => item.id !== thread.id));
           await deleteThreadShare(msg.threadId);
           store.deleteThread(msg.threadId);
           this.reconcileThreadClients(msg.threadId);
@@ -802,6 +841,15 @@ export class Hub {
           });
           this.broadcastShell();
           this.reply(conn, msg.id);
+          break;
+        }
+        case "thread.trajectory.load": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread || !this.canRead(conn, thread)) throw new Error("无权访问该会话");
+          if (thread.runtime !== "dsh") throw new Error("仅 DSH 会话提供原生轨迹");
+          const trajectory = await readDshTrajectory(msg.threadId, msg);
+          if (!this.canRead(conn, store.getThread(msg.threadId))) throw new Error("无权访问该会话");
+          this.reply(conn, msg.id, trajectory);
           break;
         }
         case "thread.subscribe": {
@@ -891,18 +939,18 @@ export class Hub {
           break;
         }
         case "turn.start": {
-          if (!this.canInteract(conn, store.getThread(msg.threadId))) throw new Error("当前分享仅允许查看");
-          const thread = store.getThread(msg.threadId);
-          if (!thread) throw new Error("会话不存在");
-          const project = store.projects.find((candidate) => candidate.id === thread.projectId);
-          if (!project || project.ownerId !== thread.userId) {
-            throw new Error("会话关联的工作区无效");
-          }
-          validateTurnAttachments(conn.user.username, project.path, msg.attachments);
           try {
+            if (!this.canInteract(conn, store.getThread(msg.threadId))) throw new Error("当前分享仅允许查看");
+            const thread = store.getThread(msg.threadId);
+            if (!thread) throw new Error("会话不存在");
+            const project = store.projects.find((candidate) => candidate.id === thread.projectId);
+            if (!project || project.ownerId !== thread.userId) {
+              throw new Error("会话关联的工作区无效");
+            }
+            validateTurnAttachments(conn.user.username, project.path, msg.attachments);
             await this.manager.sendMessage(msg.threadId, msg.text, msg.attachments, conn.user.username);
           } catch (error) {
-            removeUploadedImages(conn.user.username, msg.attachments);
+            removeUploadedImages(conn.user.username, msg.attachments, store.threads);
             throw error;
           }
           this.broadcastShell();
@@ -998,9 +1046,6 @@ export class Hub {
           }
           this.broadcastSettings();
           this.broadcastSkills();
-          if (modelProvidersChanged || prev.defaultModel !== nextSettings.defaultModel) {
-            this.onSettingsApplied?.();
-          }
           this.reply(conn, msg.id);
           break;
         }
@@ -1072,47 +1117,51 @@ export class Hub {
         }
         case "plugins.marketplaces.list": {
           this.requireAdmin(conn);
-          this.reply(conn, msg.id, await this.manager.listPluginMarketplaces());
+          this.reply(conn, msg.id, listPluginMarketplaces());
           break;
         }
         case "plugins.marketplace.add": {
           this.requireAdmin(conn);
-          this.reply(conn, msg.id, await this.manager.addPluginMarketplace(msg.source));
+          this.reply(conn, msg.id, await addPluginMarketplace(msg.source));
           break;
         }
         case "plugins.marketplace.remove": {
           this.requireAdmin(conn);
-          this.reply(
-            conn,
-            msg.id,
-            await this.manager.removePluginMarketplace(msg.name, msg.force ?? false),
-          );
+          removePluginMarketplace(msg.marketplaceId);
+          this.reply(conn, msg.id);
           break;
         }
         case "plugins.marketplace.browse": {
           this.requireAdmin(conn);
-          this.reply(conn, msg.id, await this.manager.browsePluginMarketplace(msg.name));
+          this.reply(conn, msg.id, await browsePluginMarketplace(msg.marketplaceId));
           break;
         }
         case "plugins.list": {
           this.requireAdmin(conn);
-          this.reply(conn, msg.id, await this.manager.listInstalledPlugins());
+          this.reply(conn, msg.id, listInstalledPlugins());
           break;
         }
         case "plugins.install": {
           this.requireAdmin(conn);
-          this.reply(conn, msg.id, await this.manager.installPlugin(msg.source));
+          this.ensureNoRunningThreads("安装插件");
+          const installed = await installPlugin(msg.source, msg.subdirectory);
+          await this.reloadPlugins();
+          this.reply(conn, msg.id, installed);
           break;
         }
         case "plugins.uninstall": {
           this.requireAdmin(conn);
-          await this.manager.uninstallPlugin(msg.name, msg.directSourceId);
+          this.ensureNoRunningThreads("卸载插件");
+          uninstallPlugin(msg.name);
+          await this.reloadPlugins();
           this.reply(conn, msg.id);
           break;
         }
         case "plugins.setEnabled": {
           this.requireAdmin(conn);
-          await this.manager.setPluginEnabled(msg.name, msg.enabled);
+          this.ensureNoRunningThreads("切换插件");
+          setPluginEnabled(msg.name, msg.enabled);
+          await this.reloadPlugins();
           this.reply(conn, msg.id);
           break;
         }

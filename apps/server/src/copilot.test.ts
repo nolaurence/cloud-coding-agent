@@ -175,6 +175,7 @@ function setupStore(
   };
   const project: Project = { id: "project-1", name: "Project", path: projectPath, ownerId: "admin" };
   const thread: ThreadMeta = {
+    runtime: "codex",
     id: threadId,
     projectId: project.id,
     title: "会话",
@@ -1008,6 +1009,35 @@ test("attaches uploaded images to the emitted and restored user message", async 
       { id: "image.png", displayName: "screenshot.png", kind: "image", ownerId: "" },
     ],
   });
+});
+
+test("records mixed uploaded attachments and restores files with the original author", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const session = new FakeSession();
+  const manager = new CopilotManager(() => new FakeClient(session) as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+  const attachments = [
+    { path: "/uploads/file.txt", displayName: "report.txt", fileId: "uploaded.txt" },
+    { path: "/uploads/image.png", displayName: "screen.png", imageId: "uploaded.png" },
+    { path: "/workspace/src/index.ts", displayName: "index.ts" },
+  ];
+  await manager.sendMessage(threadId, "检查附件", attachments, "collaborator");
+  assert.deepEqual(session.sent[0], { prompt: "检查附件", attachments: attachments.map(({ path, displayName }) =>
+    ({ type: "file", path, displayName })) });
+  const event = sessionEvent("user.message", { content: "检查附件" });
+  session.emit(event);
+  const expected = [
+    { id: "uploaded.txt", displayName: "report.txt", kind: "file", ownerId: "collaborator" },
+    { id: "uploaded.png", displayName: "screen.png", kind: "image", ownerId: "collaborator" },
+  ];
+  assert.deepEqual(store.getThread(threadId)?.messageAttachments?.[event.id], expected);
+  assert.deepEqual(manager.snapshot(threadId).messages[0]?.attachments, expected);
+  const restored = new CopilotManager(() => new FakeClient(new FakeSession([event])) as unknown as CopilotClient);
+  t.after(() => restored.shutdown());
+  await restored.subscribe(threadId, "admin");
+  assert.deepEqual(restored.snapshot(threadId).messages[0]?.attachments, expected);
+  assert.equal(restored.snapshot(threadId).messages[0]?.authorId, "collaborator");
 });
 
 test("keeps attachments when the first image message updates the title", async (t) => {
@@ -1886,4 +1916,48 @@ test("assistant image-only messages are emitted, persisted and restored", async 
   const snapshot = await restored.subscribe(threadId, "admin");
   assert.equal(snapshot.kind, "snapshot");
   assert.deepEqual(snapshot.kind === "snapshot" ? snapshot.messages[0]?.attachments : undefined, [attachment]);
+});
+
+test("routes threads to the Codex or DSH client by runtime", async (t) => {
+  const dshId = randomUUID();
+  setupStore(t, dshId);
+  store.threads[0]!.runtime = "dsh";
+  const codexId = randomUUID();
+  store.upsertThread({ ...store.threads[0]!, id: codexId, runtime: "codex" });
+
+  const dshSession = new FakeSession();
+  const codexSession = new FakeSession();
+  const dshClient = new FakeClient(dshSession);
+  const codexClient = new FakeClient(codexSession);
+  const manager = new CopilotManager(
+    () => codexClient as unknown as CopilotClient,
+    () => dshClient as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  await manager.subscribe(dshId, "admin");
+  assert.equal(dshClient.startCalls, 1);
+  assert.equal(codexClient.startCalls, 0);
+  assert.equal(
+    (dshClient.createdConfigs[0] as { legacySession?: boolean }).legacySession,
+    false,
+  );
+
+  await manager.subscribe(codexId, "admin");
+  assert.equal(codexClient.startCalls, 1);
+
+  const attachment = { path: "/uploads/report.txt", displayName: "report.txt", fileId: "report.txt" };
+  await manager.sendMessage(dshId, "hi", [attachment], "admin");
+  assert.deepEqual(dshSession.sent[0], { prompt: "hi", attachments: [
+    { type: "file", path: attachment.path, displayName: attachment.displayName },
+  ] });
+  dshSession.emit(sessionEvent("user.message", { content: "hi" }));
+  assert.deepEqual(manager.snapshot(dshId).messages[0]?.attachments, [
+    { id: "report.txt", kind: "file", displayName: "report.txt", ownerId: "admin" },
+  ]);
+  await manager.interrupt(dshId);
+
+  await manager.deleteThread(dshId);
+  assert.deepEqual(dshClient.deletedSessionIds, [dshId]);
+  assert.deepEqual(codexClient.deletedSessionIds, []);
 });

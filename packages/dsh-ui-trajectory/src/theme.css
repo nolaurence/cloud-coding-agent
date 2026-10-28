@@ -1,0 +1,8 @@
+@import './theme/base.css';
+@import './theme/design-platform.css';
+@import './theme/gradient-shadow-text.css';
+@import './theme/shiki.css';
+
+:root {
+  --dsw-focus-ring-width: 2px;
+}

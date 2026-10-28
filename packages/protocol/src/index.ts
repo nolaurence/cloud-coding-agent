@@ -128,6 +128,15 @@ export interface AppSettings {
 
 export const DEFAULT_MODEL_PROVIDER_ID = "codex";
 
+/** 会话执行引擎：Codex app-server 或 DeepSeek Harness 运行时。 */
+export const AGENT_RUNTIMES = ["codex", "dsh"] as const;
+export type AgentRuntime = (typeof AGENT_RUNTIMES)[number];
+export const DEFAULT_AGENT_RUNTIME: AgentRuntime = "codex";
+
+export function isAgentRuntime(value: unknown): value is AgentRuntime {
+  return typeof value === "string" && AGENT_RUNTIMES.includes(value as AgentRuntime);
+}
+
 export interface ModelRef {
   providerId: string;
   modelId: string;
@@ -249,6 +258,35 @@ export interface ContextUsage {
   maxTokens: number;
 }
 
+/**
+ * 运行时累计统计（当前由 DSH 提供）。
+ * 字段语义与 DSH 的 sessionStats 投影一致：token 计数是全程累计，
+ * decode 只统计有首 token 且报告 usage 的 step。
+ */
+export interface RuntimeStats {
+  runtime: AgentRuntime;
+  /** 至少关闭过一个 step 的不同 turn 数。 */
+  turns: number;
+  /** 已关闭的 step 数（完成、失败、取消都计）。 */
+  steps: number;
+  /** 未命中缓存的输入 token。 */
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  /** step/start → assistant/message 的累计模型用时。 */
+  llmMs: number;
+  /** tool/call → tool/result 的累计工具用时。 */
+  toolMs: number;
+  ttftMs: number;
+  ttftSteps: number;
+  decodeMs: number;
+  decodeTokens: number;
+  /** 仅用于跨进程恢复时避免同一 turn 被重复计数。 */
+  lastTurn?: number;
+  updatedAt: number;
+}
+
 export interface ContextCompactionResult {
   tokensRemoved: number;
   messagesRemoved: number;
@@ -256,7 +294,7 @@ export interface ContextCompactionResult {
 }
 
 export interface ThreadMeta {
-  runtime?: "codex";
+  runtime?: AgentRuntime;
   id: string;
   projectId: string;
   title: string;
@@ -269,6 +307,7 @@ export interface ThreadMeta {
   updatedAt: number;
   archived: boolean;
   contextUsage?: ContextUsage;
+  runtimeStats?: RuntimeStats;
   access?: ThreadAccess;
   shared?: boolean;
   messageAttachments?: Record<string, MessageAttachment[]>;
@@ -310,30 +349,94 @@ export interface AuthUser {
   role: UserRole;
 }
 
-export interface PluginMarketplace {
-  name: string;
-  source: string;
-  isDefault: boolean;
+export interface PluginAuthor {
+  name?: string;
+  email?: string;
+  url?: string;
 }
 
-export interface MarketplacePlugin {
+/**
+ * 插件清单的遵循程度:严格通过 Agent Plugins 1.0.0 校验,或按兼容模式解析
+ * (旧的 Claude/Codex/Copilot 插件目录,未声明 `$schema`)。
+ */
+export type PluginConformance = "agent-plugins-1.0.0" | "compat";
+
+export interface PluginSkillInfo {
   name: string;
   description: string;
+  /** 相对插件根目录的路径,便于在 UI 中定位。 */
+  path: string;
+  valid: boolean;
+  error?: string;
+}
+
+export interface PluginMcpServerInfo {
+  id: string;
+  transport: "stdio" | "streamable-http" | "sse";
+  label: string;
+  valid: boolean;
+  error?: string;
 }
 
 export interface InstalledPlugin {
+  /** 插件标识:Agent Plugins 的 manifest.name(兼容模式会规整为小写 kebab-case)。 */
   name: string;
-  marketplace: string;
+  /** 清单里的原始名称,兼容模式下可能与 name 不同。 */
+  displayName?: string;
   version?: string;
+  description?: string;
+  author?: PluginAuthor;
+  homepage?: string;
+  repository?: string;
+  license?: string;
+  keywords: string[];
+  /** 安装来源:git 地址、本地路径或 builtin:<id>。 */
+  source: string;
+  subdirectory?: string;
+  installedAt: number;
   enabled: boolean;
-  directSourceId?: string;
+  conformance: PluginConformance;
+  skills: PluginSkillInfo[];
+  mcpServers: PluginMcpServerInfo[];
+  /** 非致命问题:未知顶层字段、被跳过的组件等。 */
+  warnings: string[];
+  /** 插件被判定为无效时的原因,此时不会加载任何组件。 */
+  error?: string;
+}
+
+export interface PluginMarketplace {
+  id: string;
+  name: string;
+  description?: string;
+  /** 内置市场为 builtin,远程市场为清单 URL。 */
+  source: string;
+  kind: "builtin" | "remote";
+  pluginCount: number;
+}
+
+export interface MarketplacePlugin {
+  id: string;
+  marketplaceId: string;
+  name: string;
+  description: string;
+  /** 传给 plugins.install 的来源。 */
+  source: string;
+  subdirectory?: string;
+  version?: string;
+  author?: string;
+  homepage?: string;
+  license?: string;
+  tags: string[];
+  category: string;
+  /** 市场条目自述的遵循程度;未知时省略,安装后再判定。 */
+  conformance?: PluginConformance;
+  installed?: boolean;
 }
 
 export interface PluginInstallResult {
   plugin: InstalledPlugin;
   skillsInstalled: number;
-  postInstallMessage?: string;
-  deprecationWarning?: string;
+  warnings: string[];
 }
 
 export interface SkillInfo {
@@ -344,6 +447,8 @@ export interface SkillInfo {
   disabled: boolean;
   builtin: boolean;
   scope: ResourceScope;
+  /** 由插件提供时,这里是插件名;插件技能只读,随插件启停。 */
+  plugin?: string;
 }
 
 export interface ShellState {
@@ -367,7 +472,7 @@ export interface ChatMessage {
 export interface MessageAttachment {
   id: string;
   displayName: string;
-  kind: "image";
+  kind: "image" | "file";
   ownerId: string;
 }
 
@@ -375,6 +480,7 @@ export interface TurnAttachment {
   path: string;
   displayName?: string;
   imageId?: string;
+  fileId?: string;
 }
 
 export interface ProjectFileEntry {
@@ -578,6 +684,29 @@ export interface TurnInput {
   attachments?: TurnAttachment[];
 }
 
+/** Original durable DSH envelope; additional native fields remain on the wire. */
+export interface DshTrajectoryEvent {
+  seq: number;
+  time: number;
+  type: string;
+  data: unknown;
+}
+
+export interface DshTrajectoryPage {
+  events: DshTrajectoryEvent[];
+  hasMoreBefore: boolean;
+  hasMoreAfter: boolean;
+  revision: string;
+  unchanged?: boolean;
+}
+
+export interface DshTrajectoryQuery {
+  beforeSeq?: number;
+  afterSeq?: number;
+  limit?: number;
+  knownRevision?: string;
+}
+
 export type ThreadEvent =
   | {
       kind: "snapshot";
@@ -586,6 +715,7 @@ export type ThreadEvent =
       subagents?: SubagentActivity[];
       running: boolean;
       contextUsage?: ContextUsage;
+      runtimeStats?: RuntimeStats;
       error?: string;
       live?: { text: string; reasoning: string; turnId: string; startedAt: number };
       pendingPermission?: PermissionRequest;
@@ -613,6 +743,7 @@ export type ThreadEvent =
       startedAt: number;
     }
   | { kind: "context.usage"; usage?: ContextUsage }
+  | { kind: "runtime.stats"; stats?: RuntimeStats }
   | { kind: "permission.request"; request: PermissionRequest }
   | { kind: "permission.resolve"; requestId: string; decision: PermissionDecision }
   | { kind: "error"; message: string }
@@ -629,6 +760,7 @@ export type ClientMessage =
       model?: ModelRef;
       agentMode?: AgentMode;
       permissionMode?: PermissionMode;
+      runtime?: AgentRuntime;
       initialTurn?: TurnInput;
     }
   | { id: string; type: "thread.delete"; threadId: string }
@@ -647,6 +779,7 @@ export type ClientMessage =
       requestId: string;
       decision: PermissionDecision;
     }
+  | ({ id: string; type: "thread.trajectory.load"; threadId: string } & DshTrajectoryQuery)
   | { id: string; type: "thread.subscribe"; threadId: string }
   | { id: string; type: "thread.unsubscribe"; threadId: string }
   | { id: string; type: "thread.share.get"; threadId: string }
@@ -668,11 +801,11 @@ export type ClientMessage =
   | { id: string; type: "skill.delete"; name: string }
   | { id: string; type: "plugins.marketplaces.list" }
   | { id: string; type: "plugins.marketplace.add"; source: string }
-  | { id: string; type: "plugins.marketplace.remove"; name: string; force?: boolean }
-  | { id: string; type: "plugins.marketplace.browse"; name: string }
+  | { id: string; type: "plugins.marketplace.remove"; marketplaceId: string }
+  | { id: string; type: "plugins.marketplace.browse"; marketplaceId: string }
   | { id: string; type: "plugins.list" }
-  | { id: string; type: "plugins.install"; source: string }
-  | { id: string; type: "plugins.uninstall"; name: string; directSourceId?: string }
+  | { id: string; type: "plugins.install"; source: string; subdirectory?: string }
+  | { id: string; type: "plugins.uninstall"; name: string }
   | { id: string; type: "plugins.setEnabled"; name: string; enabled: boolean }
   | { id: string; type: "models.list" }
   | { id: string; type: "provider.models.discover"; provider: ProviderModelDiscoveryConfig }

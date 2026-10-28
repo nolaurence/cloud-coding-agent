@@ -1,8 +1,28 @@
 {
   "repository": "https://github.com/deepseek-ai/deepseek-harness",
   "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
-  "path": "packages/client/ui-trajectory/src",
+  "paths": [
+    "packages/client/ui-trajectory/src",
+    "packages/client/ui-conversation/src/client/conversation/assembler.ts",
+    "packages/client/ui-conversation/src/client/conversation/location-index.ts",
+    "packages/client/ui-conversation/src/client/conversation/group-store.ts",
+    "packages/client/ui-conversation/src/client/contract/conversation.ts:conversationContextKey",
+    "packages/client/ui-conversation/src/client/contract/request-inspection.ts",
+    "packages/client/ui-conversation/src/client/contract/system-prompt.ts",
+    "packages/client/ui-theme/src/styles/base.css",
+    "packages/client/ui-theme/src/styles/design-platform.css",
+    "packages/client/ui-theme/src/styles/gradient-shadow-text.css",
+    "packages/client/ui-theme/src/styles/shiki.css",
+    "packages/client/locale/src/locales/zh.ts"
+  ],
   "runtimeVersion": "0.2.1-rc.2",
   "license": "MIT",
-  "sourceModifications": []
+  "sourceModifications": [
+    "Replace GUI plugin entry with native CCA React and projector exports",
+    "Use explicit snapshot/history/duration props in TrajectoryView",
+    "Export existing trajectory event definitions for local assembly",
+    "Retarget conversation assembler type imports to published contracts",
+    "Preserve common locale type declarations at the dictionary entry",
+    "Omit the design-platform body background declaration"
+  ]
 }

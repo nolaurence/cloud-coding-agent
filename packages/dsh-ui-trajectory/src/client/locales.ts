@@ -1,4 +1,5 @@
 /** `trajectory` namespace dictionaries for the complete trajectory surface. */
+import type {} from '@deepseek-ai/dsh-client-locale/client'
 
 /** Dictionary namespace owned by this plugin. */
 export const NS = 'trajectory'

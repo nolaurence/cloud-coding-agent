@@ -16,6 +16,12 @@ export const THREAD_SHARES_FILE = path.join(root, "thread-shares.json");
 export const GIT_BINDINGS_FILE = path.join(root, "git-bindings.json");
 export const SECRET_FILE = path.join(root, "secret.key");
 export const SKILLS_DIR = path.join(root, "skills");
+/** Agent Plugins 安装目录(每个插件一个子目录)。 */
+export const PLUGINS_DIR = path.join(root, "agent-plugins");
+/** 每个插件实例的私有持久化目录,挂载为 PLUGIN_DATA。 */
+export const PLUGIN_DATA_DIR = path.join(root, "agent-plugin-data");
+/** 插件安装记录与自定义市场源。 */
+export const PLUGINS_STATE_FILE = path.join(root, "agent-plugins.json");
 export const COPILOT_HOME = path.join(root, "copilot-home");
 export const WORKSPACE_ROOT = path.resolve(
   process.env.WORKSPACE_ROOT?.trim() ||
@@ -31,7 +37,7 @@ export function isLocalMode(): boolean {
 }
 
 export function ensureDataDirs() {
-  for (const dir of [root, SKILLS_DIR, COPILOT_HOME, WORKSPACE_ROOT, UPLOADS_DIR]) {
+  for (const dir of [root, SKILLS_DIR, PLUGINS_DIR, PLUGIN_DATA_DIR, COPILOT_HOME, WORKSPACE_ROOT, UPLOADS_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }

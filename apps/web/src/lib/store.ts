@@ -3,6 +3,7 @@ import type {
   AdminRegistrationState,
   AdminUser,
   AgentMode,
+  AgentRuntime,
   AppSettings,
   AuthUser,
   ChatMessage,
@@ -25,6 +26,7 @@ import type {
   Workspace,
   ProviderModelDiscoveryConfig,
   RegistrationPolicy,
+  RuntimeStats,
   ServerMessage,
   ShellState,
   SkillInfo,
@@ -127,6 +129,7 @@ interface ThreadState {
   activities: ToolActivity[];
   subagents: SubagentActivity[];
   contextUsage: ContextUsage | null;
+  runtimeStats: RuntimeStats | null;
   running: boolean;
   loaded: boolean;
   activeTurnId: string | null;
@@ -141,6 +144,7 @@ const emptyThread: ThreadState = {
   activities: [],
   subagents: [],
   contextUsage: null,
+  runtimeStats: null,
   running: false,
   loaded: false,
   activeTurnId: null,
@@ -215,6 +219,10 @@ interface AppState {
   settings: AppSettings | null;
   connectorStatuses: ConnectorStatus[];
   skills: SkillInfo[];
+  plugins: InstalledPlugin[];
+  pluginMarketplaces: PluginMarketplace[];
+  pluginCatalog: MarketplacePlugin[];
+  pluginBusy: boolean;
   models: ModelOption[];
   threadStates: Record<string, ThreadState>;
   composerDrafts: ComposerDrafts;
@@ -245,6 +253,7 @@ interface AppState {
     agentMode?: AgentMode,
     permissionMode?: PermissionMode,
     initialTurn?: TurnInput,
+    runtime?: AgentRuntime,
   ) => Promise<ThreadMeta>;
   deleteThread: (threadId: string) => Promise<void>;
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
@@ -274,17 +283,12 @@ interface AppState {
   deleteMcpServer: (id: string) => Promise<void>;
   saveSkill: (name: string, description: string, content: string) => Promise<void>;
   deleteSkill: (name: string) => Promise<void>;
-  listPluginMarketplaces: () => Promise<PluginMarketplace[]>;
-  addPluginMarketplace: (source: string) => Promise<{ name: string }>;
-  removePluginMarketplace: (
-    name: string,
-    force?: boolean,
-  ) => Promise<{ removed: boolean; dependentPlugins: string[] }>;
-  browsePluginMarketplace: (name: string) => Promise<MarketplacePlugin[]>;
-  listInstalledPlugins: () => Promise<InstalledPlugin[]>;
-  installPlugin: (source: string) => Promise<PluginInstallResult>;
-  uninstallPlugin: (name: string, directSourceId?: string) => Promise<void>;
+  loadPlugins: () => Promise<void>;
+  installPlugin: (source: string, subdirectory?: string) => Promise<PluginInstallResult>;
+  uninstallPlugin: (name: string) => Promise<void>;
   setPluginEnabled: (name: string, enabled: boolean) => Promise<void>;
+  addPluginMarketplace: (source: string) => Promise<PluginMarketplace>;
+  removePluginMarketplace: (marketplaceId: string) => Promise<void>;
   searchFiles: (projectId: string, query: string) => Promise<string[]>;
   setComposerDraft: (key: string, text: string) => void;
   clearComposerDraft: (key: string, expectedText: string) => void;
@@ -307,6 +311,7 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         activities: event.activities,
         subagents: event.subagents ?? [],
         contextUsage: event.contextUsage ?? null,
+        runtimeStats: event.runtimeStats ?? null,
         running: event.running,
         loaded: true,
         activeTurnId: activeTurn.turnId,
@@ -531,6 +536,11 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         ...state,
         contextUsage: event.usage ?? null,
       };
+    case "runtime.stats":
+      return {
+        ...state,
+        runtimeStats: event.stats ?? null,
+      };
     case "error":
       return {
         ...state,
@@ -605,6 +615,10 @@ export const useApp = create<AppState>((set, get) => {
       settings: null,
       connectorStatuses: [],
       skills: [],
+      plugins: [],
+      pluginMarketplaces: [],
+      pluginCatalog: [],
+      pluginBusy: false,
       models: [],
       threadStates: {},
       composerDrafts: {},
@@ -632,6 +646,10 @@ export const useApp = create<AppState>((set, get) => {
     settings: null,
     connectorStatuses: [],
     skills: [],
+    plugins: [],
+    pluginMarketplaces: [],
+    pluginCatalog: [],
+    pluginBusy: false,
     models: [],
     threadStates: {},
     composerDrafts: {},
@@ -793,13 +811,14 @@ export const useApp = create<AppState>((set, get) => {
       await request({ type: "workspace.remove", projectId });
     },
 
-    createThread: async (projectId, model, agentMode, permissionMode, initialTurn) => {
+    createThread: async (projectId, model, agentMode, permissionMode, initialTurn, runtime) => {
       const created = await request<ThreadCreateResult>({
         type: "thread.create",
         projectId,
         model,
         agentMode,
         permissionMode,
+        runtime,
         initialTurn,
       });
       const { initialTurnAccepted, ...thread } = created;
@@ -1047,43 +1066,67 @@ export const useApp = create<AppState>((set, get) => {
       await request({ type: "skill.delete", name });
     },
 
-    listPluginMarketplaces: async () => {
-      return request<PluginMarketplace[]>({ type: "plugins.marketplaces.list" });
+    loadPlugins: async () => {
+      const [plugins, marketplaces] = await Promise.all([
+        request<InstalledPlugin[]>({ type: "plugins.list" }),
+        request<PluginMarketplace[]>({ type: "plugins.marketplaces.list" }),
+      ]);
+      // 远程市场拉取失败不应影响其它市场与已安装列表
+      const catalogs = await Promise.all(marketplaces.map(async (marketplace) => {
+        try {
+          return await request<MarketplacePlugin[]>(
+            { type: "plugins.marketplace.browse", marketplaceId: marketplace.id },
+            60_000,
+          );
+        } catch {
+          return [] as MarketplacePlugin[];
+        }
+      }));
+      set({ plugins, pluginMarketplaces: marketplaces, pluginCatalog: catalogs.flat() });
     },
 
-    addPluginMarketplace: async (source) => {
-      // 首次克隆市场仓库可能较慢
-      return request<{ name: string }>({ type: "plugins.marketplace.add", source }, 180_000);
+    installPlugin: async (source, subdirectory) => {
+      set({ pluginBusy: true });
+      try {
+        // 安装需要克隆仓库,给足时间
+        const result = await request<PluginInstallResult>(
+          { type: "plugins.install", source, subdirectory },
+          180_000,
+        );
+        await get().loadPlugins();
+        return result;
+      } finally {
+        set({ pluginBusy: false });
+      }
     },
 
-    removePluginMarketplace: async (name, force) => {
-      return request<{ removed: boolean; dependentPlugins: string[] }>({
-        type: "plugins.marketplace.remove",
-        name,
-        force,
-      });
-    },
-
-    browsePluginMarketplace: async (name) => {
-      // 首次克隆市场仓库可能较慢
-      return request<MarketplacePlugin[]>({ type: "plugins.marketplace.browse", name }, 180_000);
-    },
-
-    listInstalledPlugins: async () => {
-      return request<InstalledPlugin[]>({ type: "plugins.list" });
-    },
-
-    installPlugin: async (source) => {
-      // 安装需要下载插件文件
-      return request<PluginInstallResult>({ type: "plugins.install", source }, 180_000);
-    },
-
-    uninstallPlugin: async (name, directSourceId) => {
-      await request({ type: "plugins.uninstall", name, directSourceId });
+    uninstallPlugin: async (name) => {
+      set({ pluginBusy: true });
+      try {
+        await request({ type: "plugins.uninstall", name });
+        await get().loadPlugins();
+      } finally {
+        set({ pluginBusy: false });
+      }
     },
 
     setPluginEnabled: async (name, enabled) => {
       await request({ type: "plugins.setEnabled", name, enabled });
+      await get().loadPlugins();
+    },
+
+    addPluginMarketplace: async (source) => {
+      const marketplace = await request<PluginMarketplace>(
+        { type: "plugins.marketplace.add", source },
+        60_000,
+      );
+      await get().loadPlugins();
+      return marketplace;
+    },
+
+    removePluginMarketplace: async (marketplaceId) => {
+      await request({ type: "plugins.marketplace.remove", marketplaceId });
+      await get().loadPlugins();
     },
 
     searchFiles: async (projectId, query) => {

@@ -1,23 +1,22 @@
 # CCA DSH 轨迹页源码
 
-本工作区保存从 `deepseek-harness/packages/client/ui-trajectory/src` 直接复制的页面源码,包含 TS/TSX 组件、事件投影、时间线、搜索和 CSS Modules。源版本与许可证记录在 `upstream.json`、`LICENSE` 中。源码文件保持上游实现,CCA 的加载与构建适配位于工作区外。
+本工作区保存从 DeepSeek Harness 直接引入的轨迹组件、事件投影、纯会话组装器、主题变量与中文词典。源版本及适配记录位于 `upstream.json`,许可证见 `LICENSE`。页面作为 CCA 原生会话的「轨迹」标签页显示。
 
 在项目根目录运行:
 
 ```sh
-npm run build:dsh
 npm run typecheck
+npm run build:dsh
 ```
 
-`scripts/build-dsh-trajectory.mjs` 使用 esbuild 与 lightningcss 从本工作区的源码生成 `apps/server/dist/dsh-ui-trajectory/`。产物包含:
+`apps/web` 从本工作区的 TypeScript 源码入口直接导入 `TrajectoryView` 与 `TrajectoryProjector`,Vite 将组件、事件定义、组装逻辑、CSS Modules 和词典编译为 `apps/web/dist/assets/DshTrajectory-*.js` 等按需加载产物。React 与 ReactDOM 通过 Vite dedupe 使用 CCA 已有实例。`ui-primitives` 是可直接打包的通用静态组件库;无需 Cordis GUI、模块加载器或 iframe。
 
-- `client.js`、`client.js.map`:轨迹页代码、样式、diff 实现和纯工具代码构成的浏览器 bundle。
-- `index.js`、`package.json`:DSH 加载本地产物所需的 Host 入口与模块元数据。
-- `bundle-meta.json`:实际参与 bundle 的源码输入与共享模块清单。
-- `LICENSE`、`THIRD_PARTY_LICENSES.txt`、`upstream.json`:随产物交付的许可证与源版本记录。
+构建插件检查输入图包含本工作区的 `TrajectoryView.tsx`,并拒绝导入 npm 的 `dsh-client-ui-trajectory` 页面。来源清单和许可证输出到 `apps/web/dist/licenses/`,随标准 Web/Docker 产物交付。
 
-构建会校验 `TrajectoryView.tsx` 来自本工作区,并拒绝把 npm 的 `@deepseek-ai/dsh-client-ui-trajectory` 作为页面输入。React、虚拟列表和 DSH 的通用 UI 基础模块使用 iframe 提供的同一运行时实例;组件、事件处理、样式和本地化字典则直接编译进本地产物。
+服务端的 `dsh/dshTrajectory.ts` 通过官方持久化读取器打开 `$CCA_DATA_DIR/dsh-home/<threadId>/sessions` 的原生日志。`thread.trajectory.load` 在读取前后验证会话权限,保留完整事件字段、`surfaceOp` 与打包流时间戳,支持前后分页及版本缓存。它不 attach 或启动 SDK 会话。
 
-服务端标准构建和开发启动会自动构建本工作区。CCA overlay 关闭发行包自带的 `ui-trajectory`,以 `cca-ui-trajectory` 加载本地产物的 file URL。缺少本地产物时会提示构建命令,不会回退到 npm 页面。云端 Docker 镜像随服务端 `dist` 一起包含该目录,运行时无需访问 sibling deepseek-harness 仓库。
+`DshTrajectory` 只在标签页挂载时按两秒间隔检查版本并合并新事件,切走或断线即停止。前端每个会话持有独立 `TrajectoryProjector`,以原版纯组装器重放/增量处理日志,生成包含 Map 和 location 数据源的本地 snapshot;该 snapshot 不经 JSON 传输。加载更早历史后重新投影完整窗口。
 
-更新上游实现时,从确定版本复制 `src/`,更新 `upstream.json`,再执行类型检查、构建和真实 DSH 页面验证。修改源码后需重新构建并重启服务以重新加载 DSH 插件。
+CCA 的适配只窄化组件数据属性、导出纯事件定义、调整组装器的类型引用并同步深色主题标识。系统提示词、请求头、工具与助手计时等投影保留上游逻辑。当前没有为轨迹图片 slot 注册图库,因此图片缩略图按上游约定省略,工具文本及原始事件详情仍可查看。
+
+更新上游实现时,核对 `upstream.json` 所列源路径及本地适配,再执行类型检查、原生日志/投影测试和真实 DSH 会话的浏览器验证。

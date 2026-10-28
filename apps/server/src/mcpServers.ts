@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { McpServerConfig, ResourceScope } from "@cca/protocol";
 import type { MCPServerConfig } from "@github/copilot-sdk";
+import { pluginMcpServerConfigs } from "./agentPlugins.js";
 import { store } from "./store.js";
 
 const MCP_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
@@ -246,10 +247,14 @@ export function effectiveMcpServers(workspacePath: string): Record<string, MCPSe
     if (server.enabled) combined.set(server.id, { server, workspace: true });
     else combined.delete(server.id);
   }
-  return Object.fromEntries([...combined].map(([id, value]) => [
-    id,
-    sdkConfig(value.server, workspacePath),
-  ]));
+  return {
+    // 插件自带的 MCP 服务器优先级最低:平台/工作区配置可以覆盖同名 id。
+    ...pluginMcpServerConfigs(),
+    ...Object.fromEntries([...combined].map(([id, value]) => [
+      id,
+      sdkConfig(value.server, workspacePath),
+    ])),
+  };
 }
 
 export function redactMcpServer(server: McpServerConfig): McpServerConfig {

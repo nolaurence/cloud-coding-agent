@@ -328,7 +328,7 @@ function assistantRequest(
 }
 
 /** Trajectory-owned Assistant streaming, settlement, and request lifecycle. */
-const trajectoryAssistantDefinition: ConversationNodeDefinition<AssistantState> = {
+export const trajectoryAssistantDefinition: ConversationNodeDefinition<AssistantState> = {
   kind: 'trajectory-assistant-step',
   target: 'trajectory',
   match: (event) => {
@@ -426,7 +426,7 @@ interface TurnEndState {
   readonly errorCode?: string
 }
 
-const trajectoryTurnEndDefinition: ConversationNodeDefinition<TurnEndState> = {
+export const trajectoryTurnEndDefinition: ConversationNodeDefinition<TurnEndState> = {
   kind: 'trajectory-turn-end',
   target: 'trajectory',
   match: event => event.type === 'turn/end'

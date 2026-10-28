@@ -11,7 +11,7 @@
     "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm run dev -w @cca/server",
     "dev:web": "npm run dev -w @cca/web",
-    "build:dsh": "npm run build -w @cca/dsh-ui-trajectory",
+    "build:dsh": "npm run build -w @cca/web",
     "build": "npm run build -w @cca/web && npm run build -w @cca/server && npm run build -w @cca/desktop",
     "start": "node apps/server/dist/index.js",
     "test": "npm run test -w @cca/server",
@@ -57,6 +57,7 @@
     "asarUnpack": [
       "node_modules/node-pty/prebuilds/**/*",
       "node_modules/@github/copilot-*/**/*",
+      "node_modules/@deepseek-ai/**/*",
       "node_modules/koffi/**/*",
       "node_modules/@koromix/**/*",
       "node_modules/@openai/codex*/**/*"

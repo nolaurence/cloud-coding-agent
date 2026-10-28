@@ -33,10 +33,12 @@ SOFTWARE.
 `packages/dsh-ui-trajectory/src` is copied from
 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness),
 revision `687f282e8625c6b8d11ff58211a90524be2e4317`,
-`packages/client/ui-trajectory/src`. CCA builds and ships this source in its
-server artifacts. The bundle also includes DeepSeek's browser-safe utility
-code and the BSD-3-Clause `diff` library; the build copies their licenses into
-`apps/server/dist/dsh-ui-trajectory/THIRD_PARTY_LICENSES.txt`.
+the source paths listed in `packages/dsh-ui-trajectory/upstream.json`, including
+trajectory components, pure conversation projection, theme tokens and the common
+Chinese dictionary. CCA adapts and ships this source in its Web artifacts. The
+bundle also includes DeepSeek's browser-safe utility code and the BSD-3-Clause
+`diff` library; their notices are emitted to
+`apps/web/dist/licenses/dsh-trajectory.txt`.
 
 MIT License
 

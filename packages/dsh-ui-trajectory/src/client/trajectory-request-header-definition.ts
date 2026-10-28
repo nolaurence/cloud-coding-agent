@@ -29,7 +29,7 @@ export interface TrajectorySystemMessageState extends SystemPromptState {
  * @param inspect - Pure surface interpretation supplied by uiConversation.
  * @returns The Trajectory system-prompt Definition.
  */
-function trajectorySystemMessageDefinition(inspect: SystemPromptInspector): ConversationNodeDefinition<TrajectorySystemMessageState> {
+export function trajectorySystemMessageDefinition(inspect: SystemPromptInspector): ConversationNodeDefinition<TrajectorySystemMessageState> {
   return {
     kind: 'trajectory-system-message',
     target: 'trajectory',
@@ -96,7 +96,7 @@ function trajectorySystemMessageDefinition(inspect: SystemPromptInspector): Conv
  * uiConversation service (a client bundle cannot value-import it).
  * @returns the Trajectory request-header Definition.
  */
-function trajectoryRequestHeaderDefinition(inspect: RequestPromptInspector): ConversationNodeDefinition<TrajectoryRequestHeaderState> {
+export function trajectoryRequestHeaderDefinition(inspect: RequestPromptInspector): ConversationNodeDefinition<TrajectoryRequestHeaderState> {
   return {
     kind: 'trajectory-request-header',
     target: 'trajectory',

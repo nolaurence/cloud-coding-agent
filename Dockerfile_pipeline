@@ -18,7 +18,6 @@ COPY apps/server ./apps/server
 COPY apps/desktop/build-server.mjs ./apps/desktop/build-server.mjs
 COPY packages/protocol ./packages/protocol
 COPY packages/dsh-ui-trajectory ./packages/dsh-ui-trajectory
-COPY scripts ./scripts
 RUN npm run build -w @cca/server
 
 FROM node:22-slim

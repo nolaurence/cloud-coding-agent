@@ -5,8 +5,7 @@ import type {
   AssistantBlock, AssistantMessageNode, ConvViewProps, MessageImageLoader,
   ToolCallBlock,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { InjectFace, PropsLocale, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { PropsLocale, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { JsonTreeProps } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   TrajectoryTable,
@@ -73,17 +72,21 @@ function partialStructureSignature(partial: TrajectorySnapshot['partial']): stri
     : block.kind).join('\u0000')
 }
 
-/** Session-bound controls not already supplied by the conversation view slot. */
-export interface TrajectoryViewInjected {
-  /** Shared wrapping preference read by expansion handlers. */
-  jsonStringWrapping?: Omit<NonNullable<JsonTreeProps['stringWrapping']>, 'label'>
-  hooks: {
-    duration: SnapshotStore<boolean>
+/** Data and controls supplied by the native CCA conversation page. */
+export type TrajectoryViewProps = Pick<ConvViewProps, 'viewRequest' | 'completeViewRequest'>
+  & Pick<PropsRenderSlots<'conversation.trajectory.images'>, 'renderSlot'>
+  & PropsLocale<'trajectory'>
+  & {
+    snapshot: TrajectorySnapshot
+    actualDuration: boolean
+    historyLoading: boolean
+    olderHistoryLoading: boolean
+    sessionHasOlderHistory: boolean
+    jsonStringWrapping?: Omit<NonNullable<JsonTreeProps['stringWrapping']>, 'label'>
+    loadOlder: () => Promise<boolean>
+    loadImage: MessageImageLoader
+    setActualDuration: (actualDuration: boolean) => void
   }
-  loadOlder: () => Promise<boolean>
-  loadImage: MessageImageLoader
-  setActualDuration: (actualDuration: boolean) => void
-}
 
 interface UsageLike {
   inputTokens?: number
@@ -130,17 +133,14 @@ function addUsage(
 }
 
 export function TrajectoryView({
-  useSession, useTrajectory, useDuration, loadOlder, loadImage, setActualDuration,
+  snapshot: completeInspection, actualDuration, historyLoading, olderHistoryLoading,
+  sessionHasOlderHistory, loadOlder, loadImage, setActualDuration,
   viewRequest, completeViewRequest, renderSlot, t, jsonStringWrapping,
-}: ConvViewProps
-  & Pick<PropsRenderSlots<'conversation.trajectory.images'>, 'renderSlot'>
-  & InjectFace<TrajectoryViewInjected>
-  & PropsLocale<'trajectory'>) {
+}: TrajectoryViewProps) {
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<number>>(EMPTY_TURN_IDS)
   const [collapsedAssistants, setCollapsedAssistants] =
     useState<ReadonlySet<string>>(EMPTY_RECORD_IDS)
   const [timelineSelection, setTimelineSelection] = useState<TrajectoryTimeRange | null>(null)
-  const actualDuration = useDuration(value => value)
   const [actualTime, setActualTime] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchIndex] = useState(() => new TrajectorySearchIndex())
@@ -154,7 +154,6 @@ export function TrajectoryView({
   const [timelineRecordFocus, setTimelineRecordFocus] = useState<{
     readonly index: number
   } | null>(null)
-  const completeInspection = useTrajectory(snapshot => snapshot)
   const latestNodeSeq = completeInspection.eventNodes.at(-1)?.seq
   const [historyTailSeq, setHistoryTailSeq] = useState(latestNodeSeq)
   const [historyNodeLimit, setHistoryNodeLimit] = useState(HISTORY_PAGE_NODES)
@@ -182,9 +181,6 @@ export function TrajectoryView({
         request.startSeq >= firstSeq || (request.resultSeq ?? -1) >= firstSeq),
     }
   }, [completeInspection, historyStartIndex])
-  const historyLoading = useSession(snapshot => snapshot.openState === 'loading')
-  const olderHistoryLoading = useSession(snapshot => snapshot.loadingOlder)
-  const sessionHasOlderHistory = useSession(snapshot => snapshot.hasMore)
   const hasResidentOlderHistory = historyStartIndex > 0
   const hasOlderHistory = hasResidentOlderHistory
     || sessionHasOlderHistory

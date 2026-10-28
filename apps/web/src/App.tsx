@@ -2,7 +2,8 @@ import { useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
-import { DshPage } from "./pages/DshPage";
+import { NewChatPage } from "./pages/NewChatPage";
+import { ThreadPage } from "./pages/ThreadPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SettingsLayout } from "./pages/settings/SettingsLayout";
 import { GeneralSettings } from "./pages/settings/GeneralSettings";
@@ -46,8 +47,8 @@ export default function App() {
     <Routes>
       <Route path="share/:token" element={<ShareThreadPage />} />
       <Route element={<AppLayout />}>
-        <Route index element={<DshPage />} />
-        <Route path="thread/:threadId" element={<Navigate to="/" replace />} />
+        <Route index element={<NewChatPage />} />
+        <Route path="thread/:threadId" element={<ThreadPage />} />
         <Route
           path="skills"
           element={
@@ -67,7 +68,7 @@ export default function App() {
           element={
             user.role === "admin" ? (
               <div className="h-full overflow-y-auto p-4 sm:p-6">
-                <div className="mx-auto max-w-2xl">
+                <div className="mx-auto max-w-4xl">
                   <PluginsPage />
                 </div>
               </div>

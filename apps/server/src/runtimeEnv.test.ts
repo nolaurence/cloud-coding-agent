@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
-import { clearBootstrapCredentials, packagedCopilotCliPath, sanitizedCopilotRuntimeEnv } from "./runtimeEnv.js";
+import { clearBootstrapCredentials, packagedCopilotCliPath, sanitizedCopilotRuntimeEnv, sanitizedDshRuntimeEnv } from "./runtimeEnv.js";
 
 test("Copilot runtime environment preserves essentials without service or provider secrets", () => {
   const env = sanitizedCopilotRuntimeEnv({
@@ -49,4 +49,36 @@ test("an explicit Copilot CLI path is not replaced", () => {
     { resourcesPath: "/resources", platform: "darwin", arch: "x64", exists: () => true },
   );
   assert.equal(env.COPILOT_CLI_PATH, "/custom/copilot");
+});
+
+test("DSH runtime environment isolates its home and only injects route credentials", () => {
+  const env = sanitizedDshRuntimeEnv(
+    "/data/dsh-home/thread-1",
+    { CCA_DSH_KEY_PROVIDER: "sk-secret" },
+    {
+      PATH: "/bin",
+      HOME: "/home/user",
+      DSH_PERMISSION_MODE: "workspace-write",
+      CCA_DSH_PATH: "/opt/dsh",
+      DSH_HOME: "/old/home",
+      ELECTRON_RUN_AS_NODE: "1",
+      ELECTRON_ENABLE_LOGGING: "1",
+      ADMIN_PASSWORD: "admin-secret",
+      DATABASE_URL: "mysql://secret",
+      OPENAI_API_KEY: "provider-secret",
+      CCA_DATA_DIR: "/private/data",
+    },
+  );
+  assert.equal(env.PATH, "/bin");
+  assert.equal(env.HOME, "/data/dsh-home/thread-1");
+  assert.equal(env.USERPROFILE, "/data/dsh-home/thread-1");
+  assert.equal(env.DSH_PERMISSION_MODE, "workspace-write");
+  assert.equal(env.CCA_DSH_PATH, "/opt/dsh");
+  assert.equal(env.DSH_HOME, "/data/dsh-home/thread-1");
+  assert.equal(env.CCA_DSH_KEY_PROVIDER, "sk-secret");
+  assert.equal(env.ELECTRON_RUN_AS_NODE, "1");
+  assert.equal(env.ELECTRON_ENABLE_LOGGING, undefined);
+  for (const key of ["ADMIN_PASSWORD", "DATABASE_URL", "OPENAI_API_KEY", "CCA_DATA_DIR"]) {
+    assert.equal(env[key], undefined);
+  }
 });

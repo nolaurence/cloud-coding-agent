@@ -295,6 +295,19 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
       await client.deleteSession(reasoningConfig.sessionId);
     }
   });
+  await t.test("native Codex accepts ordinary file mentions and exposes the path to the model", async () => {
+    const filePath = path.join(root, "data", "report with spaces.txt");
+    fs.writeFileSync(filePath, "uploaded report");
+    const response = await session.sendAndWait({ prompt: "检查上传文件", attachments: [
+      { type: "file", path: filePath, displayName: '报告 "draft".txt' },
+    ] }, 20_000);
+    assert.equal(response?.data.content, "Codex integration works");
+    const messages = array(received.at(-1)?.messages).map(object).filter((message) => message.role === "user");
+    const contents = messages.map((message) => typeof message.content === "string" ? message.content
+      : array(message.content).map((block) => object(block).text).join("\n")).join("\n");
+    assert.ok(contents.includes(JSON.stringify(filePath)), contents);
+    assert.ok(contents.includes(JSON.stringify('报告 "draft".txt')), contents);
+  });
   await session.disconnect();
   let resumed = await client.resumeSession(id, config);
   assert.ok((await resumed.getEvents()).some((event) => event.type === "assistant.message"));

@@ -228,7 +228,7 @@ function fallbackState(context: ConversationNodeContext<ToolState>): ToolState |
 }
 
 /** Trajectory-owned root Tool lifecycle with nested PTC dispatch calls. */
-const trajectoryToolDefinition: ConversationNodeDefinition<ToolState> = {
+export const trajectoryToolDefinition: ConversationNodeDefinition<ToolState> = {
   kind: 'trajectory-tool-call',
   target: 'trajectory',
   match: (event) => {

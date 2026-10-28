@@ -1,4 +1,4 @@
-import { House, Package, PanelLeftOpen, Settings, Sparkles } from "lucide-react";
+import { House, Package, PanelLeftClose, PanelLeftOpen, Settings, Sparkles } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
@@ -13,19 +13,19 @@ type RailItem = {
 
 function railItemClass(active: boolean) {
   return cn(
-    "window-no-drag flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
-    active && "bg-zinc-200 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100",
+    "window-no-drag flex size-9 items-center justify-center rounded-[12px] text-label-2 transition-colors hover:bg-hover hover:text-label-1",
+    active && "bg-hover text-label-1",
   );
 }
 
 export function NavRail({
   onNavigate,
   sidebarCollapsed,
-  onExpandSidebar,
+  onToggleSidebar,
 }: {
   onNavigate?: () => void;
   sidebarCollapsed?: boolean;
-  onExpandSidebar?: () => void;
+  onToggleSidebar?: () => void;
 }) {
   const user = useApp((s) => s.user);
   const navigate = useNavigate();
@@ -48,7 +48,7 @@ export function NavRail({
           },
           {
             to: "/plugins",
-            label: "扩展工具",
+            label: "插件",
             icon: Package,
             isActive: (p: string) => p === "/plugins",
           },
@@ -60,24 +60,27 @@ export function NavRail({
     navigate(to);
     onNavigate?.();
   };
+  const SidebarIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
+  const sidebarToggleLabel = sidebarCollapsed ? "显示会话侧边栏" : "隐藏会话侧边栏";
 
   return (
     <nav
-      className="flex h-full w-[3.25rem] shrink-0 flex-col items-center gap-1 border-r border-[rgba(15,23,42,0.05)] bg-zinc-100 py-2 shadow-[inset_-2px_0_10px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-900 dark:shadow-[inset_-2px_0_10px_rgba(15,23,42,0.35)]"
+      className="flex h-full w-11 shrink-0 flex-col items-center gap-1 bg-panel px-1 pt-1.5 pb-2 max-md:border-r max-md:border-line-1 md:w-[52px] md:px-2"
       aria-label="主导航"
     >
-      <div className="window-drag-region flex w-full shrink-0 items-center justify-center py-1">
-        <WindowControls show="mac" />
+      <div className="window-drag-region flex w-full shrink-0 items-center justify-center pb-1">
+        <WindowControls show="mac" className="scale-[0.8]" />
       </div>
-      {sidebarCollapsed && onExpandSidebar && (
+      {onToggleSidebar && (
         <button
           type="button"
           className={railItemClass(false)}
-          aria-label="显示会话侧边栏"
-          title="显示会话侧边栏 (⌘B)"
-          onClick={onExpandSidebar}
+          aria-label={sidebarToggleLabel}
+          aria-expanded={!sidebarCollapsed}
+          title={`${sidebarToggleLabel} (⌘B)`}
+          onClick={onToggleSidebar}
         >
-          <PanelLeftOpen className="h-4 w-4" />
+          <SidebarIcon className="size-[18px]" strokeWidth={1.8} />
         </button>
       )}
       {items.map((item) => (
@@ -89,7 +92,7 @@ export function NavRail({
           aria-label={item.label}
           title={item.label}
         >
-          <item.icon className="h-4 w-4" />
+          <item.icon className="size-[18px]" strokeWidth={1.8} />
         </Link>
       ))}
       <div className="min-h-0 flex-1" />
@@ -100,7 +103,7 @@ export function NavRail({
         title="设置"
         onClick={() => go("/settings/general")}
       >
-        <Settings className="h-4 w-4" />
+        <Settings className="size-[18px]" strokeWidth={1.8} />
       </button>
     </nav>
   );

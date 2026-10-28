@@ -1,11 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ResourceScope, SkillInfo } from "@cca/protocol";
-import { SKILLS_DIR } from "./env.js";
+import { pluginSkillDirectories } from "./agentPlugins.js";
+import { PLUGIN_DATA_DIR, SKILLS_DIR } from "./env.js";
 import { store } from "./store.js";
 
 const WORKSPACE_SKILLS_PATH = path.join(".github", "skills");
 const SKILL_NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
+/** 插件技能视图位于 PLUGIN_DATA/<插件名>/skills,用于标注来源与只读状态。 */
+function pluginNameOfDirectory(directory: string): string | undefined {
+  const root = path.resolve(PLUGIN_DATA_DIR);
+  const target = path.resolve(directory);
+  const relative = path.relative(root, target);
+  if (relative === "" || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+    return undefined;
+  }
+  return relative.split(path.sep)[0];
+}
 
 function parseFrontmatter(raw: string): { name?: string; description?: string; body: string } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
@@ -54,7 +66,7 @@ function scopeDirectories(scope: ResourceScope, workspacePath?: string): string[
     if (!workspacePath) throw new Error("工作区技能操作缺少工作区路径");
     return [workspaceSkillsDir(workspacePath)];
   }
-  return [SKILLS_DIR, ...store.settings.skillDirectories];
+  return [SKILLS_DIR, ...store.settings.skillDirectories, ...pluginSkillDirectories()];
 }
 
 function scanSkills(scope: ResourceScope, workspacePath?: string): SkillInfo[] {
@@ -90,6 +102,7 @@ function scanSkills(scope: ResourceScope, workspacePath?: string): SkillInfo[] {
       const skillName = parsed.name || entry.name;
       if (seen.has(skillName)) continue;
       seen.add(skillName);
+      const plugin = scope === "platform" ? pluginNameOfDirectory(dir) : undefined;
       skills.push({
         name: skillName,
         description: parsed.description ?? "",
@@ -98,6 +111,7 @@ function scanSkills(scope: ResourceScope, workspacePath?: string): SkillInfo[] {
         disabled: scope === "platform" && store.settings.disabledSkills.includes(skillName),
         builtin: scope === "platform" && path.resolve(dir) === path.resolve(SKILLS_DIR),
         scope,
+        ...(plugin === undefined ? {} : { plugin }),
       });
     }
   }
@@ -184,7 +198,7 @@ export function deleteSkill(name: string): void {
 
 export function enabledSkillDirectories(workspacePath: string): { dirs: string[]; disabled: string[] } {
   const workspaceDir = workspaceSkillsDir(workspacePath);
-  const platformDirs = [SKILLS_DIR, ...store.settings.skillDirectories];
+  const platformDirs = [SKILLS_DIR, ...store.settings.skillDirectories, ...pluginSkillDirectories()];
   const dirs = [workspaceDir, ...platformDirs].filter((dir) => {
     try {
       return fs.readdirSync(dir, { withFileTypes: true }).some((entry) =>

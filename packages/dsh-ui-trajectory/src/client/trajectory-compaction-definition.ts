@@ -77,7 +77,7 @@ function requestFromState(
   }
 }
 
-const trajectoryCompactionDefinition: ConversationNodeDefinition<CompactionState> = {
+export const trajectoryCompactionDefinition: ConversationNodeDefinition<CompactionState> = {
   kind: 'trajectory-compaction',
   target: 'trajectory',
   match: (event) => {
@@ -115,7 +115,7 @@ interface SessionEndState {
   readonly time: number
 }
 
-const trajectorySessionEndDefinition: ConversationNodeDefinition<SessionEndState> = {
+export const trajectorySessionEndDefinition: ConversationNodeDefinition<SessionEndState> = {
   kind: 'trajectory-session-end',
   target: 'trajectory',
   match: event => event.type === 'session/end-seed'

@@ -15,6 +15,41 @@ export type ChatTimelineBlock =
       entries: ChatTimelineEntry[];
     };
 
+export type TurnContentBlock =
+  | { kind: "message"; id: string; message: ChatMessage }
+  | { kind: "process"; id: string; entries: ChatTimelineEntry[]; closed: boolean };
+
+/** Replies and user input delimit independently collapsible runs of tools and reasoning. */
+export function deriveTurnContent(
+  entries: readonly ChatTimelineEntry[],
+  running = false,
+): TurnContentBlock[] {
+  const blocks: TurnContentBlock[] = [];
+  let pending: ChatTimelineEntry[] = [];
+  const flush = (closed: boolean) => {
+    if (pending.length === 0) return;
+    blocks.push({ kind: "process", id: `process:${pending[0]!.id}`, entries: pending, closed });
+    pending = [];
+  };
+  for (const entry of entries) {
+    if (entry.kind !== "message") {
+      pending.push(entry);
+      continue;
+    }
+    const message = entry.message;
+    if (message.role === "assistant") {
+      if (message.reasoning?.trim()) {
+        pending.push({ ...entry, message: { ...message, text: "", attachments: undefined } });
+      }
+      if (!message.text.trim() && !message.attachments?.length) continue;
+    }
+    flush(true);
+    blocks.push({ kind: "message", id: entry.id, message });
+  }
+  flush(!running);
+  return blocks;
+}
+
 function entryTurnId(entry: ChatTimelineEntry): string {
   if (entry.kind === "message") return entry.message.turnId;
   return entry.kind === "tool" ? entry.activity.turnId : entry.subagent.turnId;

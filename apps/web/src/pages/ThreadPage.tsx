@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowLeft, ArrowLeftRight, FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { resolveThreadModel, resolveThreadModelProviderId } from "@cca/protocol";
@@ -9,12 +9,21 @@ import { ChatView } from "../components/ChatView";
 import { Composer } from "../components/Composer";
 import { ComposerModelPicker } from "../components/ComposerModelPicker";
 import { ComposerPermissionPicker } from "../components/ComposerPermissionPicker";
+import { RuntimeStatsBar } from "../components/RuntimeStatsBar";
 import { RightPanel } from "../components/RightPanel";
 import { RightPanelResizeHandle } from "../components/RightPanelResizeHandle";
 import { ThreadShareDialog } from "../components/ThreadShareDialog";
 import { useResizableWidth } from "../hooks/useResizableWidth";
 import { Button } from "@/components/ui/button";
 import type { ImagePreviewTarget } from "../lib/imagePreview";
+
+const DshTrajectory = lazy(() => import("../components/DshTrajectory"));
+type ThreadView = "chat" | "trajectory";
+
+function readThreadView(threadId: string | undefined): ThreadView {
+  try { return localStorage.getItem(`cca-thread-view:${threadId}`) === "trajectory" ? "trajectory" : "chat"; }
+  catch { return "chat"; }
+}
 
 const RIGHT_PANEL_WIDTH_STORAGE_KEY = "cloud-coding-agent:right-panel-width";
 const RIGHT_PANEL_DEFAULT_WIDTH = 540;
@@ -44,9 +53,19 @@ export function ThreadPage() {
   const setShareDialogOpen = useApp((s) => s.setShareDialogOpen);
   const state = useThreadState(threadId);
   const thread = threads.find((t) => t.id === threadId);
+  const [viewState, setViewState] = useState(() => ({ threadId, view: readThreadView(threadId) }));
+  const view: ThreadView = thread?.runtime === "dsh"
+    ? viewState.threadId === threadId ? viewState.view : readThreadView(threadId)
+    : "chat";
+  const selectView = (next: ThreadView) => {
+    setViewState({ threadId, view: next });
+    setViewingSubagentId(null);
+    try { localStorage.setItem(`cca-thread-view:${threadId}`, next); }
+    catch { /* Keep the selection for this visit if browser storage is unavailable. */ }
+  };
   const project = projects.find((candidate) => candidate.id === thread?.projectId);
   const canManageThread = thread?.access === "owner";
-  const legacySession = Boolean(thread && thread.runtime !== "codex");
+  const legacySession = Boolean(thread && thread.runtime !== "codex" && thread.runtime !== "dsh");
   const canInteract = !legacySession && (canManageThread || thread?.access === "collaborate");
   const [switchingModel, setSwitchingModel] = useState(false);
   const [switchingMode, setSwitchingMode] = useState(false);
@@ -63,6 +82,9 @@ export function ThreadPage() {
   const effectiveModel = resolveThreadModel(thread, settings?.defaultModel);
   const agentMode = thread?.agentMode ?? "standard";
   const permissionMode = thread?.permissionMode ?? "full";
+  const showRuntimeStats = Boolean(
+    thread?.runtime === "dsh" && (state.runtimeStats || state.contextUsage),
+  );
   const panelMaxWidth = useMemo(() => {
     if (layoutWidth === 0) return RIGHT_PANEL_DEFAULT_WIDTH;
     return Math.max(
@@ -194,12 +216,12 @@ export function ThreadPage() {
     <div ref={layoutRef} className="flex h-full min-h-0 min-w-0 overflow-hidden">
       <div className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${panelPlacement === "left" ? "lg:order-last" : ""}`}>
         <header className="hidden shrink-0 bg-background md:block">
-          <div className="flex min-h-13 items-center gap-2 px-3 py-2 sm:px-4">
+          <div className="flex min-h-[56px] items-center gap-2 px-5 pb-2.5 pt-2.5">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{thread?.title ?? "会话"}</div>
+              <div className="truncate text-[14px] leading-5 text-label-1">{thread?.title ?? "会话"}</div>
               {project && (
-                <div className="mt-0.5 flex items-center gap-1 text-[11px] text-zinc-400">
-                  <FolderGit2 className="h-3 w-3 shrink-0" />
+                <div className="mt-0.5 flex items-center gap-1 text-[12px] leading-[18px] text-label-3">
+                  <FolderGit2 className="h-3 w-3 shrink-0" strokeWidth={1.8} />
                   <span className="truncate">{project.name}</span>
                 </div>
               )}
@@ -245,32 +267,50 @@ export function ThreadPage() {
             )}
           </div>
         </header>
-        {legacySession && <p className="border-b px-4 py-2 text-sm text-muted-foreground">旧 Copilot 会话仅保留历史浏览，请新建 Codex 会话继续工作。</p>}
-        <div className="relative min-h-0 flex-1 overflow-hidden">
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b from-background to-transparent"
-          />
-          <ChatView
-            threadId={threadId}
-            bottomInset={canInteract ? composerHeight : 0}
-            selectedSubagentId={viewingSubagentId}
-            onSubagentViewChange={setViewingSubagentId}
-            onOpenImage={canManageThread ? (image) => {
-              setImageToOpen({ ...image });
-              setPanelOpen(true);
-            } : undefined}
-          />
+        {legacySession && <p className="border-b px-4 py-2 text-sm text-muted-foreground">旧 Copilot 会话仅保留历史浏览，请新建 Codex 或 DSH 会话继续工作。</p>}
+        {thread?.runtime === "dsh" && (
+          <div role="tablist" aria-label="会话视图" className="flex shrink-0 gap-4 border-b px-4">
+            {([['chat', '对话'], ['trajectory', '轨迹']] as const).map(([id, label]) => (
+              <button
+                key={id}
+                id={`thread-${id}-tab`}
+                type="button"
+                role="tab"
+                aria-selected={view === id}
+                aria-controls="thread-view-panel"
+                className={`border-b-2 px-1 py-2 text-[13px] transition-colors ${view === id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                onClick={() => selectView(id)}
+              >{label}</button>
+            ))}
+          </div>
+        )}
+        <div id="thread-view-panel" role={thread?.runtime === "dsh" ? "tabpanel" : undefined} aria-labelledby={thread?.runtime === "dsh" ? `thread-${view}-tab` : undefined} className="relative min-h-0 flex-1 overflow-hidden">
+          {view === "trajectory" ? (
+            <Suspense fallback={<div role="status" className="flex h-full items-center justify-center text-sm text-muted-foreground">正在加载轨迹…</div>}>
+              <DshTrajectory key={threadId} threadId={threadId} composerHeight={canInteract ? composerHeight : 0} />
+            </Suspense>
+          ) : (
+            <ChatView
+              threadId={threadId}
+              bottomInset={canInteract ? composerHeight : 0}
+              selectedSubagentId={viewingSubagentId}
+              onSubagentViewChange={setViewingSubagentId}
+              onOpenImage={canManageThread ? (image) => {
+                setImageToOpen({ ...image });
+                setPanelOpen(true);
+              } : undefined}
+            />
+          )}
           {canInteract && (
             <div ref={composerOverlayRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-2">
               <div
                 aria-hidden="true"
-                className="absolute inset-y-0 left-0 right-[var(--app-scrollbar-width)] bg-background"
+                className="absolute inset-y-0 left-0 right-[var(--app-scrollbar-width)] bg-background [mask-image:linear-gradient(to_bottom,transparent_0,black_36px)]"
               />
-              <div className="relative mx-auto max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
+              <div className="relative mx-auto w-full max-w-[min(100%,calc(clamp(680px,64%,920px)+64px))] px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                 <div className="pointer-events-auto">
                   {state.pendingPermission && (
-                    <div className="mx-auto mb-2 max-w-3xl rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-950 shadow-sm dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-50">
+                    <div className="mx-auto mb-2 w-full rounded-[16px] border border-amber-200 bg-amber-50 p-3 text-amber-950 shadow-sm dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-50">
                       <div className="flex items-start gap-2">
                         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                         <div className="min-w-0 flex-1">
@@ -325,30 +365,38 @@ export function ThreadPage() {
                       onInterrupt={() => interrupt(threadId)}
                       onCompact={() => compactContext(threadId)}
                       footerError={canManageThread ? modelError : undefined}
+                      statusBar={
+                        showRuntimeStats ? (
+                          <RuntimeStatsBar
+                            stats={state.runtimeStats}
+                            contextUsage={state.contextUsage}
+                          />
+                        ) : undefined
+                      }
+                      leadingControls={canManageThread ? (
+                        <ComposerPermissionPicker
+                          value={permissionMode}
+                          onChange={onPermissionModeChange}
+                          disabled={state.running || switchingMode || switchingModel}
+                          updating={switchingPermission}
+                        />
+                      ) : undefined}
                       footerControls={canManageThread ? (
-                        <>
-                          <ComposerPermissionPicker
-                            value={permissionMode}
-                            onChange={onPermissionModeChange}
-                            disabled={state.running || switchingMode || switchingModel}
-                            updating={switchingPermission}
-                          />
-                          <ComposerModelPicker
-                            value={effectiveModel}
-                            onChange={(ref) => void onModelChange(ref)}
-                            disabled={state.running || switchingMode || switchingPermission}
-                            updating={switchingModel}
-                            lockedProviderId={modelProviderId}
-                            agentMode={agentMode}
-                            onAgentModeChange={onAgentModeChange}
-                          />
-                        </>
+                        <ComposerModelPicker
+                          value={effectiveModel}
+                          onChange={(ref) => void onModelChange(ref)}
+                          disabled={state.running || switchingMode || switchingPermission}
+                          updating={switchingModel}
+                          lockedProviderId={modelProviderId}
+                          agentMode={agentMode}
+                          onAgentModeChange={onAgentModeChange}
+                        />
                       ) : undefined}
                     />
                   </div>
                   {viewingSubagentId && (
-                    <div className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                      <span className="min-w-0 text-sm text-zinc-500 dark:text-zinc-400">
+                    <div className="flex min-h-12 items-center justify-between gap-3 rounded-[16px] border-[0.5px] border-line-3 bg-elevated px-4 py-2 text-[13px] leading-5 text-label-2">
+                      <span className="min-w-0">
                         子代理详情为只读
                       </span>
                       <Button
@@ -385,7 +433,7 @@ export function ThreadPage() {
             id="thread-workspace-panel"
             aria-hidden={!panelOpen}
             className={panelOpen
-              ? `fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto lg:my-[10px] ${panelPlacement === "right" ? "lg:order-last lg:mr-[10px]" : "lg:order-first lg:ml-[10px]"} lg:w-[var(--right-panel-width)] lg:shrink-0 lg:rounded-lg lg:border lg:border-zinc-200 lg:shadow-md lg:shadow-zinc-950/10 dark:bg-zinc-950 lg:dark:border-zinc-800 lg:dark:shadow-black/30 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`
+              ? `fixed inset-0 z-40 w-full min-w-0 overflow-hidden bg-white lg:static lg:z-auto ${panelPlacement === "right" ? "lg:order-last lg:border-l" : "lg:order-first lg:border-r"} lg:w-[var(--right-panel-width)] lg:shrink-0 lg:border-zinc-200 dark:bg-zinc-950 lg:dark:border-zinc-800 ${resizing ? "[&_iframe]:pointer-events-none" : ""}`
               : "hidden"}
             style={{ "--right-panel-width": `${panelWidth}px` } as CSSProperties}
           >

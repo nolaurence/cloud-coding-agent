@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   ArrowLeft,
@@ -6,34 +6,43 @@ import {
   Bot,
   Brain,
   Check,
-  ChevronDown,
   ChevronRight,
+  ChevronDown,
   Copy,
+  Download,
+  FileText,
   Loader2,
   Pause,
   Sparkles,
   X,
 } from "lucide-react";
-import type { ChatMessage, SubagentActivity } from "@cca/protocol";
+import type { ChatMessage, SubagentActivity, ToolActivity } from "@cca/protocol";
 import { useImageObjectUrl } from "../hooks/useImageObjectUrl";
+import { downloadFile } from "../lib/client";
 import type { ImagePreviewTarget } from "../lib/imagePreview";
 import { useApp, useThreadState } from "../lib/store";
 import {
   deriveChatTimeline,
-  findTerminalAssistantEntry,
+  deriveTurnContent,
   turnEndedAt,
   turnStartedAt,
   type ChatTimelineEntry,
 } from "../lib/chatTimeline";
 import { Markdown } from "./Markdown";
-import { ToolCallGroup } from "./ToolCallRow";
+import {
+  ToolCallRow,
+  ToolKindIcon,
+  liveToolLabel,
+  processToolTitle,
+  toolCategoryKinds,
+  type ToolKind,
+} from "./ToolCallRow";
 import {
   SubagentTaskCard,
   subagentStatusText,
   subagentTaskTitle,
 } from "./SubagentTaskCard";
 import { cn } from "../lib/utils";
-import "./chat.css";
 
 const shortTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour: "2-digit",
@@ -52,53 +61,95 @@ function formatDuration(milliseconds: number): string {
   return remainingMinutes > 0 ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
 }
 
-function firstNonEmptyLine(text: string): string {
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed) return trimmed;
-  }
-  return "";
+function firstLine(text: string): string {
+  const line = text.split("\n").map((part) => part.trim()).find((part) => part.length > 0) ?? "";
+  return line.replace(/^[#>*\-+\s]+/, "").slice(0, 160);
 }
 
-function reasoningSummary(text: string, streaming: boolean): string {
-  if (!streaming) return firstNonEmptyLine(text).replaceAll("**", "");
-  const paragraphs = text.split(/\r?\n(?:[\t ]*\r?\n)+/);
-  const completed = paragraphs.length > 1 ? paragraphs.at(-2)?.trim() : undefined;
-  return firstNonEmptyLine(completed || text).replaceAll("**", "");
-}
-
+/** 对话流里的紧凑展开行：24px 行高、16px 图标槽、13px 次级文字。 */
 function ReasoningBlock({ text, streaming = false }: { text: string; streaming?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const summary = useMemo(() => reasoningSummary(text, streaming), [streaming, text]);
+  const [open, setOpen] = useState(streaming);
+
+  useEffect(() => {
+    setOpen(streaming);
+  }, [streaming]);
+
+  const preview = firstLine(text);
 
   return (
-    <div className="chat-reasoning">
+    <div className="min-w-0">
       <button
         type="button"
         aria-expanded={open}
-        className="chat-disclosure-row"
+        className="group/think flex h-6 w-full min-w-0 items-center gap-1.5 text-left"
         onClick={() => setOpen((value) => !value)}
       >
-        <span className="chat-disclosure-leading">
-          <Brain className="h-3.5 w-3.5 stroke-[1.8]" aria-hidden />
+        <span className="relative flex size-4 shrink-0 items-center justify-center text-label-3">
+          <Brain
+            className={cn(
+              "size-3.5 transition-opacity duration-100",
+              (open ? "opacity-0" : "opacity-100 group-hover/think:opacity-0"),
+            )}
+            strokeWidth={1.8}
+          />
+          <ChevronRight
+            className={cn(
+              "absolute size-3.5 transition-transform duration-100",
+              open ? "rotate-90 opacity-100" : "opacity-0 group-hover/think:opacity-100",
+            )}
+          />
         </span>
-        <span className="chat-disclosure-title">思考</span>
-        {!open && summary && (
+        <span
+          className={cn(
+            "shrink-0 text-[13px] leading-6 text-label-2",
+            streaming && "text-shimmer",
+          )}
+        >
+          {streaming ? "正在思考" : "思考"}
+        </span>
+        {preview && !open && (
           <>
-            <span className="chat-disclosure-sep" aria-hidden />
-            <span className={cn("chat-disclosure-summary", streaming && "chat-shimmer")}>
-              {summary}
+            <span aria-hidden="true" className="mx-2 size-0.5 shrink-0 rounded-full bg-label-caption" />
+            <span className="min-w-0 flex-1 truncate text-[13px] leading-6 text-label-3">
+              {preview}
             </span>
           </>
         )}
-        <ChevronDown className="chat-disclosure-chevron" aria-hidden />
       </button>
       {open && (
-        <div className="chat-disclosure-body chat-reasoning-body">
+        <div className="markdown-compact min-w-0 pb-1 pl-[22px] pt-1">
           <Markdown>{text}</Markdown>
         </div>
       )}
     </div>
+  );
+}
+
+/** 28px 的图标动作：对话流与气泡下方共用。 */
+function IconAction({
+  label,
+  onClick,
+  className,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex size-7 items-center justify-center rounded-[8px] text-label-3 transition-colors hover:bg-hover hover:text-label-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
+        className,
+      )}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -135,18 +186,13 @@ function CopyAction({
   };
 
   return (
-    <button
-      type="button"
-      className={cn(
-        "flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
-        className,
-      )}
-      aria-label={copied ? "已复制" : label}
-      title={copied ? "已复制" : label}
+    <IconAction
+      label={copied ? "已复制" : label}
       onClick={() => void copy()}
+      className={className}
     >
-      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-    </button>
+      {copied ? <Check className="size-[15px]" /> : <Copy className="size-[15px]" />}
+    </IconAction>
   );
 }
 
@@ -183,27 +229,27 @@ function MessageImage({
 
   if (error) {
     return (
-      <div className="flex h-28 w-44 items-center justify-center rounded-xl bg-zinc-200 px-3 text-center text-xs text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
+      <div className="flex h-28 w-44 items-center justify-center rounded-[14px] bg-hover px-3 text-center text-[12px] leading-5 text-label-3">
         {error}
       </div>
     );
   }
   if (loading || !src) {
-    return <div className="h-28 w-44 animate-pulse rounded-xl bg-zinc-200 dark:bg-zinc-700" />;
+    return <div className="h-28 w-44 animate-pulse rounded-[14px] bg-hover" />;
   }
 
   const thumbnail = (
     <img
       src={src}
       alt={name}
-      className="max-h-64 max-w-full rounded-xl object-contain"
+      className="max-h-64 max-w-full rounded-[14px] object-contain"
     />
   );
 
   return onOpenImage ? (
     <button
       type="button"
-      className="cursor-zoom-in rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="cursor-zoom-in rounded-[14px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       aria-label={`在右侧栏打开图片：${name}`}
       title={`打开图片：${name}`}
       onClick={() => onOpenImage(image)}
@@ -214,6 +260,44 @@ function MessageImage({
     <a href={src} target="_blank" rel="noreferrer" className="cursor-zoom-in" title={name}>
       {thumbnail}
     </a>
+  );
+}
+
+function MessageFile({ id, name }: { id: string; name: string }) {
+  const { threadId, shareToken } = useContext(MessageContext);
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState("");
+  const download = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    setError("");
+    try {
+      await downloadFile(id, name, threadId, shareToken);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "文件下载失败");
+    } finally {
+      setDownloading(false);
+    }
+  };
+  return (
+    <div className="max-w-full">
+      <button
+        type="button"
+        className="flex h-16 w-60 max-w-full items-center gap-3 rounded-xl border border-line-2 bg-card px-3 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+        aria-label={`下载文件 ${name}`}
+        title={name}
+        disabled={downloading}
+        onClick={() => void download()}
+      >
+        <FileText className="size-7 shrink-0 text-label-2" strokeWidth={1.5} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-medium text-label-1">{name}</span>
+          <span className="block text-[11px] leading-5 text-label-3">{downloading ? "正在下载…" : "点击下载文件"}</span>
+        </span>
+        {downloading ? <Loader2 className="size-4 shrink-0 animate-spin text-label-3" /> : <Download className="size-4 shrink-0 text-label-3" />}
+      </button>
+      {error && <p className="mt-1 text-xs text-destructive" role="alert">{error}</p>}
+    </div>
   );
 }
 
@@ -230,9 +314,10 @@ function AssistantMessage({
 }) {
   const { threadId, shareToken } = useContext(MessageContext);
   const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
+  const files = message.attachments?.filter((attachment) => attachment.kind === "file") ?? [];
   return (
     <article
-      className="assistant-message group/assistant min-w-0 px-1 py-0.5"
+      className="assistant-message group/assistant flex min-w-0 flex-col gap-4"
       aria-live={streaming ? "polite" : undefined}
     >
       {showReasoning && message.reasoning && (
@@ -240,16 +325,23 @@ function AssistantMessage({
       )}
       {message.text && <Markdown>{message.text}</Markdown>}
       {images.length > 0 && threadId && (
-        <div className={cn("my-2 grid max-w-2xl gap-2", images.length > 1 && "grid-cols-2")}>
+        <div className={cn("grid max-w-2xl gap-2", images.length > 1 && "grid-cols-2")}>
           {images.map((image) => (
             <MessageImage key={image.id} id={image.id} name={image.displayName} threadId={threadId} shareToken={shareToken} />
           ))}
         </div>
       )}
-      {showMeta && !streaming && (message.text || images.length > 0) && (
-        <div className="mt-1 flex h-6 items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground opacity-100 transition-opacity duration-200 sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
+      {files.length > 0 && threadId && (
+        <div className="flex max-w-full flex-wrap gap-2">
+          {files.map((file) => <MessageFile key={file.id} id={file.id} name={file.displayName} />)}
+        </div>
+      )}
+      {showMeta && !streaming && (message.text || images.length > 0 || files.length > 0) && (
+        <div className="-ml-1.5 flex h-7 items-center gap-2 text-label-3 opacity-100 transition-opacity duration-150 sm:opacity-0 sm:group-hover/assistant:opacity-100 sm:group-focus-within/assistant:opacity-100">
           {message.text && <CopyAction text={message.text} label="复制回复" />}
-          <MessageTime at={message.createdAt} />
+          <span className="text-[13px] leading-6 tabular-nums">
+            <MessageTime at={message.createdAt} />
+          </span>
         </div>
       )}
     </article>
@@ -265,19 +357,16 @@ function UserMessage({ message }: { message: ChatMessage }) {
   const skills = skillMatch?.[1]?.split(", ").filter(Boolean) ?? [];
   const content = skillMatch?.[2] ?? message.text;
   const images = message.attachments?.filter((attachment) => attachment.kind === "image") ?? [];
+  const files = message.attachments?.filter((attachment) => attachment.kind === "file") ?? [];
 
   return (
-    <article className="group/user flex flex-col items-end py-0.5">
+    <article className="group/user flex flex-col items-end gap-1.5">
       {message.authorId && showAuthors && (
         <div className="mb-1 px-2 text-[11px] text-muted-foreground">
           {message.authorId === currentUsername ? "你" : message.authorId}
         </div>
       )}
-      <div className="chat-user-bubble relative">
-        <div className="absolute -left-[74px] top-1/2 flex -translate-y-1/2 items-center gap-1 text-[11px] tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100">
-          <MessageTime at={message.createdAt} />
-          <CopyAction text={message.text} label="复制消息" />
-        </div>
+      <div className="flex min-w-0 max-w-[min(82%,525px)] flex-col items-end gap-2">
         {images.length > 0 && (
           <div className={cn("grid gap-2", images.length > 1 && "grid-cols-2")}>
             {images.map((image) => (
@@ -293,42 +382,56 @@ function UserMessage({ message }: { message: ChatMessage }) {
             ))}
           </div>
         )}
-        {skills.length > 0 && (
-          <div className={cn("flex flex-wrap gap-1.5 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400", images.length > 0 && "mt-2")}>
-            {skills.map((skill) => (
-              <span key={skill} className="inline-flex items-center gap-1">
-                <Sparkles className="h-3 w-3" />/{skill}
-              </span>
-            ))}
+        {files.length > 0 && threadId && (
+          <div className="flex max-w-full flex-wrap justify-end gap-2">
+            {files.map((file) => <MessageFile key={file.id} id={file.id} name={file.displayName} />)}
           </div>
         )}
-        {content && (
-          <div className={cn((images.length > 0 || skills.length > 0) && "mt-1.5")}>
-            <Markdown>{content}</Markdown>
+        {(content || skills.length > 0) && (
+          <div className="chat-bubble max-w-full rounded-[20px] bg-bubble px-4 py-[10px] text-[14px] leading-[22px] text-label-1">
+            {skills.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 text-[12px] leading-5 text-label-3">
+                {skills.map((skill) => (
+                  <span key={skill} className="inline-flex items-center gap-1">
+                    <Sparkles className="h-3 w-3" />/{skill}
+                  </span>
+                ))}
+              </div>
+            )}
+            {content && (
+              <div className={cn(skills.length > 0 && "mt-1")}>
+                <Markdown>{content}</Markdown>
+              </div>
+            )}
           </div>
         )}
+      </div>
+      <div className="flex h-7 items-center gap-2 text-label-3 opacity-100 transition-opacity duration-150 md:opacity-0 md:group-hover/user:opacity-100 md:group-focus-within/user:opacity-100">
+        <span className="text-[13px] leading-6 tabular-nums">
+          <MessageTime at={message.createdAt} />
+        </span>
+        <CopyAction text={message.text} label="复制消息" />
       </div>
     </article>
   );
 }
 
+function toolActivitiesOf(entries: readonly ChatTimelineEntry[]): ToolActivity[] {
+  return entries
+    .filter((entry): entry is Extract<ChatTimelineEntry, { kind: "tool" }> => entry.kind === "tool")
+    .map((entry) => entry.activity);
+}
+
 function ProcessEntries({
   entries,
-  expandedWorkGroups,
-  onToggleWorkGroup,
   onOpenSubagent,
 }: {
   entries: readonly ChatTimelineEntry[];
-  expandedWorkGroups: ReadonlySet<string>;
-  onToggleWorkGroup: (groupId: string) => void;
   onOpenSubagent: (subagentId: string) => void;
 }) {
   const rows: ReactNode[] = [];
 
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    if (!entry) continue;
-
+  for (const entry of entries) {
     if (entry.kind === "subagent") {
       rows.push(
         <SubagentTaskCard
@@ -341,22 +444,7 @@ function ProcessEntries({
     }
 
     if (entry.kind === "tool") {
-      const activities = [entry.activity];
-      let cursor = index + 1;
-      while (entries[cursor]?.kind === "tool") {
-        activities.push((entries[cursor] as Extract<ChatTimelineEntry, { kind: "tool" }>).activity);
-        cursor += 1;
-      }
-      const groupId = `work-group:${entry.id}`;
-      rows.push(
-        <ToolCallGroup
-          key={groupId}
-          activities={activities}
-          expanded={expandedWorkGroups.has(groupId)}
-          onToggle={() => onToggleWorkGroup(groupId)}
-        />,
-      );
-      index = cursor - 1;
+      rows.push(<ToolCallRow key={entry.id} activity={entry.activity} />);
       continue;
     }
 
@@ -364,12 +452,82 @@ function ProcessEntries({
       rows.push(<UserMessage key={entry.id} message={entry.message} />);
     } else if (entry.message.role === "assistant") {
       rows.push(
-        <AssistantMessage key={entry.id} message={entry.message} showMeta={false} />,
+        <AssistantMessage key={entry.id} message={entry.message} streaming={entry.message.streaming} showMeta={false} />,
       );
     }
   }
 
-  return <>{rows}</>;
+  return <div className="flex min-w-0 flex-col gap-2">{rows}</div>;
+}
+
+/** 回合过程行的标题:24px 行高,[图标] 标题 [点] 摘要。 */
+function ProcessGroupHeader({
+  open,
+  running,
+  iconKind,
+  label,
+  detail,
+  bodyId,
+  onToggle,
+}: {
+  open: boolean;
+  running: boolean;
+  iconKind: ToolKind | undefined;
+  label: string;
+  detail: string;
+  bodyId?: string;
+  onToggle?: () => void;
+}) {
+  const content = (
+    <>
+      <span className="relative flex size-4 shrink-0 items-center justify-center text-label-3">
+        <span className={cn("transition-opacity duration-100", onToggle && (
+          open ? "opacity-0" : "group-hover/process:opacity-0 group-focus-visible/process:opacity-0"
+        ))}>
+          {iconKind === undefined
+            ? <Brain className="size-3.5" strokeWidth={1.8} />
+            : <ToolKindIcon kind={iconKind} />}
+        </span>
+        {onToggle && (
+          <ChevronDown
+            className={cn(
+              "absolute size-3.5 transition-all duration-100",
+              open ? "rotate-180 opacity-100" : "opacity-0 group-hover/process:opacity-100 group-focus-visible/process:opacity-100",
+            )}
+          />
+        )}
+      </span>
+      <span
+        className={cn(
+          "min-w-0 truncate text-[13px] leading-6 text-label-2 transition-colors",
+          running && "text-shimmer",
+          onToggle && "group-hover/process:text-label-1",
+        )}
+      >
+        {label}
+      </span>
+      {detail && (
+        <>
+          <span aria-hidden="true" className="mx-2 size-0.5 shrink-0 rounded-full bg-label-caption" />
+          <span className="min-w-0 flex-1 truncate text-[13px] leading-6 text-label-3">{detail}</span>
+        </>
+      )}
+    </>
+  );
+  const className = "group/process flex h-6 w-full min-w-0 select-none items-center gap-1.5 text-left";
+  return onToggle ? (
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-controls={bodyId}
+      onClick={onToggle}
+      className={cn(className, "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60")}
+    >
+      {content}
+    </button>
+  ) : (
+    <div className={className} aria-live="polite">{content}</div>
+  );
 }
 
 function WorkingIndicator({ startedAt }: { startedAt: number | null }) {
@@ -382,179 +540,147 @@ function WorkingIndicator({ startedAt }: { startedAt: number | null }) {
   }, [startedAt]);
 
   return (
-    <div className="chat-running">
-      <span className="sr-only" role="status">正在执行</span>
-      <span className="chat-running-divider" aria-hidden />
-      <span className="chat-running-content" aria-hidden="true">
-        <span className="chat-running-icon">
-          <Sparkles className="h-3.5 w-3.5 stroke-[1.8]" />
-        </span>
-        <span className="chat-shimmer chat-shimmer--running">
-          {startedAt ? `正在执行，用时 ${formatDuration(now - startedAt)}` : "正在执行"}
-        </span>
+    <div
+      className="flex h-6 items-center text-[13px] leading-6 tabular-nums text-label-3"
+      aria-live="polite"
+    >
+      <span className="text-shimmer text-label-2">
+        {startedAt ? `已工作 ${formatDuration(now - startedAt)}` : "正在工作"}
       </span>
     </div>
   );
 }
 
-function CompletedTurn({
-  turnId,
-  entries,
-  expanded,
-  expandedWorkGroups,
-  onToggleTurn,
-  onToggleWorkGroup,
-  onOpenSubagent,
+/** A process stays in place while its live title and disclosure change. */
+function ToolProcessGroup({
+  entries, closed, onOpenSubagent,
+}: {
+  entries: readonly ChatTimelineEntry[];
+  closed: boolean;
+  onOpenSubagent: (subagentId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [edges, setEdges] = useState({ top: false, bottom: false });
+  const bodyId = useId();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const followBottomRef = useRef(true);
+  const activities = toolActivitiesOf(entries);
+  const kinds = toolCategoryKinds(activities);
+  const runningActivity = [...activities].reverse().find((activity) => activity.status === "running");
+  const runningAgent = [...entries].reverse().find((entry) => entry.kind === "subagent" && entry.subagent.status === "running");
+  const label = closed
+    ? processToolTitle(kinds, entries.some((entry) => entry.kind === "subagent"))
+    : runningActivity ? liveToolLabel(runningActivity)
+      : runningAgent ? "正在协调子代理" : "正在思考";
+  const iconKind = closed ? kinds[0] : runningActivity ? toolCategoryKinds([runningActivity])[0] : "reasoning";
+  const updateEdges = () => {
+    const body = bodyRef.current;
+    if (!body) return;
+    setEdges({ top: body.scrollTop > 1, bottom: body.scrollHeight - body.scrollTop - body.clientHeight > 1 });
+  };
+  useEffect(() => {
+    if (!open) return;
+    const observer = new ResizeObserver(() => {
+      const body = bodyRef.current;
+      if (!closed && followBottomRef.current && body) body.scrollTop = body.scrollHeight;
+      updateEdges();
+    });
+    if (bodyRef.current) observer.observe(bodyRef.current);
+    if (contentRef.current) observer.observe(contentRef.current);
+    updateEdges();
+    return () => observer.disconnect();
+  }, [open, closed]);
+  const toggle = () => {
+    if (!open) {
+      followBottomRef.current = !closed;
+      window.requestAnimationFrame(() => {
+        const body = bodyRef.current;
+        if (body) body.scrollTop = closed ? 0 : body.scrollHeight;
+        updateEdges();
+      });
+    }
+    setOpen((value) => !value);
+  };
+  return (
+    <div className="min-w-0" data-tool-process data-process-closed={closed}>
+      <ProcessGroupHeader open={open} running={!closed} iconKind={iconKind} label={label}
+        detail="" bodyId={bodyId} onToggle={toggle} />
+      <div id={bodyId} ref={bodyRef} hidden={!open} onScroll={() => {
+        const body = bodyRef.current;
+        if (body) followBottomRef.current = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
+        updateEdges();
+      }}
+        className={cn("tool-process-body mt-4 max-h-[min(400px,50vh)] overflow-y-auto [scrollbar-gutter:stable]",
+          !open && "hidden", edges.top && "tool-process-fade-top", edges.bottom && "tool-process-fade-bottom")}>
+        <div ref={contentRef}>
+          <ProcessEntries entries={entries} onOpenSubagent={onOpenSubagent} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChatTurn({
+  turnId, entries, expanded, onToggleTurn, onOpenSubagent, running, live, startedAt,
 }: {
   turnId: string;
   entries: readonly ChatTimelineEntry[];
   expanded: boolean;
-  expandedWorkGroups: ReadonlySet<string>;
   onToggleTurn: (turnId: string) => void;
-  onToggleWorkGroup: (groupId: string) => void;
   onOpenSubagent: (subagentId: string) => void;
-}) {
-  const terminalAssistant = findTerminalAssistantEntry(entries);
-  const reasoning = terminalAssistant?.message.reasoning?.trim() ?? "";
-  const userEntries = entries.filter(
-    (entry): entry is Extract<ChatTimelineEntry, { kind: "message" }> =>
-      entry.kind === "message" && entry.message.role === "user",
-  );
-  const processEntries = entries.filter(
-    (entry) =>
-      !(entry.kind === "message" && entry.message.role === "user") &&
-      entry.id !== terminalAssistant?.id,
-  );
-  const processSegments: ChatTimelineEntry[][] = [];
-  for (const entry of processEntries) {
-    if (entry.kind === "subagent") {
-      processSegments.push([entry]);
-      continue;
-    }
-    const current = processSegments.at(-1);
-    if (current && current[0]?.kind !== "subagent") current.push(entry);
-    else processSegments.push([entry]);
-  }
-  const toolCount = processEntries.filter((entry) => entry.kind === "tool").length;
-  const messageCount = processEntries.filter(
-    (entry) => entry.kind === "message" && entry.message.role !== "user",
-  ).length;
-  const hasCollapsibleEntries = Boolean(reasoning) || processEntries.some((entry) => entry.kind !== "subagent");
-  const startedAt = turnStartedAt(entries);
-  const endedAt = turnEndedAt(entries);
-  const headerLabel = startedAt !== null && endedAt !== null ? "已完成" : "工作过程";
-  const headerMeta = [
-    toolCount > 0 ? `${toolCount} 次工具调用` : undefined,
-    messageCount > 0 ? `${messageCount} 条消息` : undefined,
-  ].filter(Boolean).join(" · ");
-  const renderSegment = (segment: ChatTimelineEntry[]) => {
-    const first = segment[0];
-    if (!first) return null;
-    if (first.kind === "subagent") {
-      return (
-        <SubagentTaskCard
-          key={first.id}
-          subagent={first.subagent}
-          onOpen={onOpenSubagent}
-        />
-      );
-    }
-    return (
-      <ProcessEntries
-        key={`segment:${first.id}`}
-        entries={segment}
-        expandedWorkGroups={expandedWorkGroups}
-        onToggleWorkGroup={onToggleWorkGroup}
-        onOpenSubagent={onOpenSubagent}
-      />
-    );
-  };
-
-  return (
-    <section className="flex flex-col gap-3" data-turn-id={turnId}>
-      {userEntries.map((entry) => (
-        <UserMessage key={entry.id} message={entry.message} />
-      ))}
-      {hasCollapsibleEntries && (
-        <div className="chat-turn-process">
-          <button
-            type="button"
-            aria-expanded={expanded}
-            data-scroll-anchor-ignore
-            onClick={() => onToggleTurn(turnId)}
-            className="chat-process-header"
-          >
-            <span className="chat-process-header-main">
-              <span className="chat-process-header-label">{headerLabel}</span>
-              {startedAt !== null && endedAt !== null && (
-                <>
-                  <span className="chat-disclosure-sep" aria-hidden />
-                  <span className="chat-process-header-meta">用时 {formatDuration(endedAt - startedAt)}</span>
-                </>
-              )}
-              {headerMeta && (
-                <>
-                  <span className="chat-disclosure-sep" aria-hidden />
-                  <span className="chat-process-header-meta">{headerMeta}</span>
-                </>
-              )}
-            </span>
-            <ChevronDown className="chat-disclosure-chevron" aria-hidden />
-          </button>
-          {expanded ? (
-            <div className="chat-process-body">
-              {reasoning && <ReasoningBlock text={reasoning} />}
-              {processSegments.map(renderSegment)}
-            </div>
-          ) : processSegments
-            .filter((segment) => segment[0]?.kind === "subagent")
-            .map(renderSegment)}
-        </div>
-      )}
-      {!hasCollapsibleEntries && processSegments.map(renderSegment)}
-      {terminalAssistant && (
-        <AssistantMessage message={terminalAssistant.message} showReasoning={false} />
-      )}
-    </section>
-  );
-}
-
-function RunningTurn({
-  entries,
-  live,
-  startedAt,
-  expandedWorkGroups,
-  onToggleWorkGroup,
-  onOpenSubagent,
-}: {
-  entries: readonly ChatTimelineEntry[];
+  running: boolean;
   live: { text: string; reasoning: string };
   startedAt: number | null;
-  expandedWorkGroups: ReadonlySet<string>;
-  onToggleWorkGroup: (groupId: string) => void;
-  onOpenSubagent: (subagentId: string) => void;
 }) {
-  const hasLive = Boolean(live.text || live.reasoning);
-  const liveMessage: ChatMessage = {
-    id: "live-assistant-message",
-    role: "assistant",
-    text: live.text,
-    reasoning: live.reasoning,
-    streaming: true,
-    turnId: "live",
-    createdAt: Date.now(),
-  };
+  const hasLive = running && Boolean(live.text || live.reasoning);
+  const contentEntries: readonly ChatTimelineEntry[] = hasLive ? [...entries, {
+    kind: "message", id: "live-assistant-message", at: Date.now(),
+    message: { id: "live-assistant-message", role: "assistant", text: live.text, reasoning: live.reasoning,
+      streaming: true, turnId, createdAt: Date.now() },
+  }] : entries;
+  const content = deriveTurnContent(contentEntries, running);
+  const finalReply = [...content].reverse().find((block) => block.kind === "message" && block.message.role === "assistant");
+  const hasProcess = content.some((block) => block.kind === "process")
+    || content.some((block) => block.kind === "message" && block.message.role === "assistant" && block.id !== finalReply?.id);
+  const firstUser = content[0]?.kind === "message" && content[0].message.role === "user" ? content[0] : null;
+  const start = startedAt ?? turnStartedAt(entries);
+  const end = turnEndedAt(entries);
+  const duration = start !== null && end !== null ? `，用时 ${formatDuration(end - start)}` : "";
+  const bodyId = useId();
 
   return (
-    <section className="flex flex-col gap-3">
-      <ProcessEntries
-        entries={entries}
-        expandedWorkGroups={expandedWorkGroups}
-        onToggleWorkGroup={onToggleWorkGroup}
-        onOpenSubagent={onOpenSubagent}
-      />
-      {hasLive && <AssistantMessage message={liveMessage} streaming showMeta={false} />}
-      <WorkingIndicator startedAt={startedAt ?? turnStartedAt(entries)} />
+    <section className="flex min-w-0 flex-col gap-4" data-turn-id={turnId}>
+      {firstUser && <UserMessage message={firstUser.message} />}
+      <div className={cn("flex min-w-0 flex-col", !running && hasProcess && !expanded ? "gap-2" : "gap-4")}>
+        {!running && hasProcess && (
+          <button type="button" aria-expanded={expanded} aria-controls={bodyId}
+            onClick={() => onToggleTurn(turnId)}
+            className="turn-process-header focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60">
+            <span className="turn-process-label">{`已完成${duration}`}</span>
+            <ChevronDown aria-hidden="true" className="turn-process-chevron" />
+          </button>
+        )}
+        <div id={bodyId} className="flex min-w-0 flex-col gap-4">
+          {content.filter((block) => block !== firstUser).map((block) => {
+            const independent = block.kind === "message" && block.message.role === "user";
+            const hidden = !running && hasProcess && !expanded && block.id !== finalReply?.id && !independent;
+            return (
+              <div key={block.id} hidden={hidden} className={cn("min-w-0", hidden && "hidden")}>
+                {block.kind === "process" ? (
+                  <ToolProcessGroup entries={block.entries} closed={block.closed} onOpenSubagent={onOpenSubagent} />
+                ) : block.message.role === "user" ? (
+                  <UserMessage message={block.message} />
+                ) : (
+                  <AssistantMessage message={block.message} streaming={block.message.streaming}
+                    showReasoning={false} showMeta={!running && block.id === finalReply?.id} />
+                )}
+              </div>
+            );
+          })}
+          {running && <WorkingIndicator startedAt={start} />}
+        </div>
+      </div>
     </section>
   );
 }
@@ -596,15 +722,11 @@ function subagentTimelineEntries(
 function SubagentDetail({
   subagent,
   allSubagents,
-  expandedWorkGroups,
-  onToggleWorkGroup,
   onOpenSubagent,
   onBack,
 }: {
   subagent: SubagentActivity;
   allSubagents: readonly SubagentActivity[];
-  expandedWorkGroups: ReadonlySet<string>;
-  onToggleWorkGroup: (groupId: string) => void;
   onOpenSubagent: (subagentId: string) => void;
   onBack: () => void;
 }) {
@@ -632,34 +754,34 @@ function SubagentDetail({
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 -mx-3 mb-5 border-b border-zinc-200 bg-white/95 px-3 pb-3 pt-1 backdrop-blur sm:-mx-5 sm:px-5 dark:border-border dark:bg-background/95">
-        <div className="flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+      <header className="sticky top-0 z-10 -mx-4 mb-5 border-b border-line-2 bg-background/95 px-4 pb-3 pt-1 backdrop-blur">
+        <div className="flex min-w-0 items-center gap-1.5 text-[13px] text-label-3">
           <button
             type="button"
-            className="flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+            className="flex h-7 shrink-0 items-center gap-1 rounded-[8px] px-1.5 transition-colors hover:bg-hover hover:text-label-1"
             onClick={onBack}
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             <span>{parent ? parent.agentDisplayName : "主会话"}</span>
           </button>
-          <ChevronRight className="h-3 w-3 shrink-0 text-zinc-300 dark:text-zinc-700" />
+          <ChevronRight className="h-3 w-3 shrink-0 text-label-caption" />
           <span className="min-w-0 truncate">{taskTitle}</span>
         </div>
       </header>
 
-      <section className="mb-5 border-b border-zinc-200 pb-5 dark:border-zinc-800">
+      <section className="mb-5 border-b border-line-2 pb-5">
         <div className="flex min-w-0 items-start gap-3">
-          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
-            <Bot className="h-4 w-4" />
+          <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-hover text-label-2">
+            <Bot className="h-4 w-4" strokeWidth={1.8} />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+            <div className="text-[12px] text-label-3">
               {subagent.agentDisplayName || "子代理"}
             </div>
-            <h2 className="mt-0.5 break-words text-base font-semibold text-zinc-900 dark:text-zinc-100">
+            <h2 className="mt-0.5 break-words text-[16px] font-semibold leading-6 text-label-1">
               {taskTitle}
             </h2>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-400">
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-label-3">
               <span className="inline-flex items-center gap-1">
                 {subagent.status === "running" ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
@@ -679,17 +801,15 @@ function SubagentDetail({
           </div>
         </div>
         {subagent.prompt && subagent.prompt !== taskTitle && !hasPromptMessage && (
-          <div className="mt-4 border-l-2 border-zinc-200 pl-3 text-sm leading-6 text-zinc-600 dark:border-zinc-800 dark:text-zinc-300">
+          <div className="mt-4 border-l-2 border-line-2 pl-3.5 text-[13px] leading-5 text-label-2">
             <Markdown>{subagent.prompt}</Markdown>
           </div>
         )}
       </section>
 
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-4">
         <ProcessEntries
           entries={entries}
-          expandedWorkGroups={expandedWorkGroups}
-          onToggleWorkGroup={onToggleWorkGroup}
           onOpenSubagent={onOpenSubagent}
         />
         {hasLive && subagent.live && (
@@ -711,7 +831,7 @@ function SubagentDetail({
           <WorkingIndicator startedAt={subagent.startedAt} />
         )}
         {subagent.status === "idle" && !hasLive && (
-          <div className="flex items-center gap-2 px-1.5 py-2 text-xs text-muted-foreground/70">
+          <div className="flex items-center gap-2 text-[13px] leading-6 text-label-3">
             <Pause className="h-3.5 w-3.5" />
             等待后续任务
           </div>
@@ -720,7 +840,7 @@ function SubagentDetail({
           <div
             role="alert"
             className={cn(
-              "flex items-start gap-2 px-1.5 py-1.5 text-sm",
+              "flex items-start gap-2 text-[13px] leading-5",
               subagent.status === "cancelled" ? "text-amber-600 dark:text-amber-400" : "text-destructive",
             )}
           >
@@ -729,7 +849,7 @@ function SubagentDetail({
           </div>
         )}
         {subagent.status !== "running" && subagent.status !== "idle" && !subagent.error && entries.length === 0 && !hasLive && (
-          <div className="py-8 text-center text-sm text-zinc-400">子代理没有返回可展示的内容</div>
+          <div className="py-8 text-center text-[13px] text-label-caption">子代理没有返回可展示的内容</div>
         )}
       </div>
     </div>
@@ -767,7 +887,6 @@ export function ChatView({
   const [loadError, setLoadError] = useState("");
   const [internalSubagentId, setInternalSubagentId] = useState<string | null>(null);
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<string>>(new Set());
-  const [expandedWorkGroups, setExpandedWorkGroups] = useState<ReadonlySet<string>>(new Set());
 
   useEffect(() => {
     if (!manageSubscription) return;
@@ -778,7 +897,6 @@ export function ChatView({
     setInternalSubagentId(null);
     onSubagentViewChange?.(null);
     setExpandedTurnIds(new Set());
-    setExpandedWorkGroups(new Set());
     void openThread(threadId).catch((error: unknown) => {
       if (active) setLoadError(error instanceof Error ? error.message : "无法加载会话");
     });
@@ -849,15 +967,6 @@ export function ChatView({
     });
   };
 
-  const toggleWorkGroup = (groupId: string) => {
-    setExpandedWorkGroups((existing) => {
-      const next = new Set(existing);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
-  };
-
   const openSubagent = (subagentId: string) => {
     if (controlledSubagentId === undefined) setInternalSubagentId(subagentId);
     onSubagentViewChange?.(subagentId);
@@ -890,14 +999,14 @@ export function ChatView({
   if (loadError && !state.loaded) {
     return (
       <div className="flex h-full items-center justify-center px-6">
-        <div className="max-w-md text-center text-sm text-red-600 dark:text-red-400">{loadError}</div>
+        <div className="max-w-md text-center text-[13px] leading-5 text-destructive">{loadError}</div>
       </div>
     );
   }
 
   if (!state.loaded) {
     return (
-      <div className="flex h-full items-center justify-center text-zinc-400">
+      <div className="flex h-full items-center justify-center text-label-caption">
         <Loader2 className="h-5 w-5 animate-spin" />
       </div>
     );
@@ -916,25 +1025,23 @@ export function ChatView({
           onWheel={(event) => {
             if (event.deltaY < 0) pinnedRef.current = false;
           }}
-          className="h-full min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain [scrollbar-gutter:stable_both-edges]"
+          className="h-full min-h-0 overflow-y-auto overflow-x-hidden overscroll-y-contain [scrollbar-gutter:stable]"
         >
           <div
-            className="chat-transcript mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-3 pt-4 sm:px-5 sm:pt-5"
-            style={{ paddingBottom: Math.max(20, bottomInset + 16) }}
+            className="mx-auto flex min-h-full w-full max-w-[min(100%,calc(clamp(680px,64%,920px)+32px))] flex-col gap-4 px-4 pt-4"
+            style={{ paddingBottom: Math.max(24, bottomInset + 16) }}
           >
             {selectedSubagent ? (
               <SubagentDetail
                 subagent={selectedSubagent}
                 allSubagents={state.subagents}
-                expandedWorkGroups={expandedWorkGroups}
-                onToggleWorkGroup={toggleWorkGroup}
                 onOpenSubagent={openSubagent}
                 onBack={leaveSubagent}
               />
             ) : (
               <>
                 {blocks.length === 0 && !hasLive && !state.running && (
-                  <div className="flex flex-1 items-center justify-center py-16 text-sm text-zinc-300 dark:text-zinc-700">
+                  <div className="flex flex-1 items-center justify-center py-16 text-[13px] text-label-caption">
                     新会话
                   </div>
                 )}
@@ -942,39 +1049,30 @@ export function ChatView({
                 {blocks.map((block) => {
                   if (block.kind === "system") {
                     return (
-                      <div key={block.id} className="py-2 text-center text-xs text-muted-foreground">
+                      <div key={block.id} className="py-2 text-center text-[12px] leading-5 text-label-3">
                         {block.message.text}
                       </div>
                     );
                   }
 
                   const running = state.running && block.turnId === activeTurnId;
-                  return running ? (
-                    <RunningTurn
-                      key={block.id}
-                      entries={block.entries}
-                      live={state.live}
-                      startedAt={state.activeTurnStartedAt}
-                      expandedWorkGroups={expandedWorkGroups}
-                      onToggleWorkGroup={toggleWorkGroup}
-                      onOpenSubagent={openSubagent}
-                    />
-                  ) : (
-                    <CompletedTurn
+                  return (
+                    <ChatTurn
                       key={block.id}
                       turnId={block.turnId}
                       entries={block.entries}
                       expanded={expandedTurnIds.has(block.turnId)}
-                      expandedWorkGroups={expandedWorkGroups}
                       onToggleTurn={toggleTurn}
-                      onToggleWorkGroup={toggleWorkGroup}
                       onOpenSubagent={openSubagent}
+                      running={running}
+                      live={state.live}
+                      startedAt={running ? state.activeTurnStartedAt : null}
                     />
                   );
                 })}
 
                 {state.running && !hasActiveTurnBlock && (
-                  <section className="flex flex-col gap-3">
+                  <section className="flex flex-col gap-4">
                     {hasLive && (
                       <AssistantMessage
                         streaming
@@ -995,8 +1093,12 @@ export function ChatView({
                 )}
 
                 {state.error && (
-                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700 dark:border-red-950 dark:bg-red-950/30 dark:text-red-300">
-                    {state.error}
+                  <div role="status" className="flex items-start gap-2 text-[13px] leading-5">
+                    <span aria-hidden="true" className="mt-[5px] size-2.5 shrink-0 rounded-full bg-destructive" />
+                    <div className="min-w-0 [overflow-wrap:anywhere]">
+                      <span className="mr-1.5 font-semibold text-destructive">出错了</span>
+                      <span className="text-label-2">{state.error}</span>
+                    </div>
                   </div>
                 )}
               </>
@@ -1005,22 +1107,16 @@ export function ChatView({
         </div>
 
         {!selectedSubagent && !atBottom && (
-          <div
-            className="pointer-events-none absolute inset-x-0 z-10 flex justify-center"
-            style={{ bottom: bottomInset + 8 }}
+          <button
+            type="button"
+            aria-label="回到最新消息"
+            title="回到最新消息"
+            className="absolute right-[max(16px,calc((100%-clamp(680px,64%,920px))/2))] z-10 flex size-[34px] items-center justify-center rounded-full border border-line-3 bg-elevated text-label-1 shadow-[0_4px_16px_rgb(0_0_0_/_10%)] transition-colors hover:bg-hover-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+            style={{ bottom: bottomInset + 16 }}
+            onClick={scrollToBottom}
           >
-            <div className="flex w-full max-w-3xl justify-end px-3 sm:px-5">
-              <button
-                type="button"
-                aria-label="回到最新消息"
-                title="回到最新消息"
-                className="chat-back-to-bottom pointer-events-auto"
-                onClick={scrollToBottom}
-              >
-                <ArrowDown className="h-4 w-4" aria-hidden />
-              </button>
-            </div>
-          </div>
+            <ArrowDown className="h-4 w-4" />
+          </button>
         )}
       </div>
     </MessageContext.Provider>

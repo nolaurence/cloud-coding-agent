@@ -94,7 +94,7 @@ class Store {
       const normalized = {
         ...thread,
         ...(model ? { model } : {}),
-        modelProviderId: model?.providerId ?? (thread.runtime === "codex" ? resolveThreadModelProviderId(thread) : "copilot"),
+        modelProviderId: model?.providerId ?? (thread.runtime === "codex" || thread.runtime === "dsh" ? resolveThreadModelProviderId(thread) : "copilot"),
       };
       changedThreads.push(normalized);
       return normalized;
