@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { CodexClient, SessionNotFoundError } from "./codex.js";
 import { DshClient } from "./dsh/dshClient.js";
+import { readDshContextBreakdown } from "./dsh/dshContext.js";
 import type { AgentClient as CopilotClient, AgentSession as CopilotSession } from "./agentRuntime.js";
 import type {
   ModelCapabilitiesOverride,
@@ -198,9 +199,22 @@ function normalizeContextUsage(
   ) {
     return undefined;
   }
+  const rawBreakdown = value.breakdown;
+  const breakdown =
+    rawBreakdown &&
+    [rawBreakdown.systemTokens, rawBreakdown.toolsTokens, rawBreakdown.messageTokens].every(
+      (tokens) => Number.isFinite(tokens) && tokens >= 0,
+    )
+      ? {
+          systemTokens: Math.round(rawBreakdown.systemTokens),
+          toolsTokens: Math.round(rawBreakdown.toolsTokens),
+          messageTokens: Math.round(rawBreakdown.messageTokens),
+        }
+      : undefined;
   return {
     usedTokens: Math.max(0, Math.round(value.usedTokens)),
     maxTokens: Math.round(maxTokens),
+    ...(breakdown ? { breakdown } : {}),
   };
 }
 
@@ -279,7 +293,13 @@ function modelCapabilitiesFor(
 }
 
 function sameContextUsage(left: ContextUsage | undefined, right: ContextUsage | undefined) {
-  return left?.usedTokens === right?.usedTokens && left?.maxTokens === right?.maxTokens;
+  return (
+    left?.usedTokens === right?.usedTokens &&
+    left?.maxTokens === right?.maxTokens &&
+    left?.breakdown?.systemTokens === right?.breakdown?.systemTokens &&
+    left?.breakdown?.toolsTokens === right?.breakdown?.toolsTokens &&
+    left?.breakdown?.messageTokens === right?.breakdown?.messageTokens
+  );
 }
 
 export function normalizeGeneratedCommitMessage(value: string): string {
@@ -418,8 +438,11 @@ export class CopilotManager {
     settings: AppSettings = store.settings,
   ): ContextUsage | undefined {
     const thread = store.getThread(rt.threadId);
+    const breakdown = thread?.runtime === "dsh"
+      ? readDshContextBreakdown(rt.threadId)
+      : undefined;
     const normalized = normalizeContextUsage(
-      usage,
+      usage ? { ...usage, breakdown } : undefined,
       contextWindowTokensForThread(thread, settings),
     );
     if (sameContextUsage(rt.contextUsage, normalized)) return normalized;

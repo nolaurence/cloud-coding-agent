@@ -1,5 +1,7 @@
 import { CircleGauge, Database, Gauge } from "lucide-react";
+import { Popover } from "radix-ui";
 import type { ContextUsage, RuntimeStats } from "@cca/protocol";
+import { ContextBreakdownPanel } from "./ContextBreakdownPanel";
 
 const compactTokens = new Intl.NumberFormat("en-US", {
   notation: "compact",
@@ -98,14 +100,33 @@ export function RuntimeStatsBar({
           <span className="truncate">{usageText}</span>
         </span>
       )}
-      {contextPercent && (
-        <span
-          className="ml-auto inline-flex shrink-0 items-center gap-1"
-          title={`上下文已使用 ${exactTokens.format(contextUsage?.usedTokens ?? 0)} / ${exactTokens.format(contextUsage?.maxTokens ?? 0)} 个 token`}
-        >
-          <CircleGauge className="size-3.5 shrink-0" aria-hidden="true" />
-          <span>{contextPercent}</span>
-        </span>
+      {contextPercent && contextUsage && (
+        <Popover.Root>
+          <Popover.Trigger asChild>
+            <button
+              type="button"
+              className="ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1 -mx-1 transition-colors hover:bg-hover hover:text-label-1"
+              aria-label={`查看上下文明细，已用 ${contextPercent}%`}
+              aria-haspopup="dialog"
+              title={`上下文已使用 ${exactTokens.format(contextUsage.usedTokens)} / ${exactTokens.format(contextUsage.maxTokens)} 个 token`}
+            >
+              <CircleGauge className="size-3.5 shrink-0" aria-hidden="true" />
+              <span>{contextPercent}</span>
+            </button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              side="top"
+              align="end"
+              sideOffset={8}
+              collisionPadding={12}
+              className="z-50 rounded-xl border border-zinc-200 bg-white p-3 text-zinc-950 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              aria-label="上下文明细"
+            >
+              <ContextBreakdownPanel usage={contextUsage} />
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
       )}
     </div>
   );

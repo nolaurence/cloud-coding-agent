@@ -437,6 +437,7 @@ export function ThreadPage() {
                       threadId={threadId}
                       projectId={thread?.projectId}
                       contextUsage={state.contextUsage}
+                      contextBreakdownEnabled={thread?.runtime === "dsh"}
                       running={state.running}
                       onSend={(text, attachments) => sendMessage(threadId, text, attachments)}
                       onInterrupt={() => interrupt(threadId)}

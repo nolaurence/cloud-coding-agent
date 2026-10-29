@@ -255,9 +255,17 @@ export interface ThreadSharePreview {
   mode: ThreadShareMode;
 }
 
+export interface ContextBreakdown {
+  systemTokens: number;
+  toolsTokens: number;
+  messageTokens: number;
+}
+
 export interface ContextUsage {
   usedTokens: number;
   maxTokens: number;
+  /** DSH 的上下文构成估算；Codex 会话不提供。 */
+  breakdown?: ContextBreakdown;
 }
 
 /**

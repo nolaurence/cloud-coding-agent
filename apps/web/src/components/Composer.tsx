@@ -11,10 +11,11 @@ import {
   Square,
   Upload,
 } from "lucide-react";
-import { DropdownMenu } from "radix-ui";
+import { DropdownMenu, Popover } from "radix-ui";
 import { buildFileMentionPayload } from "../lib/composerDrafts";
 import { useComposerAttachments } from "../lib/composerAttachments";
 import { ComposerAttachments } from "./ComposerAttachments";
+import { ContextBreakdownPanel } from "./ContextBreakdownPanel";
 import type { ContextCompactionResult, ContextUsage, TurnAttachment } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
@@ -52,7 +53,44 @@ const SLASH_COMMANDS: CompletionItem[] = [
   },
 ];
 
-function ContextUsageIndicator({ usage }: { usage: ContextUsage | null }) {
+function ContextRing({ ratio }: { ratio: number }) {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 20 20" aria-hidden="true">
+      <circle
+        cx="10"
+        cy="10"
+        r={CONTEXT_RING_RADIUS}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        className="text-zinc-200 dark:text-zinc-700"
+      />
+      {ratio > 0 && (
+        <circle
+          cx="10"
+          cy="10"
+          r={CONTEXT_RING_RADIUS}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeDasharray={CONTEXT_RING_CIRCUMFERENCE}
+          strokeDashoffset={CONTEXT_RING_CIRCUMFERENCE * (1 - ratio)}
+          transform="rotate(-90 10 10)"
+          className="text-zinc-700 transition-[stroke-dashoffset] dark:text-zinc-300"
+        />
+      )}
+    </svg>
+  );
+}
+
+function ContextUsageIndicator({
+  usage,
+  interactive,
+}: {
+  usage: ContextUsage | null;
+  interactive: boolean;
+}) {
   const usedTokens = usage ? Math.max(0, usage.usedTokens) : 0;
   const maxTokens = usage && usage.maxTokens > 0 ? usage.maxTokens : 0;
   const ratio = maxTokens > 0 ? Math.min(usedTokens / maxTokens, 1) : 0;
@@ -63,6 +101,36 @@ function ContextUsageIndicator({ usage }: { usage: ContextUsage | null }) {
     ? `上下文已使用 ${tokenFormatter.format(usedTokens)} / ${tokenFormatter.format(maxTokens)} 个 token（${percentage}%）`
     : "上下文用量暂不可用";
 
+  if (interactive && usage) {
+    return (
+      <Popover.Root>
+        <Popover.Trigger asChild>
+          <button
+            type="button"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500"
+            aria-label={`${label}，查看上下文明细`}
+            aria-haspopup="dialog"
+            title={label}
+          >
+            <ContextRing ratio={ratio} />
+          </button>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            side="top"
+            align="end"
+            sideOffset={8}
+            collisionPadding={12}
+            className="z-50 rounded-xl border border-zinc-200 bg-white p-3 text-zinc-950 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+            aria-label="上下文明细"
+          >
+            <ContextBreakdownPanel usage={usage} />
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
+    );
+  }
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -72,32 +140,7 @@ function ContextUsageIndicator({ usage }: { usage: ContextUsage | null }) {
           aria-label={label}
           tabIndex={0}
         >
-          <svg className="h-4 w-4" viewBox="0 0 20 20" aria-hidden="true">
-            <circle
-              cx="10"
-              cy="10"
-              r={CONTEXT_RING_RADIUS}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="3"
-              className="text-zinc-200 dark:text-zinc-700"
-            />
-            {ratio > 0 && (
-              <circle
-                cx="10"
-                cy="10"
-                r={CONTEXT_RING_RADIUS}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeDasharray={CONTEXT_RING_CIRCUMFERENCE}
-                strokeDashoffset={CONTEXT_RING_CIRCUMFERENCE * (1 - ratio)}
-                transform="rotate(-90 10 10)"
-                className="text-zinc-700 transition-[stroke-dashoffset] dark:text-zinc-300"
-              />
-            )}
-          </svg>
+          <ContextRing ratio={ratio} />
         </span>
       </TooltipTrigger>
       <TooltipContent
@@ -145,6 +188,7 @@ export function Composer({
   threadId,
   projectId,
   contextUsage,
+  contextBreakdownEnabled = false,
   running,
   onSend,
   onInterrupt,
@@ -160,6 +204,8 @@ export function Composer({
   threadId?: string;
   projectId?: string;
   contextUsage?: ContextUsage | null;
+  /** DSH 会话支持点击上下文圆环查看构成。 */
+  contextBreakdownEnabled?: boolean;
   running: boolean;
   onSend: (
     text: string,
@@ -741,7 +787,12 @@ export function Composer({
 
           <div className="composer-trailing-tools">
             {footerControls}
-            {threadId && <ContextUsageIndicator usage={contextUsage ?? null} />}
+            {threadId && (
+              <ContextUsageIndicator
+                usage={contextUsage ?? null}
+                interactive={contextBreakdownEnabled}
+              />
+            )}
             {running && onInterrupt ? (
               <button
                 type="button"
