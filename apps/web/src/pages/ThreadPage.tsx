@@ -502,7 +502,7 @@ export function ThreadPage() {
         </>
       )}
       {canManageThread && wideLayout && overviewOpen && !panelOpen && (
-        <div className="order-last h-full w-[300px] shrink-0 border-l border-line-2">
+        <div className="order-last h-full w-[320px] shrink-0">
           <SessionOverview key={threadId} threadId={threadId} onClose={closeOverview} onJump={jumpToTurn} onOpenChanges={openOverviewChanges} />
         </div>
       )}
