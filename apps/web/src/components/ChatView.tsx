@@ -24,6 +24,8 @@ import { useApp, useThreadState } from "../lib/store";
 import {
   deriveChatTimeline,
   deriveTurnContent,
+  latestReasoningPreview,
+  reasoningPreview,
   turnEndedAt,
   turnStartedAt,
   type ChatTimelineEntry,
@@ -74,7 +76,7 @@ function ReasoningBlock({ text, streaming = false }: { text: string; streaming?:
     setOpen(streaming);
   }, [streaming]);
 
-  const preview = firstLine(text);
+  const preview = streaming ? reasoningPreview(text) : firstLine(text);
 
   return (
     <div className="min-w-0">
@@ -574,6 +576,7 @@ function ToolProcessGroup({
     : runningActivity ? liveToolLabel(runningActivity)
       : runningAgent ? "正在协调子代理" : "正在思考";
   const iconKind = closed ? kinds[0] : runningActivity ? toolCategoryKinds([runningActivity])[0] : "reasoning";
+  const reasoningDetail = closed ? "" : latestReasoningPreview(entries);
   const updateEdges = () => {
     const body = bodyRef.current;
     if (!body) return;
@@ -605,7 +608,7 @@ function ToolProcessGroup({
   return (
     <div className="min-w-0" data-tool-process data-process-closed={closed}>
       <ProcessGroupHeader open={open} running={!closed} iconKind={iconKind} label={label}
-        detail="" bodyId={bodyId} onToggle={toggle} />
+        detail={reasoningDetail} bodyId={bodyId} onToggle={toggle} />
       <div id={bodyId} ref={bodyRef} hidden={!open} onScroll={() => {
         const body = bodyRef.current;
         if (body) followBottomRef.current = body.scrollHeight - body.scrollTop - body.clientHeight < 24;

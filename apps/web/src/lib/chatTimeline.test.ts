@@ -5,8 +5,11 @@ import {
   deriveChatTimeline,
   deriveTurnContent,
   findTerminalAssistantEntry,
+  latestReasoningPreview,
+  reasoningPreview,
   turnEndedAt,
   turnStartedAt,
+  type ChatTimelineEntry,
 } from "./chatTimeline.js";
 
 function message(
@@ -163,6 +166,41 @@ test("live groups retain identity when extended and close on reply or turn compl
   const reply = deriveTurnContent([tool, { ...thought, message: { ...thought.message, text: "检查好了" } }], true);
   assert.equal(reply.length, 2);
   if (reply[0]?.kind === "process") assert.equal(reply[0].closed, true);
+});
+
+test("live process detail follows the newest reasoning paragraph", () => {
+  const thought = (text: string): ChatTimelineEntry => ({
+    kind: "message",
+    id: "message:thought",
+    at: 120,
+    message: { ...message("thought", "assistant", "turn", 120), text: "", reasoning: text },
+  });
+
+  assert.equal(
+    reasoningPreview("先看看目录\n\n**检查** 依赖\n再决定下一步"),
+    "检查 依赖 再决定下一步",
+  );
+  assert.equal(reasoningPreview("\n\n"), "");
+  const long = "很长".repeat(100);
+  const truncated = reasoningPreview(long);
+  assert.equal(truncated.endsWith("…"), true);
+  assert.equal(truncated.length, 160);
+
+  assert.equal(
+    latestReasoningPreview([thought("第一段\n\n最新一段")]),
+    "最新一段",
+  );
+  assert.equal(
+    latestReasoningPreview([
+      thought("旧的一段"),
+      { kind: "tool", id: "tool:read", at: 130, activity: activity("read", "turn", 130) },
+    ]),
+    "旧的一段",
+  );
+  assert.equal(
+    latestReasoningPreview([thought("旧的一段"), { ...thought("新的一段"), id: "message:new", at: 140 }]),
+    "新的一段",
+  );
 });
 
 test("attachment replies and interleaved user input stay outside process groups", () => {

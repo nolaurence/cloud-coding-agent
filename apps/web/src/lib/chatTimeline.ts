@@ -50,6 +50,36 @@ export function deriveTurnContent(
   return blocks;
 }
 
+const REASONING_PREVIEW_MAX_CHARS = 160;
+
+/** Compress the latest non-empty reasoning paragraph into one line, like the harness live detail. */
+export function reasoningPreview(text: string): string {
+  const paragraphs = text.split(/\r?\n[\t ]*\r?\n/);
+  for (let index = paragraphs.length - 1; index >= 0; index -= 1) {
+    const paragraph = paragraphs[index]?.replaceAll("**", "").replace(/\s+/g, " ").trim() ?? "";
+    if (!paragraph) continue;
+    return paragraph.length > REASONING_PREVIEW_MAX_CHARS
+      ? `${paragraph.slice(0, REASONING_PREVIEW_MAX_CHARS - 1).trimEnd()}…`
+      : paragraph;
+  }
+  return "";
+}
+
+/**
+ * Live detail for a running process group. The newest reasoning paragraph
+ * stays beside the current activity, so a tool call that follows the thought
+ * does not make the thought disappear.
+ */
+export function latestReasoningPreview(entries: readonly ChatTimelineEntry[]): string {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.kind !== "message" || entry.message.role !== "assistant") continue;
+    const preview = reasoningPreview(entry.message.reasoning ?? "");
+    if (preview) return preview;
+  }
+  return "";
+}
+
 function entryTurnId(entry: ChatTimelineEntry): string {
   if (entry.kind === "message") return entry.message.turnId;
   return entry.kind === "tool" ? entry.activity.turnId : entry.subagent.turnId;
