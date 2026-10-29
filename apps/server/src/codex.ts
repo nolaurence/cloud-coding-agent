@@ -101,6 +101,10 @@ function runtimeEnv(home: string): NodeJS.ProcessEnv {
   env.USERPROFILE = home;
   return env;
 }
+export function hasNativeCodexAuth(home = CODEX_HOME): boolean {
+  return fs.existsSync(path.join(home, "auth.json"));
+}
+
 function prepareHome(home: string) {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const auth = path.join(CODEX_HOME, "auth.json");
@@ -754,6 +758,7 @@ export class CodexClient implements AgentClient {
     fs.rmSync(path.join(COPILOT_HOME, "session-state", id), { recursive: true, force: true });
   }
   async listModels(): Promise<AgentModelInfo[]> {
+    if (!hasNativeCodexAuth()) return [];
     const home = path.join(CODEX_HOME, "model-discovery");
     prepareHome(home);
     const connection = new CodexRpc();
