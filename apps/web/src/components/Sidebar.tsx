@@ -13,7 +13,6 @@ import {
   LogOut,
   MessagesSquare,
   Pin,
-  PinOff,
   Search,
   ShieldCheck,
   SquarePen,
@@ -203,7 +202,11 @@ export function Sidebar({
           <span className="min-w-0 flex-1 truncate">{thread.title}</span>
           {pinned && (
             <Pin
-              className="size-3 shrink-0 text-label-3"
+              className={cn(
+                "size-3 shrink-0 text-label-3 transition-opacity",
+                options.manage && !active && "group-hover/thread:opacity-0 group-focus-within/thread:opacity-0",
+                active && "opacity-0",
+              )}
               strokeWidth={1.8}
               aria-label="已置顶"
             />
@@ -234,9 +237,10 @@ export function Sidebar({
               className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
               onClick={() => void togglePinned(thread)}
             >
-              {pinned
-                ? <PinOff className="size-3.5" strokeWidth={1.8} />
-                : <Pin className="size-3.5" strokeWidth={1.8} />}
+              <Pin
+                className={cn("size-3.5", pinned && "fill-current text-[var(--ds-link)]")}
+                strokeWidth={1.8}
+              />
             </button>
             <button
               type="button"
