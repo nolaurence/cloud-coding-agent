@@ -298,13 +298,37 @@ test("log-only events are skipped", () => {
     "step/end",
     "system/message",
     "session/title",
-    "todo/write",
     "request/header",
     "request/context",
     "session/end-seed",
   ]) {
     assert.equal(mapper().mapSessionEvent(wireEvent(type, {}) as never).length, 0, type);
   }
+});
+
+test("child plans retain their subagent identity", () => {
+  const events = mapper().mapSessionEvent({
+    sessionId: "child-1",
+    event: {
+      type: "todo/write",
+      seq: 2,
+      time: 1_700_000_000_000,
+      data: { todos: [{ content: "child task", status: "pending" }] },
+    },
+  });
+  assert.equal(events.length, 2);
+  assert.ok(events.every((event) => event.agentId === "child-1"));
+});
+
+test("todo updates project structured plans with deterministic event identities", () => {
+  const todos = [{ content: "检查接口", status: "completed" }, { content: "运行测试", status: "in_progress" }];
+  const notification = wireEvent("todo/write", { todos }, 23) as never;
+  const events = mapper().mapSessionEvent(notification);
+  assert.deepEqual(events, mapper().mapSessionEvent(notification));
+  assert.equal(events.length, 2);
+  assert.equal(events[0]?.type, "tool.execution_start");
+  assert.deepEqual(events[0]?.data, { toolCallId: `${ROOT}:todo:23`, toolName: "todo_write", arguments: { todos } });
+  assert.equal(events[1]?.type, "tool.execution_complete");
 });
 
 test("child session events carry the subagent id", () => {

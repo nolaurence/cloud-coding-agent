@@ -486,6 +486,10 @@ export class CodexSession implements AgentSession {
     if (method === "turn/started") {
       this.turnId = text(object(params.turn).id);
       if (!this.compacting) this.emit({ type: "assistant.turn_start", data: { turnId: this.turnId } });
+    } else if (method === "turn/plan/updated") {
+      const toolCallId = `plan:${text(params.turnId) || this.turnId}:${randomUUID()}`;
+      this.emit({ type: "tool.execution_start", data: { toolCallId, toolName: "update_plan", arguments: { plan: params.plan, explanation: params.explanation } } });
+      this.emit({ type: "tool.execution_complete", data: { toolCallId, success: true, result: { content: "计划已更新" } } });
     } else if (method === "item/agentMessage/delta") {
       this.emit({ type: "assistant.message_delta", data: { messageId: text(params.itemId), deltaContent: text(params.delta) } }, false);
     } else if (method === "item/reasoning/summaryTextDelta") {

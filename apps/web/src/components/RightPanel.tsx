@@ -56,12 +56,14 @@ export function RightPanel({
   onClose,
   panelVisible,
   imageToOpen,
+  tabToOpen,
 }: {
   threadId: string;
   projectId?: string;
   onClose: () => void;
   panelVisible: boolean;
   imageToOpen?: ImagePreviewTarget | null;
+  tabToOpen?: { id: "diff"; requestId: number } | null;
 }) {
   const [openTabs, setOpenTabs] = useState<PanelTab[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
@@ -108,6 +110,10 @@ export function RightPanel({
     setOpenTabs(next);
     if (activeTab === tabId) setActiveTab(next[index]?.id ?? next[index - 1]?.id ?? null);
   };
+
+  useEffect(() => {
+    if (tabToOpen) openTab(tabToOpen.id);
+  }, [tabToOpen]);
 
   const renderPanel = (tab: PanelTab) => {
     if (tab.kind === "image") return <ImagePreviewPanel image={tab.image} />;

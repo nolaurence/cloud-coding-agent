@@ -92,6 +92,8 @@ import {
 import { createUserWorkspace, registerSelectedWorkspace } from "./workspaceProjects.js";
 import { isLocalMode } from "./env.js";
 import { previewProjectDocument } from "./documentPreview.js";
+import { runtimeResourceSampler } from "./runtimeResources.js";
+import { validateThreadOverview } from "./threadOverview.js";
 
 interface ClientConn {
   socket: WebSocket;
@@ -800,6 +802,24 @@ export class Hub {
           await this.manager.setThreadPermissionMode(msg.threadId, msg.permissionMode);
           this.broadcastShell();
           this.reply(conn, msg.id);
+          break;
+        }
+        case "runtime.resources": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread || !this.canManage(conn, thread)) throw new Error("无权查看运行环境指标");
+          const resources = await runtimeResourceSampler.read();
+          if (!this.canManage(conn, store.getThread(msg.threadId))) throw new Error("无权查看运行环境指标");
+          this.reply(conn, msg.id, resources);
+          break;
+        }
+        case "thread.overview.update": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          const overview = validateThreadOverview(msg.overview);
+          store.upsertThread({ ...thread, overview });
+          this.broadcastShell();
+          this.reply(conn, msg.id, overview);
           break;
         }
         case "permission.respond": {

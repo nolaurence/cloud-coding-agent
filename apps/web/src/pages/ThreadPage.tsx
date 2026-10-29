@@ -1,5 +1,5 @@
 import { type CSSProperties, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, ArrowLeftRight, FolderGit2, PanelRightOpen, Share2 } from "lucide-react";
+import { AlertCircle, ArrowLeft, ArrowLeftRight, FolderGit2, ListChecks, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { resolveThreadModel, resolveThreadModelProviderId } from "@cca/protocol";
 import type { AgentMode, ModelRef, PermissionMode } from "@cca/protocol";
@@ -15,6 +15,8 @@ import { RightPanelResizeHandle } from "../components/RightPanelResizeHandle";
 import { ThreadShareDialog } from "../components/ThreadShareDialog";
 import { useResizableWidth } from "../hooks/useResizableWidth";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { SessionOverview } from "../components/SessionOverview";
 import type { ImagePreviewTarget } from "../lib/imagePreview";
 
 const DshTrajectory = lazy(() => import("../components/DshTrajectory"));
@@ -73,6 +75,13 @@ export function ThreadPage() {
   const [modelError, setModelError] = useState("");
   const [viewingSubagentId, setViewingSubagentId] = useState<string | null>(null);
   const [imageToOpen, setImageToOpen] = useState<ImagePreviewTarget | null>(null);
+  const [overviewOpen, setOverviewOpen] = useState(() => {
+    try { return localStorage.getItem("cca:session-overview") !== "0"; } catch { return true; }
+  });
+  const [overviewMobileOpen, setOverviewMobileOpen] = useState(false);
+  const [wideLayout, setWideLayout] = useState(() => window.matchMedia("(min-width: 1280px)").matches);
+  const [revealTurn, setRevealTurn] = useState<{ turnId: string; requestId: number } | null>(null);
+  const [tabToOpen, setTabToOpen] = useState<{ id: "diff"; requestId: number } | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
   const [layoutWidth, setLayoutWidth] = useState(0);
   const layoutRef = useRef<HTMLDivElement>(null);
@@ -122,6 +131,31 @@ export function ThreadPage() {
     } finally {
       if (requestId === modelRequestRef.current) setSwitchingModel(false);
     }
+  };
+
+  const closeOverview = () => {
+    if (!wideLayout) { setOverviewMobileOpen(false); return; }
+    setOverviewOpen(false);
+    try { localStorage.setItem("cca:session-overview", "0"); } catch {}
+  };
+  const toggleOverview = () => {
+    if (wideLayout) {
+      const next = !overviewOpen || panelOpen;
+      setOverviewOpen(next);
+      try { localStorage.setItem("cca:session-overview", next ? "1" : "0"); } catch {}
+    } else setOverviewMobileOpen(true);
+    setPanelOpen(false);
+  };
+  const jumpToTurn = (turnId: string) => {
+    selectView("chat");
+    setViewingSubagentId(null);
+    setOverviewMobileOpen(false);
+    setRevealTurn((previous) => ({ turnId, requestId: (previous?.requestId ?? 0) + 1 }));
+  };
+  const openOverviewChanges = () => {
+    setOverviewMobileOpen(false);
+    setTabToOpen((previous) => ({ id: "diff", requestId: (previous?.requestId ?? 0) + 1 }));
+    setPanelOpen(true);
   };
 
   const onPermissionModeChange = async (mode: PermissionMode) => {
@@ -175,7 +209,17 @@ export function ThreadPage() {
     setModelError("");
     setViewingSubagentId(null);
     setImageToOpen(null);
+    setRevealTurn(null);
+    setTabToOpen(null);
+    setOverviewMobileOpen(false);
   }, [threadId]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1280px)");
+    const onChange = () => { setWideLayout(media.matches); setOverviewMobileOpen(false); };
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
 
   useEffect(() => {
     const element = layoutRef.current;
@@ -215,6 +259,9 @@ export function ThreadPage() {
   return (
     <div ref={layoutRef} className="flex h-full min-h-0 min-w-0 overflow-hidden">
       <div className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${panelPlacement === "left" ? "lg:order-last" : ""}`}>
+        {canManageThread && <div className="flex shrink-0 justify-end border-b border-line-2 px-3 py-1 md:hidden">
+          <Button type="button" variant="ghost" size="sm" aria-label="打开会话概览" onClick={toggleOverview}><ListChecks className="size-3.5" />会话概览</Button>
+        </div>}
         <header className="hidden shrink-0 bg-background md:block">
           <div className="flex min-h-[56px] items-center gap-2 px-5 pb-2.5 pt-2.5">
             <div className="min-w-0 flex-1">
@@ -228,6 +275,10 @@ export function ThreadPage() {
             </div>
             {canManageThread && (
               <>
+                <Button type="button" variant="ghost" size="icon" aria-label="切换会话概览" title="会话概览"
+                  aria-expanded={wideLayout ? overviewOpen && !panelOpen : overviewMobileOpen} className="text-muted-foreground" onClick={toggleOverview}>
+                  <ListChecks className="h-4 w-4" />
+                </Button>
                 <Button
                   type="button"
                   variant="ghost"
@@ -292,6 +343,7 @@ export function ThreadPage() {
           ) : (
             <ChatView
               threadId={threadId}
+              revealTurn={revealTurn}
               bottomInset={canInteract ? composerHeight : 0}
               selectedSubagentId={viewingSubagentId}
               onSubagentViewChange={setViewingSubagentId}
@@ -442,12 +494,24 @@ export function ThreadPage() {
               threadId={threadId}
               projectId={thread?.projectId}
               panelVisible={panelOpen}
+              tabToOpen={tabToOpen}
               imageToOpen={imageToOpen?.threadId === threadId ? imageToOpen : null}
               onClose={() => setPanelOpen(false)}
             />
           </div>
         </>
       )}
+      {canManageThread && wideLayout && overviewOpen && !panelOpen && (
+        <div className="order-last h-full w-[300px] shrink-0 border-l border-line-2">
+          <SessionOverview key={threadId} threadId={threadId} onClose={closeOverview} onJump={jumpToTurn} onOpenChanges={openOverviewChanges} />
+        </div>
+      )}
+      {canManageThread && !wideLayout && <Sheet open={overviewMobileOpen && !panelOpen} onOpenChange={setOverviewMobileOpen}>
+        <SheetContent side="right" showCloseButton={false} className="gap-0 p-0 data-[side=right]:w-[min(92vw,340px)] sm:max-w-none">
+          <SheetTitle className="sr-only">会话概览</SheetTitle>
+          <SessionOverview key={threadId} threadId={threadId} onClose={closeOverview} onJump={jumpToTurn} onOpenChanges={openOverviewChanges} />
+        </SheetContent>
+      </Sheet>}
       {thread && canManageThread && (
         <ThreadShareDialog
           threadId={thread.id}

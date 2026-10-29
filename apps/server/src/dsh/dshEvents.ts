@@ -238,8 +238,14 @@ export class DshEventMapper {
         });
         break;
       }
+      case "todo/write": {
+        const toolCallId = `${sessionId}:todo:${event.seq}`;
+        const data = event.data as { todos?: unknown };
+        push("tool.execution_start", { toolCallId, toolName: "todo_write", arguments: { todos: data.todos } });
+        push("tool.execution_complete", { toolCallId, success: true, result: { content: "计划已更新" } });
+        break;
+      }
       default:
-        // agent/inbox、step/*、request/*、system/message、todo/write 等不进应用契约。
         break;
     }
     return out;

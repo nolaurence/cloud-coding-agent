@@ -296,6 +296,7 @@ export interface ContextCompactionResult {
 }
 
 export interface ThreadMeta {
+  overview?: ThreadOverviewAnnotations;
   runtime?: AgentRuntime;
   id: string;
   projectId: string;
@@ -349,6 +350,32 @@ export function resolveThreadModel(
 export interface AuthUser {
   username: string;
   role: UserRole;
+}
+
+export interface ThreadOverviewNote {
+  id: string;
+  text: string;
+  pinned: boolean;
+  sourceTurnId?: string;
+}
+
+export interface ThreadOverviewAnnotations {
+  goal?: string;
+  notes: ThreadOverviewNote[];
+}
+
+export interface RuntimeResources {
+  scope: "pod" | "container" | "host" | "unavailable";
+  name?: string;
+  cpuCores: number | null;
+  cpuLimitCores: number | null;
+  cpuPercent: number | null;
+  memoryUsedBytes: number | null;
+  memoryLimitBytes: number | null;
+  memoryPercent: number | null;
+  sampledAt: number;
+  source: string;
+  notice?: string;
 }
 
 export interface PluginAuthor {
@@ -767,6 +794,8 @@ export type ClientMessage =
     }
   | { id: string; type: "thread.delete"; threadId: string }
   | { id: string; type: "thread.setModel"; threadId: string; model: ModelRef }
+  | { id: string; type: "thread.overview.update"; threadId: string; overview: ThreadOverviewAnnotations }
+  | { id: string; type: "runtime.resources"; threadId: string }
   | { id: string; type: "thread.setAgentMode"; threadId: string; agentMode: AgentMode }
   | {
       id: string;

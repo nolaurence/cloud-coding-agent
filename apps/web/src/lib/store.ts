@@ -34,6 +34,7 @@ import type {
   ThreadCreateResult,
   ThreadEvent,
   ThreadMeta,
+  ThreadOverviewAnnotations,
   ThreadShareMode,
   ThreadSharePreview,
   ThreadShareSummary,
@@ -257,6 +258,7 @@ interface AppState {
   ) => Promise<ThreadMeta>;
   deleteThread: (threadId: string) => Promise<void>;
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
+  updateThreadOverview: (threadId: string, overview: ThreadOverviewAnnotations) => Promise<void>;
   setThreadAgentMode: (threadId: string, agentMode: AgentMode) => Promise<void>;
   setThreadPermissionMode: (
     threadId: string,
@@ -873,6 +875,11 @@ export const useApp = create<AppState>((set, get) => {
       set((s) => ({
         threads: s.threads.map((t) => (t.id === threadId ? { ...t, model } : t)),
       }));
+    },
+
+    updateThreadOverview: async (threadId, overview) => {
+      const saved = await request<ThreadOverviewAnnotations>({ type: "thread.overview.update", threadId, overview });
+      set((state) => ({ threads: state.threads.map((thread) => thread.id === threadId ? { ...thread, overview: saved } : thread) }));
     },
 
     setThreadAgentMode: async (threadId, agentMode) => {

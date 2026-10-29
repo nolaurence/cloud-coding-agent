@@ -865,6 +865,7 @@ export function ChatView({
   selectedSubagentId: controlledSubagentId,
   onSubagentViewChange,
   onOpenImage,
+  revealTurn,
 }: {
   threadId: string;
   bottomInset?: number;
@@ -874,6 +875,7 @@ export function ChatView({
   selectedSubagentId?: string | null;
   onSubagentViewChange?: (subagentId: string | null) => void;
   onOpenImage?: (image: ImagePreviewTarget) => void;
+  revealTurn?: { turnId: string; requestId: number } | null;
 }) {
   const state = useThreadState(threadId);
   const openThread = useApp((appState) => appState.openThread);
@@ -887,6 +889,21 @@ export function ChatView({
   const [loadError, setLoadError] = useState("");
   const [internalSubagentId, setInternalSubagentId] = useState<string | null>(null);
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<string>>(new Set());
+
+  useEffect(() => {
+    if (!revealTurn || !state.loaded) return;
+    let frame = 0;
+    const timer = window.setTimeout(() => {
+      pinnedRef.current = false;
+      setExpandedTurnIds((current) => new Set([...current, revealTurn.turnId]));
+      frame = window.requestAnimationFrame(() => {
+        const target = scrollRef.current?.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(revealTurn.turnId)}"]`);
+        target?.scrollIntoView({ block: "start", behavior: "smooth" });
+        setAtBottom(false);
+      });
+    }, 60);
+    return () => { window.clearTimeout(timer); window.cancelAnimationFrame(frame); };
+  }, [revealTurn, state.loaded]);
 
   useEffect(() => {
     if (!manageSubscription) return;
