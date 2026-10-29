@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
+  Archive,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Eye,
   Folder,
   FolderOpen,
@@ -10,6 +12,8 @@ import {
   Loader2,
   LogOut,
   MessagesSquare,
+  Pin,
+  PinOff,
   Search,
   ShieldCheck,
   SquarePen,
@@ -21,6 +25,11 @@ import {
 import type { ThreadMeta } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
+import {
+  SIDEBAR_THREAD_LIMIT,
+  sortSidebarThreads,
+  visibleSidebarThreads,
+} from "../lib/threadGroups";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { BrandLogo } from "./BrandLogo";
@@ -60,7 +69,8 @@ export function Sidebar({
   const runningIds = useApp((s) => s.runningThreadIds);
   const createWorkspace = useApp((s) => s.createWorkspace);
   const removeWorkspace = useApp((s) => s.removeWorkspace);
-  const deleteThread = useApp((s) => s.deleteThread);
+  const setThreadPinned = useApp((s) => s.setThreadPinned);
+  const setThreadArchived = useApp((s) => s.setThreadArchived);
   const user = useApp((s) => s.user);
   const localMode = useApp((s) => s.localMode);
   const selectLocalFolder = useApp((s) => s.selectLocalFolder);
@@ -77,6 +87,8 @@ export function Sidebar({
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(new Set());
+  const [expandedProjects, setExpandedProjects] = useState<ReadonlySet<string>>(new Set());
+  const [actionError, setActionError] = useState("");
   // 每 minute 刷新一次,让「14分钟 / 23小时」这类相对时间保持新鲜
   const [, setClock] = useState(0);
   useEffect(() => {
@@ -84,18 +96,16 @@ export function Sidebar({
     return () => window.clearInterval(timer);
   }, []);
   const [confirmTarget, setConfirmTarget] = useState<
-    | { kind: "project"; id: string; name: string }
-    | { kind: "thread"; id: string; name: string; active: boolean }
-    | null
+    { kind: "project"; id: string; name: string } | null
   >(null);
 
   const keyword = query.trim().toLowerCase();
   const matches = (thread: ThreadMeta) => !keyword || thread.title.toLowerCase().includes(keyword);
   const ownedProjectIds = new Set(projects.map((project) => project.id));
   const threadsByProject = (projectId: string) =>
-    threads
-      .filter((thread) => thread.projectId === projectId && !thread.archived)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    sortSidebarThreads(
+      threads.filter((thread) => thread.projectId === projectId && !thread.archived),
+    );
   const sharedThreads = threads
     .filter((thread) => !thread.archived && !ownedProjectIds.has(thread.projectId))
     .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -111,6 +121,37 @@ export function Sidebar({
       else next.add(projectId);
       return next;
     });
+  };
+
+  const toggleExpanded = (projectId: string) => {
+    setExpandedProjects((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  };
+
+  const togglePinned = async (thread: ThreadMeta) => {
+    setActionError("");
+    try {
+      await setThreadPinned(thread.id, thread.pinnedAt === undefined);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "更新置顶状态失败");
+    }
+  };
+
+  const archiveThread = async (thread: ThreadMeta) => {
+    setActionError("");
+    try {
+      await setThreadArchived(thread.id, true);
+      if (location.pathname === `/thread/${thread.id}`) {
+        navigate("/");
+        onNavigate?.();
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "归档会话失败");
+    }
   };
 
   const createNamedWorkspace = async () => {
@@ -133,6 +174,7 @@ export function Sidebar({
   const renderThread = (thread: ThreadMeta, options: { manage: boolean }) => {
     const active = location.pathname === `/thread/${thread.id}`;
     const running = runningIds.includes(thread.id);
+    const pinned = thread.pinnedAt !== undefined;
     const status = running
       ? <Loader2 className="size-3.5 animate-spin text-[var(--ds-link)]" strokeWidth={1.8} />
       : thread.access === "readonly"
@@ -159,25 +201,53 @@ export function Sidebar({
         >
           <span className="flex size-4 shrink-0 items-center justify-center">{status}</span>
           <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+          {pinned && (
+            <Pin
+              className="size-3 shrink-0 text-label-3"
+              strokeWidth={1.8}
+              aria-label="已置顶"
+            />
+          )}
           <span
             className={cn(
               "shrink-0 text-[11px] leading-4 tabular-nums text-label-3 transition-opacity",
-              options.manage && "group-hover/thread:opacity-0",
+              options.manage && !active && "group-hover/thread:opacity-0 group-focus-within/thread:opacity-0",
+              active && "opacity-0",
             )}
           >
             {relativeTime(thread.updatedAt)}
           </span>
         </Link>
         {options.manage && (
-          <button
-            type="button"
-            aria-label={`删除会话 ${thread.title}`}
-            title="删除会话"
-            className="absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-label-3 opacity-0 transition-colors hover:bg-hover hover:text-label-1 group-hover/thread:opacity-100"
-            onClick={() => setConfirmTarget({ kind: "thread", id: thread.id, name: thread.title, active })}
+          <div
+            className={cn(
+              "absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity",
+              active
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0 group-hover/thread:pointer-events-auto group-hover/thread:opacity-100 group-focus-within/thread:pointer-events-auto group-focus-within/thread:opacity-100",
+            )}
           >
-            <Trash2 className="size-3.5" strokeWidth={1.8} />
-          </button>
+            <button
+              type="button"
+              aria-label={pinned ? `取消置顶 ${thread.title}` : `置顶 ${thread.title}`}
+              title={pinned ? "取消置顶" : "置顶"}
+              className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
+              onClick={() => void togglePinned(thread)}
+            >
+              {pinned
+                ? <PinOff className="size-3.5" strokeWidth={1.8} />
+                : <Pin className="size-3.5" strokeWidth={1.8} />}
+            </button>
+            <button
+              type="button"
+              aria-label={`归档会话 ${thread.title}`}
+              title="归档"
+              className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
+              onClick={() => void archiveThread(thread)}
+            >
+              <Archive className="size-3.5" strokeWidth={1.8} />
+            </button>
+          </div>
         )}
       </div>
     );
@@ -270,12 +340,23 @@ export function Sidebar({
         </div>
       )}
 
+      {actionError && (
+        <div role="alert" className="mx-1 mb-1.5 rounded-[8px] bg-red-50 px-2 py-1.5 text-[12px] leading-4 text-red-700 dark:bg-red-950/40 dark:text-red-300">
+          {actionError}
+        </div>
+      )}
+
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
         {projects
           .filter((project) => !keyword || threadsByProject(project.id).some(matches))
           .map((project) => {
-            const projectThreads = threadsByProject(project.id).filter(matches);
+            const matchedThreads = threadsByProject(project.id).filter(matches);
             const collapsed = !keyword && collapsedProjects.has(project.id);
+            const expanded = keyword !== "" || expandedProjects.has(project.id);
+            const { visible: projectThreads, hiddenCount } = visibleSidebarThreads(
+              matchedThreads,
+              expanded,
+            );
             return (
               <section key={project.id} className="pb-1">
                 <div className="group/workspace relative">
@@ -310,7 +391,19 @@ export function Sidebar({
                   </button>
                 </div>
                 {!collapsed && projectThreads.map((thread) => renderThread(thread, { manage: thread.access === "owner" }))}
-                {!collapsed && projectThreads.length === 0 && !keyword && (
+                {!collapsed && !keyword && matchedThreads.length > SIDEBAR_THREAD_LIMIT && (
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    className="flex h-7 w-full items-center gap-1 rounded-[10px] py-1 pl-[30px] pr-2 text-left text-[12px] leading-5 text-label-3 transition-colors hover:bg-hover hover:text-label-1"
+                    onClick={() => toggleExpanded(project.id)}
+                  >
+                    {expanded
+                      ? <><ChevronUp className="size-3.5" strokeWidth={1.8} />收起</>
+                      : <><ChevronDown className="size-3.5" strokeWidth={1.8} />显示更多（{hiddenCount}）</>}
+                  </button>
+                )}
+                {!collapsed && matchedThreads.length === 0 && !keyword && (
                   <div className="px-2 py-1 pl-[30px] text-[12px] leading-5 text-label-3">还没有会话</div>
                 )}
               </section>
@@ -444,24 +537,12 @@ export function Sidebar({
       <ConfirmDialog
         open={confirmTarget !== null}
         onOpenChange={(open) => !open && setConfirmTarget(null)}
-        title={confirmTarget?.kind === "project" ? "移除工作区？" : "删除会话？"}
-        description={
-          confirmTarget?.kind === "project"
-            ? `将移除“${confirmTarget.name}”，不会删除磁盘文件。`
-            : `会话“${confirmTarget?.name ?? ""}”及其历史记录将被删除。`
-        }
-        confirmLabel={confirmTarget?.kind === "project" ? "移除" : "删除"}
+        title="移除工作区？"
+        description={confirmTarget ? `将移除“${confirmTarget.name}”，其中的归档会话也会被删除；磁盘文件不会删除。` : ""}
+        confirmLabel="移除"
         destructive
         onConfirm={() => {
-          if (confirmTarget?.kind === "project") {
-            void removeWorkspace(confirmTarget.id);
-          } else if (confirmTarget?.kind === "thread") {
-            void deleteThread(confirmTarget.id);
-            if (confirmTarget.active) {
-              navigate("/");
-              onNavigate?.();
-            }
-          }
+          if (confirmTarget) void removeWorkspace(confirmTarget.id);
           setConfirmTarget(null);
         }}
       />

@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Blocks, Cable, Cpu, Settings2, Users } from "lucide-react";
+import { Archive, Blocks, Cable, Cpu, Settings2, Users } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useApp } from "../../lib/store";
 import { buttonVariants } from "@/components/ui/button";
@@ -17,10 +17,14 @@ export function SettingsLayout() {
     user?.role === "admin"
       ? [
           { to: "general", label: "通用", icon: Settings2 },
+          { to: "archived", label: "归档对话", icon: Archive },
           ...adminNav,
           ...(!localMode ? [{ to: "users", label: "用户管理", icon: Users }] : []),
         ]
-      : [{ to: "general", label: "通用", icon: Settings2 }];
+      : [
+          { to: "general", label: "通用", icon: Settings2 },
+          { to: "archived", label: "归档对话", icon: Archive },
+        ];
 
   return (
     <div className="flex h-full flex-col sm:flex-row">

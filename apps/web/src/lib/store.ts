@@ -53,7 +53,6 @@ import {
 } from "./client";
 import {
   clearComposerDraft,
-  threadComposerDraftKey,
   updateComposerDraft,
   type ComposerDrafts,
 } from "./composerDrafts";
@@ -256,7 +255,8 @@ interface AppState {
     initialTurn?: TurnInput,
     runtime?: AgentRuntime,
   ) => Promise<ThreadMeta>;
-  deleteThread: (threadId: string) => Promise<void>;
+  setThreadPinned: (threadId: string, pinned: boolean) => Promise<ThreadMeta>;
+  setThreadArchived: (threadId: string, archived: boolean) => Promise<ThreadMeta>;
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
   updateThreadOverview: (threadId: string, overview: ThreadOverviewAnnotations) => Promise<void>;
   setThreadAgentMode: (threadId: string, agentMode: AgentMode) => Promise<void>;
@@ -299,13 +299,23 @@ interface AppState {
   setShareDialogOpen: (open: boolean) => void;
 }
 
-function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
+export function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
   switch (event.kind) {
     case "snapshot": {
+      const inferred = event.running && !event.activeTurn
+        ? inferActiveTurn(event.messages, event.activities, event.subagents ?? [])
+        : { turnId: null, startedAt: null };
+      const turnId = event.activeTurn?.turnId ?? event.live?.turnId ?? inferred.turnId;
+      const previousStartedAt = state.running && state.activeTurnId === turnId
+        ? state.activeTurnStartedAt
+        : null;
       const activeTurn = event.running
-        ? event.live
-          ? { turnId: event.live.turnId, startedAt: event.live.startedAt }
-          : inferActiveTurn(event.messages, event.activities, event.subagents ?? [])
+        ? {
+            turnId,
+            startedAt: event.activeTurn?.startedAt ?? previousStartedAt ??
+              (inferred.turnId === turnId ? inferred.startedAt : null) ??
+              event.live?.startedAt ?? null,
+          }
         : { turnId: null, startedAt: null };
       return {
         ...state,
@@ -330,9 +340,8 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         ...state,
         running: true,
         activeTurnId: event.turnId,
-        activeTurnStartedAt: state.running
-          ? (state.activeTurnStartedAt ?? Date.now())
-          : Date.now(),
+        activeTurnStartedAt: event.startedAt ??
+          (state.running ? state.activeTurnStartedAt : null) ?? Date.now(),
         live: { text: "", reasoning: "", turnId: event.turnId },
         pendingPermission: null,
         error: null,
@@ -353,7 +362,7 @@ function applyThreadEvent(state: ThreadState, event: ThreadEvent): ThreadState {
         activeTurnId: state.running ? event.message.turnId : state.activeTurnId,
         activeTurnStartedAt:
           state.running && event.message.role === "user"
-            ? event.message.createdAt
+            ? (state.activeTurnStartedAt ?? event.message.createdAt)
             : state.activeTurnStartedAt,
         messages: state.messages.some((message) => message.id === event.message.id)
           ? state.messages.map((message) =>
@@ -854,20 +863,28 @@ export const useApp = create<AppState>((set, get) => {
       return thread;
     },
 
-    deleteThread: async (threadId) => {
-      await request({ type: "thread.delete", threadId });
-      set((s) => {
-        const threadStates = { ...s.threadStates };
-        delete threadStates[threadId];
-        return {
-          threadStates,
-          composerDrafts: updateComposerDraft(
-            s.composerDrafts,
-            threadComposerDraftKey(threadId),
-            "",
-          ),
-        };
+    setThreadPinned: async (threadId, pinned) => {
+      const updated = await request<ThreadMeta>({
+        type: "thread.setPinned",
+        threadId,
+        pinned,
       });
+      set((state) => ({
+        threads: state.threads.map((thread) => (thread.id === threadId ? updated : thread)),
+      }));
+      return updated;
+    },
+
+    setThreadArchived: async (threadId, archived) => {
+      const updated = await request<ThreadMeta>({
+        type: "thread.setArchived",
+        threadId,
+        archived,
+      });
+      set((state) => ({
+        threads: state.threads.map((thread) => (thread.id === threadId ? updated : thread)),
+      }));
+      return updated;
     },
 
     setThreadModel: async (threadId, model) => {

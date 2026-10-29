@@ -66,6 +66,7 @@ interface ThreadRuntime {
   reconfiguring: Promise<void> | null;
   sdkSessionEstablished: boolean;
   currentTurnId: string | null;
+  currentTurnStartedAt: number | null;
   pendingAssistant: {
     messageId: string | null;
     turnId: string;
@@ -391,6 +392,7 @@ export class CopilotManager {
         reconfiguring: null,
         sdkSessionEstablished: false,
         currentTurnId: null,
+        currentTurnStartedAt: null,
         pendingAssistant: null,
         pendingUserAttachments: [],
         pendingUserAuthorId: "",
@@ -905,6 +907,7 @@ export class CopilotManager {
     this.commitPendingAssistant(rt);
     rt.running = false;
     rt.currentTurnId = null;
+    rt.currentTurnStartedAt = null;
     this.emit(rt.threadId, { kind: "turn.end", turnId });
     this.persistRuntimeStats(rt);
     this.shellChanged();
@@ -967,7 +970,8 @@ export class CopilotManager {
         rt.currentTurnId = turnId;
         if (!rt.running) {
           rt.running = true;
-          this.emit(threadId, { kind: "turn.start", turnId });
+          rt.currentTurnStartedAt = ts;
+          this.emit(threadId, { kind: "turn.start", turnId, startedAt: ts });
           this.shellChanged();
         }
         break;
@@ -1431,8 +1435,10 @@ export class CopilotManager {
   }
 
   private async rebuildHistory(rt: ThreadRuntime, session: CopilotSession) {
+    let currentTurnId: string | null | undefined;
     try {
       const events = await session.getEvents();
+      currentTurnId = rt.currentTurnId;
       rt.pendingAssistant = null;
       rt.subagents = [];
       rt.lastError = null;
@@ -1688,9 +1694,10 @@ export class CopilotManager {
           activity.endedAt = lastTimestamp;
         }
       }
-      rt.currentTurnId = null;
     } catch (err) {
       console.error("rebuild history failed", err);
+    } finally {
+      if (currentTurnId !== undefined) rt.currentTurnId = currentTurnId;
     }
   }
 
@@ -1723,6 +1730,9 @@ export class CopilotManager {
       activities: rt.activities,
       subagents: rt.subagents.map(copySubagent),
       running: rt.running,
+      activeTurn: rt.running && rt.currentTurnId && rt.currentTurnStartedAt !== null
+        ? { turnId: rt.currentTurnId, startedAt: rt.currentTurnStartedAt }
+        : undefined,
       contextUsage: rt.contextUsage,
       runtimeStats: rt.runtimeStats,
       error: rt.lastError ?? undefined,
@@ -1810,6 +1820,7 @@ export class CopilotManager {
     rt.lastError = null;
     rt.running = true;
     rt.currentTurnId = turnId;
+    rt.currentTurnStartedAt = Date.now();
     rt.pendingAssistant = null;
     rt.pendingUserAttachments = attachments?.flatMap((attachment): MessageAttachment[] => {
       const id = attachment.imageId ?? attachment.fileId;
@@ -1819,7 +1830,7 @@ export class CopilotManager {
         kind, ownerId: actorId }];
     }) ?? [];
     rt.pendingUserAuthorId = actorId;
-    this.emit(threadId, { kind: "turn.start", turnId });
+    this.emit(threadId, { kind: "turn.start", turnId, startedAt: rt.currentTurnStartedAt });
     this.shellChanged();
     let accepted = false;
     try {

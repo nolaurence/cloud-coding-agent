@@ -13,6 +13,7 @@ import { McpSettings } from "./pages/settings/McpSettings";
 import { SkillsSettings } from "./pages/settings/SkillsSettings";
 import { PluginsPage } from "./pages/PluginsPage";
 import { UsersSettings } from "./pages/settings/UsersSettings";
+import { ArchivedThreadsSettings } from "./pages/settings/ArchivedThreadsSettings";
 import { ShareThreadPage } from "./pages/ShareThreadPage";
 import { useApp } from "./lib/store";
 import { useTheme } from "./lib/theme";
@@ -80,6 +81,7 @@ export default function App() {
         <Route path="settings" element={<SettingsLayout />}>
           <Route index element={<Navigate to="general" replace />} />
           <Route path="general" element={<GeneralSettings />} />
+          <Route path="archived" element={<ArchivedThreadsSettings />} />
           <Route
             path="providers"
             element={

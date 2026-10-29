@@ -1,5 +1,5 @@
 import { type CSSProperties, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, ArrowLeftRight, FolderGit2, ListChecks, PanelRightOpen, Share2 } from "lucide-react";
+import { AlertCircle, Archive, ArrowLeft, ArrowLeftRight, FolderGit2, ListChecks, PanelRightOpen, Share2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { resolveThreadModel, resolveThreadModelProviderId } from "@cca/protocol";
 import type { AgentMode, ModelRef, PermissionMode } from "@cca/protocol";
@@ -67,8 +67,9 @@ export function ThreadPage() {
   };
   const project = projects.find((candidate) => candidate.id === thread?.projectId);
   const canManageThread = thread?.access === "owner";
+  const archived = Boolean(thread?.archived);
   const legacySession = Boolean(thread && thread.runtime !== "codex" && thread.runtime !== "dsh");
-  const canInteract = !legacySession && (canManageThread || thread?.access === "collaborate");
+  const canInteract = !legacySession && !archived && (canManageThread || thread?.access === "collaborate");
   const [switchingModel, setSwitchingModel] = useState(false);
   const [switchingMode, setSwitchingMode] = useState(false);
   const [switchingPermission, setSwitchingPermission] = useState(false);
@@ -329,6 +330,12 @@ export function ThreadPage() {
             )}
           </div>
         </header>
+        {archived && (
+          <p className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-100">
+            <Archive className="h-4 w-4 shrink-0" strokeWidth={1.8} />
+            该会话已归档，仅可查看。可在「设置 → 归档对话」中恢复后继续。
+          </p>
+        )}
         {legacySession && <p className="border-b px-4 py-2 text-sm text-muted-foreground">旧 Copilot 会话仅保留历史浏览，请新建 Codex 或 DSH 会话继续工作。</p>}
         {thread?.runtime === "dsh" && (
           <div role="tablist" aria-label="会话视图" className="flex shrink-0 gap-4 border-b px-4">

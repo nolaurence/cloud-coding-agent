@@ -8,6 +8,7 @@
 - **对话流**(自研,非 assistant-ui):流式输出、思考过程折叠、工具调用时间线、Markdown 渲染
 - **Office 查看器**:工作区内的 DOCX、XLSX、PPTX 可在右侧 tab 中只读预览
 - **工作台布局**:右上角按钮可将对话区与工作区面板互换,位置会在本机记住
+- **会话管理**:侧栏每个工作区默认展示 6 个会话,可展开/收起和置顶;会话删除改为归档,「设置 → 归档对话」按工作区分组、按归档时间倒序展示,归档满 30 天后自动删除
 - **模型配置**:支持 OpenAI(Chat Completions)与 OpenAI Responses 两种 wire 协议,以及 Azure 的 OpenAI 兼容接口;BYOK,会话内可切换同一提供方的模型。暂不支持 Anthropic 原生 Messages 协议
 - **MCP 模块**:本地 stdio / 远程 HTTP MCP 服务器管理,支持平台级配置和 workspace 根目录 `.mcp.json`,按工具白名单启用
 - **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用

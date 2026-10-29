@@ -309,6 +309,10 @@ export interface ThreadMeta {
   createdAt: number;
   updatedAt: number;
   archived: boolean;
+  /** 归档时间。归档满 30 天后由服务端清理。 */
+  archivedAt?: number;
+  /** 置顶时间。侧栏会优先展示置顶会话。 */
+  pinnedAt?: number;
   contextUsage?: ContextUsage;
   runtimeStats?: RuntimeStats;
   access?: ThreadAccess;
@@ -324,6 +328,26 @@ export interface ThreadMeta {
 
 export interface ThreadCreateResult extends ThreadMeta {
   initialTurnAccepted?: true;
+}
+
+/** 归档会话的保留时长:归档满 30 天后自动删除。 */
+export const ARCHIVED_THREAD_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function archivedThreadExpiresAt(
+  thread: Pick<ThreadMeta, "archivedAt">,
+): number | null {
+  return typeof thread.archivedAt === "number"
+    ? thread.archivedAt + ARCHIVED_THREAD_RETENTION_MS
+    : null;
+}
+
+export function isArchivedThreadExpired(
+  thread: Pick<ThreadMeta, "archived" | "archivedAt">,
+  now = Date.now(),
+): boolean {
+  if (!thread.archived) return false;
+  const expiresAt = archivedThreadExpiresAt(thread);
+  return expiresAt !== null && expiresAt <= now;
 }
 
 export function resolveThreadModelProviderId(
@@ -743,13 +767,14 @@ export type ThreadEvent =
       activities: ToolActivity[];
       subagents?: SubagentActivity[];
       running: boolean;
+      activeTurn?: { turnId: string; startedAt: number };
       contextUsage?: ContextUsage;
       runtimeStats?: RuntimeStats;
       error?: string;
       live?: { text: string; reasoning: string; turnId: string; startedAt: number };
       pendingPermission?: PermissionRequest;
     }
-  | { kind: "turn.start"; turnId: string }
+  | { kind: "turn.start"; turnId: string; startedAt?: number }
   | { kind: "turn.end"; turnId: string }
   | { kind: "user.message"; message: ChatMessage }
   | { kind: "assistant.delta"; messageId: string; turnId: string; delta: string }
@@ -793,6 +818,8 @@ export type ClientMessage =
       initialTurn?: TurnInput;
     }
   | { id: string; type: "thread.delete"; threadId: string }
+  | { id: string; type: "thread.setPinned"; threadId: string; pinned: boolean }
+  | { id: string; type: "thread.setArchived"; threadId: string; archived: boolean }
   | { id: string; type: "thread.setModel"; threadId: string; model: ModelRef }
   | { id: string; type: "thread.overview.update"; threadId: string; overview: ThreadOverviewAnnotations }
   | { id: string; type: "runtime.resources"; threadId: string }

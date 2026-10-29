@@ -42,6 +42,7 @@ import {
   flattenModels,
   isAgentMode,
   isAgentRuntime,
+  isArchivedThreadExpired,
   isPermissionDecision,
   isPermissionMode,
   isReasoningEffort,
@@ -117,6 +118,7 @@ export class Hub {
       if (conn.user.username === ownerId) this.send(conn, { type: "terminal.event", event });
     }
   });
+  private archiveSweepTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.manager.onThreadEvent((threadId, event) => {
@@ -132,6 +134,11 @@ export class Hub {
     void this.connectors.applySettings(store.settings.connectors).catch((error) => {
       console.error("[cca] 连接器启动失败", error);
     });
+    this.archiveSweepTimer = setInterval(() => {
+      void this.purgeExpiredArchivedThreads();
+    }, 60 * 60 * 1000);
+    this.archiveSweepTimer.unref();
+    void this.purgeExpiredArchivedThreads();
   }
 
   handleConnection(socket: WebSocket, token: string | undefined) {
@@ -323,6 +330,10 @@ export class Hub {
     };
   }
 
+  private assertNotArchived(thread: ThreadMeta) {
+    if (thread.archived) throw new Error("会话已归档,请先在“设置 > 归档对话”中恢复");
+  }
+
   private requireAdmin(conn: ClientConn) {
     if (conn.user.role !== "admin") throw new Error("仅管理员可以执行此操作");
   }
@@ -440,6 +451,33 @@ export class Hub {
   private broadcastSettings() {
     for (const conn of this.clients) {
       if (conn.shellSubscribed) this.send(conn, { type: "settings", data: this.settingsFor(conn) });
+    }
+  }
+
+  /** 彻底删除会话及其运行时、附件和分享。 */
+  private async deleteThreadCompletely(thread: ThreadMeta): Promise<void> {
+    this.terminals.closeThread(thread.id);
+    await browserPool.stopThread(thread.id);
+    await this.manager.deleteThread(thread.id);
+    removeThreadUploads(thread, store.threads.filter((item) => item.id !== thread.id));
+    await deleteThreadShare(thread.id);
+    store.deleteThread(thread.id);
+    this.reconcileThreadClients(thread.id);
+  }
+
+  /** 删除归档超过 30 天的会话。启动时和每小时各检查一次。 */
+  private async purgeExpiredArchivedThreads(now = Date.now()): Promise<void> {
+    const expired = store.threads.filter((thread) => isArchivedThreadExpired(thread, now));
+    for (const candidate of expired) {
+      const thread = store.getThread(candidate.id);
+      if (!thread || !thread.archived || !isArchivedThreadExpired(thread, now)) continue;
+      if (this.manager.isRunning(thread.id)) continue;
+      try {
+        await this.deleteThreadCompletely(thread);
+        console.log(`[cca] purged archived thread ${thread.id}`);
+      } catch (error) {
+        console.error(`[cca] purge archived thread ${thread.id} failed`, error);
+      }
     }
   }
 
@@ -625,12 +663,15 @@ export class Hub {
         }
         case "workspace.remove": {
           this.requireOwnedProject(conn, msg.projectId);
-          if (store.threads.some((thread) => thread.projectId === msg.projectId)) {
-            throw new Error("请先删除工作区内的会话");
+          const projectThreads = store.threads.filter((thread) => thread.projectId === msg.projectId);
+          if (projectThreads.some((thread) => !thread.archived)) {
+            throw new Error("请先归档或清空工作区内的会话");
           }
           if (store.settings.connectors.some((connector) => connector.projectId === msg.projectId)) {
             throw new Error("请先移除使用该工作区的连接器");
           }
+          // 移除工作区时一并清掉其中的归档会话,避免留下无法访问的历史。
+          for (const thread of projectThreads) await this.deleteThreadCompletely(thread);
           await store.removeProject(msg.projectId);
           this.broadcastShell();
           this.reply(conn, msg.id);
@@ -783,21 +824,62 @@ export class Hub {
         }
         case "thread.delete": {
           const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
-          this.terminals.closeThread(msg.threadId);
-          await browserPool.stopThread(msg.threadId);
-          await this.manager.deleteThread(msg.threadId);
-          if (thread) removeThreadUploads(thread, store.threads.filter((item) => item.id !== thread.id));
-          await deleteThreadShare(msg.threadId);
-          store.deleteThread(msg.threadId);
-          this.reconcileThreadClients(msg.threadId);
+          await this.deleteThreadCompletely(thread);
           this.reply(conn, msg.id);
+          break;
+        }
+        case "thread.setPinned": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          if (typeof msg.pinned !== "boolean") throw new Error("置顶参数无效");
+          this.assertNotArchived(thread);
+          const updated: ThreadMeta = {
+            ...thread,
+            ...(msg.pinned ? { pinnedAt: Date.now() } : { pinnedAt: undefined }),
+          };
+          store.upsertThread(updated);
+          this.broadcastShell();
+          this.reply(conn, msg.id, this.threadMeta(conn, updated));
+          break;
+        }
+        case "thread.setArchived": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          if (typeof msg.archived !== "boolean") throw new Error("归档参数无效");
+          let updated = thread;
+          if (msg.archived) {
+            if (!thread.archived) {
+              if (this.manager.isRunning(thread.id)) {
+                throw new Error("任务仍在运行,请停止或等待完成后再归档");
+              }
+              this.terminals.closeThread(thread.id);
+              await browserPool.stopThread(thread.id);
+              updated = {
+                ...thread,
+                archived: true,
+                archivedAt: Date.now(),
+                pinnedAt: undefined,
+              };
+              store.upsertThread(updated);
+            }
+          } else if (thread.archived) {
+            const { archivedAt: _archivedAt, ...rest } = thread;
+            updated = { ...rest, archived: false };
+            store.upsertThread(updated);
+          }
+          this.broadcastShell();
+          this.reply(conn, msg.id, this.threadMeta(conn, updated));
           break;
         }
         case "thread.setPermissionMode": {
           const thread = store.getThread(msg.threadId);
           if (!thread) throw new Error("会话不存在");
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          this.assertNotArchived(thread);
           if (!isPermissionMode(msg.permissionMode)) throw new Error("权限模式无效");
           await this.manager.setThreadPermissionMode(msg.threadId, msg.permissionMode);
           this.broadcastShell();
@@ -816,6 +898,7 @@ export class Hub {
           const thread = store.getThread(msg.threadId);
           if (!thread) throw new Error("会话不存在");
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          this.assertNotArchived(thread);
           const overview = validateThreadOverview(msg.overview);
           store.upsertThread({ ...thread, overview });
           this.broadcastShell();
@@ -826,6 +909,7 @@ export class Hub {
           const thread = store.getThread(msg.threadId);
           if (!thread) throw new Error("会话不存在");
           if (!this.canInteract(conn, thread)) throw new Error("无权响应权限请求");
+          this.assertNotArchived(thread);
           if (!isPermissionDecision(msg.decision)) throw new Error("权限响应无效");
           this.manager.respondPermission(msg.threadId, msg.requestId, msg.decision);
           this.reply(conn, msg.id);
@@ -835,6 +919,7 @@ export class Hub {
           const thread = store.getThread(msg.threadId);
           if (!thread) throw new Error("会话不存在");
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          this.assertNotArchived(thread);
           if (!isAgentMode(msg.agentMode)) throw new Error("会话模式无效");
           await this.manager.setThreadAgentMode(msg.threadId, msg.agentMode);
           this.broadcastShell();
@@ -845,6 +930,7 @@ export class Hub {
           const thread = store.getThread(msg.threadId);
           if (!thread) throw new Error("会话不存在");
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          this.assertNotArchived(thread);
           const modelProviderId = resolveThreadModelProviderId(
             thread,
             store.settings.defaultModel,
@@ -966,6 +1052,7 @@ export class Hub {
             if (!this.canInteract(conn, store.getThread(msg.threadId))) throw new Error("当前分享仅允许查看");
             const thread = store.getThread(msg.threadId);
             if (!thread) throw new Error("会话不存在");
+            this.assertNotArchived(thread);
             const project = store.projects.find((candidate) => candidate.id === thread.projectId);
             if (!project || project.ownerId !== thread.userId) {
               throw new Error("会话关联的工作区无效");
@@ -988,6 +1075,9 @@ export class Hub {
         }
         case "thread.compact": {
           if (!this.canInteract(conn, store.getThread(msg.threadId))) throw new Error("当前分享仅允许查看");
+          const compactThread = store.getThread(msg.threadId);
+          if (!compactThread) throw new Error("会话不存在");
+          this.assertNotArchived(compactThread);
           const result = await this.manager.compactContext(msg.threadId, conn.user.username);
           this.reply(conn, msg.id, result);
           break;
@@ -1431,6 +1521,10 @@ export class Hub {
   }
 
   async shutdown() {
+    if (this.archiveSweepTimer) {
+      clearInterval(this.archiveSweepTimer);
+      this.archiveSweepTimer = null;
+    }
     this.terminals.shutdown();
     await this.connectors.shutdown();
     await this.manager.shutdown();

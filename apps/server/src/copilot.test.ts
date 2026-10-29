@@ -1081,6 +1081,83 @@ test("clears failed startup state so a message can be retried", async (t) => {
   assert.equal(manager.isRunning(threadId), false);
 });
 
+test("keeps request timing across Codex messages, tool gaps, and reconnect snapshots", async (context) => {
+  const threadId = randomUUID();
+  setupStore(context, threadId);
+  const session = new FakeSession();
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_threadId, event) => emitted.push(event));
+  context.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "检查并修改代码");
+  const start = emitted.find((event) => event.kind === "turn.start");
+  assert.equal(start?.kind, "turn.start");
+  if (start?.kind !== "turn.start") return;
+  assert.equal(typeof start.startedAt, "number");
+  const activeTurn = { turnId: start.turnId, startedAt: start.startedAt };
+  assert.deepEqual(manager.snapshot(threadId).activeTurn, activeTurn);
+
+  const delta = sessionEvent("assistant.message_delta", {
+    messageId: "assistant-first",
+    deltaContent: "先检查代码。",
+  });
+  delta.timestamp = new Date(start.startedAt! + 5_000).toISOString();
+  session.emit(delta);
+  assert.deepEqual(manager.snapshot(threadId).activeTurn, activeTurn);
+  assert.equal(manager.snapshot(threadId).live?.startedAt, start.startedAt! + 5_000);
+
+  session.emit(sessionEvent("assistant.message", {
+    messageId: "assistant-first",
+    content: "先检查代码。",
+  }));
+  assert.equal(manager.snapshot(threadId).live, undefined);
+  assert.deepEqual(manager.snapshot(threadId).activeTurn, activeTurn);
+
+  session.emit(sessionEvent("assistant.turn_start", { turnId: "native-next-step" }));
+  session.emit(sessionEvent("assistant.message_delta", {
+    messageId: "assistant-second",
+    deltaContent: "继续修改。",
+  }));
+  assert.deepEqual(manager.snapshot(threadId).activeTurn, activeTurn);
+
+  session.emit(sessionEvent("session.idle", {}));
+  assert.equal(manager.snapshot(threadId).activeTurn, undefined);
+
+  await manager.sendMessage(threadId, "下一轮任务");
+  assert.notEqual(manager.snapshot(threadId).activeTurn?.turnId, start.turnId);
+  await manager.interrupt(threadId);
+  assert.equal(manager.snapshot(threadId).activeTurn, undefined);
+});
+
+test("preserves active request metadata while rebuilding Codex history on first attach", async (context) => {
+  const threadId = randomUUID();
+  setupStore(context, threadId);
+  const session = new FakeSession([
+    sessionEvent("user.message", { content: "历史问题" }),
+    sessionEvent("assistant.message", { messageId: "historical-answer", content: "历史回答" }),
+    sessionEvent("session.idle", {}),
+  ]);
+  const client = new FakeClient(session);
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  const emitted: ThreadEvent[] = [];
+  manager.onThreadEvent((_threadId, event) => emitted.push(event));
+  context.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "新的问题");
+  const start = emitted.find((event) => event.kind === "turn.start");
+  assert.equal(start?.kind, "turn.start");
+  if (start?.kind !== "turn.start") return;
+  assert.deepEqual(manager.snapshot(threadId).activeTurn, {
+    turnId: start.turnId,
+    startedAt: start.startedAt,
+  });
+
+  session.emit(sessionEvent("user.message", { content: "新的问题" }));
+  assert.equal(manager.snapshot(threadId).messages.at(-1)?.turnId, start.turnId);
+});
+
 test("keeps streamed assistant text in snapshots and after an interrupt", async (t) => {
   const threadId = randomUUID();
   setupStore(t, threadId);
