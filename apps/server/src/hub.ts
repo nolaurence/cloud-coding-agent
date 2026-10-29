@@ -577,6 +577,7 @@ export class Hub {
         ...connector,
         id,
         name,
+        preRelease: connector.preRelease === true,
         appId,
         appSecret,
         projectId,

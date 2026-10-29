@@ -100,6 +100,8 @@ export interface ConnectorConfig {
   name: string;
   platform: ConnectorPlatform;
   enabled: boolean;
+  /** 访问域名为 pre 前缀时新建的连接器默认进入预发环境；旧配置按线上处理。 */
+  preRelease?: boolean;
   appId: string;
   appSecret: string;
   projectId: string;

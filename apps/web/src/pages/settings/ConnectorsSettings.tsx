@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { isPreReleaseHost } from "../../lib/connectorEnvironment";
 
 const statusLabels: Record<ConnectorConnectionState, string> = {
   disabled: "已停用",
@@ -31,12 +32,13 @@ const statusLabels: Record<ConnectorConnectionState, string> = {
   error: "错误",
 };
 
-function emptyConnector(projectId = "", model?: ModelRef): ConnectorConfig {
+function emptyConnector(projectId = "", model?: ModelRef, preRelease = false): ConnectorConfig {
   return {
     id: "",
     name: "",
     platform: "qq",
     enabled: true,
+    preRelease,
     appId: "",
     appSecret: "",
     projectId,
@@ -68,6 +70,7 @@ export function ConnectorsSettings() {
   const [deleting, setDeleting] = useState<ConnectorConfig | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState("");
+  const defaultPreRelease = typeof window !== "undefined" && isPreReleaseHost(window.location.host);
 
   useEffect(() => {
     void refreshConnectorStatuses().catch(() => {});
@@ -77,10 +80,11 @@ export function ConnectorsSettings() {
 
   const openEdit = (connector?: ConnectorConfig) => {
     const fallbackModel = settings.defaultModel ?? models[0]?.ref;
-    const target = connector ?? emptyConnector(projects[0]?.id, fallbackModel);
+    const target = connector ?? emptyConnector(projects[0]?.id, fallbackModel, defaultPreRelease);
     setEditing({
       ...target,
       id: target.id || `connector-${Date.now()}`,
+      preRelease: target.preRelease === true,
       model: { ...target.model },
       allowedUserIds: target.allowedUserIds ? [...target.allowedUserIds] : [],
     });
@@ -192,6 +196,12 @@ export function ConnectorsSettings() {
                     <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal">
                       {connector.platform === "qq" ? "QQ" : "飞书"}
                     </Badge>
+                    <Badge
+                      variant={connector.preRelease ? "default" : "outline"}
+                      className="h-5 px-1.5 text-[10px] font-normal"
+                    >
+                      {connector.preRelease ? "预发" : "线上"}
+                    </Badge>
                   </div>
                   <div className="truncate text-xs text-zinc-500">
                     {project?.name ?? "工作区不存在"} · {model?.label ?? connector.model.modelId}
@@ -246,6 +256,19 @@ export function ConnectorsSettings() {
                 <Switch
                   checked={editing.enabled}
                   onCheckedChange={(enabled) => setEditing({ ...editing, enabled })}
+                />
+              </div>
+            </LabeledField>
+            <LabeledField label="预发环境">
+              <div className="flex h-9 items-center justify-between rounded-md border border-zinc-200 px-3 dark:border-zinc-800">
+                <span className="text-sm">
+                  {editing.preRelease ? "预发环境" : "线上环境"}
+                  <span className="ml-2 text-xs text-zinc-500">按访问域名自动判断，可手动调整</span>
+                </span>
+                <Switch
+                  checked={editing.preRelease === true}
+                  aria-label="预发环境"
+                  onCheckedChange={(preRelease) => setEditing({ ...editing, preRelease })}
                 />
               </div>
             </LabeledField>
