@@ -2,6 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatMessage, ToolActivity } from "@cca/protocol";
 import { currentOverviewStep, overviewArtifacts, overviewChecks, overviewPlan } from "./sessionOverview.js";
+import { inlineOverviewWidth } from "./sessionOverviewLayout.js";
+
+test("inline overview only uses the spare right gutter without narrowing the conversation", () => {
+  for (const width of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 390, 1024, 1280, 1440, 1567]) {
+    assert.equal(inlineOverviewWidth(width), null, `width ${width}`);
+  }
+  for (const width of [1648, 1680, 1920, 2560]) {
+    assert.equal(inlineOverviewWidth(width), 300, `width ${width}`);
+  }
+  assert.equal(inlineOverviewWidth(1568), 260);
+  assert.equal(inlineOverviewWidth(1600), 276);
+  assert.equal(inlineOverviewWidth(1920 - 540 - 8), null);
+  assert.equal(inlineOverviewWidth(2560 - 540 - 8), 300);
+});
 
 function activity(overrides: Partial<ToolActivity> = {}): ToolActivity {
   return { id: "tool-1", turnId: "turn-1", toolName: "update_plan", startedAt: 1, status: "complete", ...overrides };

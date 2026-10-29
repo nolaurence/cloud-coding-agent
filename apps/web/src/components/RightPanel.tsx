@@ -8,6 +8,7 @@ import {
   Gauge,
   Globe2,
   Image as ImageIcon,
+  ListChecks,
   PanelRightClose,
   Plus,
   Presentation,
@@ -27,8 +28,9 @@ import { shouldShowNativeBrowser } from "../lib/browserVisibility";
 import type { ImagePreviewTarget } from "../lib/imagePreview";
 import { ImagePreviewPanel } from "./ImagePreviewPanel";
 import { DocumentPanel } from "./workspace/DocumentPanel";
+import { SessionOverview } from "./SessionOverview";
 
-type StaticPanelTab = "browser" | "terminal" | "files" | "diff" | "context" | "word" | "excel" | "powerpoint";
+type StaticPanelTab = "overview" | "browser" | "terminal" | "files" | "diff" | "context" | "word" | "excel" | "powerpoint";
 
 type PanelTab =
   | { id: StaticPanelTab; kind: "static"; label: string; icon: typeof Globe2 }
@@ -40,6 +42,7 @@ const panelOptions: {
   description: string;
   icon: typeof Globe2;
 }[] = [
+  { id: "overview", label: "会话概览", description: "查看当前目标、结论、任务进度与资源用量。", icon: ListChecks },
   { id: "browser", label: "浏览器", description: "查看 Agent 操作的浏览器。", icon: Globe2 },
   { id: "terminal", label: "终端", description: "在此工作区运行 Shell。", icon: SquareTerminal },
   { id: "files", label: "文件", description: "浏览和编辑工作区文件。", icon: FolderTree },
@@ -57,13 +60,19 @@ export function RightPanel({
   panelVisible,
   imageToOpen,
   tabToOpen,
+  overview,
+  overviewInline = false,
+  onActiveTabChange,
 }: {
   threadId: string;
   projectId?: string;
   onClose: () => void;
   panelVisible: boolean;
   imageToOpen?: ImagePreviewTarget | null;
-  tabToOpen?: { id: "diff"; requestId: number } | null;
+  tabToOpen?: { id: "diff" | "overview"; requestId: number } | null;
+  overview?: { onJump: (turnId: string) => void; onOpenChanges: () => void };
+  overviewInline?: boolean;
+  onActiveTabChange?: (tabId: string | null) => void;
 }) {
   const [openTabs, setOpenTabs] = useState<PanelTab[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
@@ -71,6 +80,9 @@ export function RightPanel({
   const ownsProject = useApp((state) => Boolean(projectId && state.projects.some((candidate) => candidate.id === projectId)));
   const draftOwner = useApp((state) => state.user?.username ?? "anonymous");
   const canManageWorkspace = thread ? thread.access === "owner" : ownsProject;
+  const overviewInTab = Boolean(overview) && !overviewInline;
+  const options = panelOptions.filter((option) => option.id !== "overview" || overviewInTab);
+  const visibleTabs = openTabs.filter((tab) => tab.id !== "overview" || overviewInTab);
 
   const openTab = (tabId: StaticPanelTab) => {
     const option = panelOptions.find((candidate) => candidate.id === tabId);
@@ -104,20 +116,43 @@ export function RightPanel({
   }, [imageToOpen]);
 
   const closeTab = (tabId: string) => {
-    const index = openTabs.findIndex((tab) => tab.id === tabId);
+    const index = visibleTabs.findIndex((tab) => tab.id === tabId);
     if (index < 0) return;
     const next = openTabs.filter((tab) => tab.id !== tabId);
     setOpenTabs(next);
-    if (activeTab === tabId) setActiveTab(next[index]?.id ?? next[index - 1]?.id ?? null);
+    const remaining = next.filter((tab) => tab.id !== "overview" || overviewInTab);
+    if (activeTab === tabId) setActiveTab(remaining[index]?.id ?? remaining[index - 1]?.id ?? null);
   };
 
   useEffect(() => {
     if (tabToOpen) openTab(tabToOpen.id);
   }, [tabToOpen]);
 
+  useEffect(() => {
+    if (!overviewInTab) return;
+    const option = panelOptions.find((candidate) => candidate.id === "overview")!;
+    setOpenTabs((current) => current.some((tab) => tab.id === "overview")
+      ? current
+      : [{ id: option.id, kind: "static", label: option.label, icon: option.icon }, ...current]);
+  }, [overviewInTab]);
+
+  useEffect(() => {
+    if (!panelVisible && !overviewInTab && activeTab === "overview") {
+      setActiveTab(openTabs.find((tab) => tab.id !== "overview")?.id ?? null);
+    }
+  }, [panelVisible, overviewInTab, activeTab, openTabs]);
+
+  useEffect(() => {
+    onActiveTabChange?.(activeTab);
+  }, [activeTab, onActiveTabChange]);
+
   const renderPanel = (tab: PanelTab) => {
     if (tab.kind === "image") return <ImagePreviewPanel image={tab.image} />;
     switch (tab.id) {
+      case "overview":
+        return panelVisible && activeTab === "overview" && overview
+          ? <SessionOverview threadId={threadId} onJump={overview.onJump} onOpenChanges={overview.onOpenChanges} />
+          : null;
       case "browser":
         return <BrowserPanel threadId={threadId} visible={shouldShowNativeBrowser(panelVisible, activeTab)} />;
       case "terminal":
@@ -159,7 +194,7 @@ export function RightPanel({
       <div className="flex h-12 shrink-0 items-center gap-1 border-b border-zinc-200 px-2 dark:border-zinc-800">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           <TabsList variant="line" className="h-10 min-w-0 max-w-[calc(100%_-_2rem)] flex-none justify-start gap-1 overflow-x-auto overflow-y-hidden rounded-none p-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {openTabs.map((item) => {
+            {visibleTabs.map((item) => {
               const selected = activeTab === item.id;
               return (
                 <div
@@ -188,16 +223,16 @@ export function RightPanel({
               );
             })}
           </TabsList>
-          <PanelPicker openTabs={openTabs} onSelect={openTab} />
+          <PanelPicker openTabs={visibleTabs} options={options} onSelect={openTab} />
         </div>
         <Button type="button" variant="ghost" size="icon-sm" aria-label="关闭面板" title="关闭面板" onClick={onClose}>
           <PanelRightClose className="h-4 w-4" />
         </Button>
       </div>
       <div className="min-h-0 flex-1">
-        {openTabs.length === 0 ? (
-          <PanelEmptyState onSelect={openTab} />
-        ) : openTabs.map((tab) => (
+        {!visibleTabs.some((tab) => tab.id === activeTab) ? (
+          <PanelEmptyState options={options} onSelect={openTab} />
+        ) : visibleTabs.map((tab) => (
           <TabsContent
             key={tab.id}
             value={tab.id}
@@ -214,9 +249,11 @@ export function RightPanel({
 
 function PanelPicker({
   openTabs,
+  options,
   onSelect,
 }: {
   openTabs: PanelTab[];
+  options: typeof panelOptions;
   onSelect: (tab: StaticPanelTab) => void;
 }) {
   return (
@@ -232,7 +269,7 @@ function PanelPicker({
           align="start"
           className="z-50 min-w-44 rounded-lg bg-white p-1.5 text-zinc-900 shadow-lg ring-1 ring-zinc-950/10 outline-none dark:bg-zinc-900 dark:text-zinc-100 dark:ring-white/10"
         >
-          {panelOptions.map((item) => (
+          {options.map((item) => (
             <DropdownMenu.Item
               key={item.id}
               className="flex h-9 cursor-default select-none items-center gap-2 rounded-md px-2 text-sm outline-none data-[highlighted]:bg-zinc-100 dark:data-[highlighted]:bg-zinc-800"
@@ -249,7 +286,7 @@ function PanelPicker({
   );
 }
 
-function PanelEmptyState({ onSelect }: { onSelect: (tab: StaticPanelTab) => void }) {
+function PanelEmptyState({ options, onSelect }: { options: typeof panelOptions; onSelect: (tab: StaticPanelTab) => void }) {
   return (
     <div className="flex h-full min-h-0 items-center justify-center overflow-y-auto p-5 sm:p-8">
       <div className="w-full max-w-2xl">
@@ -258,7 +295,7 @@ function PanelEmptyState({ onSelect }: { onSelect: (tab: StaticPanelTab) => void
           <p className="mt-1 text-xs text-zinc-500">选择要在右侧显示的内容</p>
         </div>
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(13rem,100%),1fr))] gap-2.5">
-          {panelOptions.map((item) => (
+          {options.map((item) => (
             <button
               key={item.id}
               type="button"

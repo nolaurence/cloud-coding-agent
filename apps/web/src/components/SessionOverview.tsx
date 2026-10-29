@@ -119,8 +119,8 @@ function ResourceCard({ threadId }: { threadId: string }) {
   </OverviewSection>;
 }
 
-export function SessionOverview({ threadId, onClose, onJump, onOpenChanges }: {
-  threadId: string; onClose: () => void; onJump: (turnId: string) => void; onOpenChanges: () => void;
+export function SessionOverview({ threadId, onClose, onJump, onOpenChanges, inline = false }: {
+  threadId: string; onClose?: () => void; onJump: (turnId: string) => void; onOpenChanges: () => void; inline?: boolean;
 }) {
   const state = useThreadState(threadId);
   const thread = useApp((app) => app.threads.find((candidate) => candidate.id === threadId));
@@ -163,18 +163,15 @@ export function SessionOverview({ threadId, onClose, onJump, onOpenChanges }: {
     catch (cause) { setError(cause instanceof Error ? cause.message : "授权失败"); }
     finally { setResponding(false); }
   };
-  return <aside aria-label="会话概览" className="flex h-full min-h-0 flex-col bg-background">
-    <div className="flex h-14 shrink-0 items-center justify-between px-4">
-      <h2 className="text-[12px] font-medium text-label-2" title="基于已加载的消息与工具事件，不额外调用模型。编辑的目标与结论随会话保存。">会话概览</h2>
-      <OverviewAction aria-label="关闭会话概览" onClick={onClose}><X /></OverviewAction>
-    </div>
-    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 [scrollbar-width:thin]">
+  return <aside aria-label="会话概览" className={`flex min-h-0 flex-col ${inline ? "max-h-full" : "h-full bg-background"}`}>
+    <div className={`min-h-0 overflow-y-auto [scrollbar-width:thin] ${inline ? "" : "flex-1 p-3"}`}>
       {error && <p role="alert" className="mb-2 rounded-lg border border-destructive/20 p-2 text-[12px] text-destructive">{error}</p>}
       <div data-slot="overview-surface" className="divide-y divide-line-2 overflow-hidden rounded-xl border border-line-2 bg-background shadow-[0_1px_4px_rgb(0_0_0/0.06)] dark:shadow-none">
       <OverviewSection title="当前概况" actions={
         <>
           <span title={status} aria-label={status} className="flex size-7 items-center justify-center text-label-3"><Activity className={`size-3.5 ${state.running ? "animate-pulse text-label-1" : ""}`} /></span>
           <OverviewAction disabled={saving || !connected} aria-label="编辑任务目标" onClick={() => setEditing("goal")}><Pencil /></OverviewAction>
+          {onClose && <OverviewAction aria-label="关闭会话概览" onClick={onClose}><X /></OverviewAction>}
         </>
       }>
         {editing === "goal" ? <Editor initial={goal} label="任务目标" saving={saving} onSave={(text) => void save({ goal: text })} onCancel={() => setEditing(null)} /> : <p className="line-clamp-2 whitespace-pre-wrap break-words text-label-1" title={goal}>{goal}</p>}
