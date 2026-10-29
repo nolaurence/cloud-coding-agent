@@ -6,7 +6,6 @@ import {
   ChevronRight,
   RotateCcw,
   Search,
-  Sparkles,
 } from "lucide-react";
 import { Popover, Slider } from "radix-ui";
 import {
@@ -272,12 +271,6 @@ export function ComposerModelPicker({
                   </div>
                 </>
               ) : <p className="composer-model-empty">此模型使用默认推理设置</p>}
-              {onAgentModeChange && (
-                <div className="composer-mode-note">
-                  <Sparkles className="size-3.5" aria-hidden="true" />
-                  <span>Ultra</span><span>暂不支持</span>
-                </div>
-              )}
             </div>
           )}
         </Popover.Content>
