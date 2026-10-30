@@ -116,6 +116,38 @@ test("selecting attachments starts image and file uploads immediately", async (t
   assert.deepEqual(f.deleted(), []);
 });
 
+test("accepts more than four images in one selection", async (context) => {
+  const attachmentFixture = fixture(context);
+  const photos = Array.from({ length: 8 }, (_value, index) => image(`photo-${index}.png`));
+
+  assert.equal(attachmentFixture.composer().addFiles(photos), "");
+  assert.equal(attachmentFixture.uploads.length, photos.length);
+  assert.deepEqual(attachmentFixture.composer().attachments.map(({ file }) => file), photos);
+  assert.ok(attachmentFixture.requests.every(({ url }) => url === "/api/uploads/images"));
+
+  await Promise.all(photos.map((_photo, index) => attachmentFixture.succeed(index, `image-${index}`)));
+
+  assert.ok(attachmentFixture.composer().attachments.every(({ status }) => status === "ready"));
+});
+
+test("accepts additional images when a draft already has four images", async (context) => {
+  const attachmentFixture = fixture(context);
+  const initialPhotos = Array.from({ length: 4 }, (_value, index) => image(`initial-${index}.png`));
+  const addedPhotos = Array.from({ length: 3 }, (_value, index) => image(`added-${index}.png`));
+
+  assert.equal(attachmentFixture.composer().addFiles(initialPhotos), "");
+  await Promise.all(initialPhotos.map((_photo, index) => attachmentFixture.succeed(index, `initial-${index}`)));
+  assert.equal(attachmentFixture.composer().addFiles(addedPhotos), "");
+
+  const photos = [...initialPhotos, ...addedPhotos];
+  assert.equal(attachmentFixture.uploads.length, photos.length);
+  assert.deepEqual(attachmentFixture.composer().attachments.map(({ file }) => file), photos);
+
+  await Promise.all(addedPhotos.map((_photo, index) => attachmentFixture.succeed(initialPhotos.length + index, `added-${index}`)));
+
+  assert.ok(attachmentFixture.composer().attachments.every(({ status }) => status === "ready"));
+});
+
 test("drafts keep their own attachments when uploads finish after switching contexts", async (t) => {
   const f = fixture(t);
   f.composer("new-chat").addFiles([document("new.txt")]);

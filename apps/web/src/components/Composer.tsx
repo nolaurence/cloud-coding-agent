@@ -604,7 +604,7 @@ export function Composer({
           <div className="composer-drop-overlay" role="status">
             <Upload className="size-7" strokeWidth={1.5} />
             <strong>{submitting || compacting ? "请稍候再添加附件" : "松开以添加文件或图片"}</strong>
-            <span>文件最大 20 MB · 图片最大 10 MB，最多 4 张</span>
+            <span>文件最大 20 MB · 图片最大 10 MB</span>
           </div>
         )}
         {draftAttachments.length > 0 && (
@@ -748,7 +748,7 @@ export function Composer({
                     <ImagePlus aria-hidden="true" />
                     <span>
                       <strong>添加图片</strong>
-                      <small>JPG、PNG、GIF、WebP，最多 4 张，每张 10 MB</small>
+                      <small>JPG、PNG、GIF、WebP，每张最大 10 MB</small>
                     </span>
                   </DropdownMenu.Item>
                   <DropdownMenu.Label className="composer-menu-heading">工作区与技能</DropdownMenu.Label>

@@ -3,7 +3,6 @@ import { create } from "zustand";
 import { discardUpload, uploadFile, uploadImage } from "./client.js";
 
 export const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
-export const MAX_IMAGES = 4;
 export const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 export const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
@@ -76,7 +75,6 @@ export function useComposerAttachments(draftKey: string) {
   const attachments = useAttachmentStore((state) => state.drafts[draftKey] ?? EMPTY_ATTACHMENTS);
 
   const addFiles = (files: Iterable<File>): string => {
-    let imageCount = attachmentsFor(draftKey).filter((item) => item.kind === "image").length;
     const added: ComposerAttachment[] = [];
     const errors: string[] = [];
     for (const input of files) {
@@ -95,11 +93,6 @@ export function useComposerAttachments(draftKey: string) {
         errors.push(`${file.name} 超过 ${limit / (1024 * 1024)} MB`);
         continue;
       }
-      if (kind === "image" && imageCount >= MAX_IMAGES) {
-        errors.push(`一次最多添加 ${MAX_IMAGES} 张图片`);
-        continue;
-      }
-      if (kind === "image") imageCount++;
       added.push({
         id: `attachment-${++nextAttachmentId}`,
         file,
