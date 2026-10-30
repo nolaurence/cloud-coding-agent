@@ -112,7 +112,7 @@ export function AppLayout() {
         show="windows"
         className="fixed right-1 top-1 z-50"
       />
-      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:my-2 md:mr-2 md:rounded-[12px] md:border md:border-line-2 md:shadow-[0_2px_12px_rgba(15,23,42,0.08)] md:dark:shadow-[0_2px_12px_rgba(0,0,0,0.32)]">
+      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:my-0 md:mr-0 md:rounded-[12px] md:border md:border-line-2 md:shadow-[0_2px_12px_rgba(15,23,42,0.08)] md:dark:shadow-[0_2px_12px_rgba(0,0,0,0.32)]">
         {!sidebarCollapsed && (
           <div className="hidden h-full min-h-0 shrink-0 md:flex">
             <Sidebar />
