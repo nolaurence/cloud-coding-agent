@@ -56,6 +56,13 @@ import {
   updateComposerDraft,
   type ComposerDrafts,
 } from "./composerDrafts";
+import {
+  loadWorkspaceOrder,
+  moveSidebarWorkspace,
+  saveWorkspaceOrder,
+  sortSidebarWorkspaces,
+  type WorkspaceDropPlacement,
+} from "./workspaceOrder";
 
 const TOKEN_KEY = "cca-token";
 const SHARE_TOKENS_KEY = "cca-thread-share-tokens";
@@ -214,6 +221,7 @@ interface AppState {
   authReady: boolean;
   connected: boolean;
   projects: Workspace[];
+  workspaceOrder: string[];
   threads: ThreadMeta[];
   runningThreadIds: string[];
   settings: AppSettings | null;
@@ -247,6 +255,7 @@ interface AppState {
   createWorkspace: (name: string, path?: string) => Promise<Workspace>;
   selectLocalFolder: () => Promise<string | null>;
   removeWorkspace: (projectId: string) => Promise<void>;
+  reorderWorkspaces: (sourceId: string, targetId: string, placement: WorkspaceDropPlacement) => void;
   createThread: (
     projectId: string,
     model?: ModelRef,
@@ -621,6 +630,7 @@ export const useApp = create<AppState>((set, get) => {
     set({
       connected: false,
       projects: [],
+      workspaceOrder: [],
       threads: [],
       runningThreadIds: [],
       settings: null,
@@ -642,7 +652,7 @@ export const useApp = create<AppState>((set, get) => {
 
   function startSession(token: string, user: AuthUser) {
     localStorage.setItem(TOKEN_KEY, token);
-    set({ user, authReady: true });
+    set({ user, authReady: true, workspaceOrder: loadWorkspaceOrder(user.username) });
     connect(token);
   }
 
@@ -652,6 +662,7 @@ export const useApp = create<AppState>((set, get) => {
     authReady: false,
     connected: false,
     projects: [],
+    workspaceOrder: [],
     threads: [],
     runningThreadIds: [],
     settings: null,
@@ -714,7 +725,7 @@ export const useApp = create<AppState>((set, get) => {
         }
         try {
           const data = await apiFetch<{ user: AuthUser }>("/api/auth/me", { auth: true });
-          set({ user: data.user, authReady: true });
+          set({ user: data.user, authReady: true, workspaceOrder: loadWorkspaceOrder(data.user.username) });
           connect(token);
         } catch {
           localStorage.removeItem(TOKEN_KEY);
@@ -742,6 +753,17 @@ export const useApp = create<AppState>((set, get) => {
       disconnect();
       resetSessionState();
       set({ user: null });
+    },
+
+    reorderWorkspaces: (sourceId, targetId, placement) => {
+      const { user, projects, workspaceOrder } = get();
+      if (!user) return;
+      const sorted = sortSidebarWorkspaces(projects, workspaceOrder);
+      const reordered = moveSidebarWorkspace(sorted, sourceId, targetId, placement);
+      if (reordered === sorted) return;
+      const order = reordered.map((workspace) => workspace.id);
+      saveWorkspaceOrder(user.username, order);
+      set({ workspaceOrder: order });
     },
 
     setWorkspacePanelOpen: (open) => set({ workspacePanelOpen: open }),

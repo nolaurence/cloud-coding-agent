@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type DragEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Archive,
@@ -9,6 +9,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  GripVertical,
   Loader2,
   LogOut,
   MessagesSquare,
@@ -29,6 +30,7 @@ import {
   sortSidebarThreads,
   visibleSidebarThreads,
 } from "../lib/threadGroups";
+import { sortSidebarWorkspaces, type WorkspaceDropPlacement } from "../lib/workspaceOrder";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { BrandLogo } from "./BrandLogo";
@@ -56,6 +58,11 @@ function relativeTime(at: number): string {
   return `${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
+function workspaceDropPlacement(event: DragEvent<HTMLElement>): WorkspaceDropPlacement {
+  const bounds = event.currentTarget.getBoundingClientRect();
+  return event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+}
+
 export function Sidebar({
   onNavigate,
   onClose,
@@ -64,6 +71,8 @@ export function Sidebar({
   onClose?: () => void;
 }) {
   const projects = useApp((s) => s.projects);
+  const workspaceOrder = useApp((s) => s.workspaceOrder);
+  const reorderWorkspaces = useApp((s) => s.reorderWorkspaces);
   const threads = useApp((s) => s.threads);
   const runningIds = useApp((s) => s.runningThreadIds);
   const createWorkspace = useApp((s) => s.createWorkspace);
@@ -88,6 +97,11 @@ export function Sidebar({
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(new Set());
   const [expandedProjects, setExpandedProjects] = useState<ReadonlySet<string>>(new Set());
   const [actionError, setActionError] = useState("");
+  const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{
+    id: string;
+    placement: WorkspaceDropPlacement;
+  } | null>(null);
   // 每 minute 刷新一次,让「14分钟 / 23小时」这类相对时间保持新鲜
   const [, setClock] = useState(0);
   useEffect(() => {
@@ -99,6 +113,7 @@ export function Sidebar({
   >(null);
 
   const keyword = query.trim().toLowerCase();
+  const orderedProjects = sortSidebarWorkspaces(projects, workspaceOrder);
   const matches = (thread: ThreadMeta) => !keyword || thread.title.toLowerCase().includes(keyword);
   const ownedProjectIds = new Set(projects.map((project) => project.id));
   const threadsByProject = (projectId: string) =>
@@ -351,7 +366,7 @@ export function Sidebar({
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
-        {projects
+        {orderedProjects
           .filter((project) => !keyword || threadsByProject(project.id).some(matches))
           .map((project) => {
             const matchedThreads = threadsByProject(project.id).filter(matches);
@@ -362,14 +377,67 @@ export function Sidebar({
               expanded,
             );
             return (
-              <section key={project.id} className="pb-1">
+              <section
+                key={project.id}
+                className={cn("relative pb-1", draggedProjectId === project.id && "opacity-40")}
+                onDragOver={(event) => {
+                  if (!draggedProjectId || draggedProjectId === project.id) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  const placement = workspaceDropPlacement(event);
+                  setDropTarget((current) => current?.id === project.id && current.placement === placement
+                    ? current
+                    : { id: project.id, placement });
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                    setDropTarget((current) => current?.id === project.id ? null : current);
+                  }
+                }}
+                onDrop={(event) => {
+                  if (!draggedProjectId) return;
+                  event.preventDefault();
+                  reorderWorkspaces(draggedProjectId, project.id, workspaceDropPlacement(event));
+                  setDraggedProjectId(null);
+                  setDropTarget(null);
+                }}
+              >
+                {dropTarget?.id === project.id && (
+                  <div
+                    aria-hidden="true"
+                    className={cn(
+                      "pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-[var(--ds-link)]",
+                      dropTarget.placement === "before" ? "top-0" : "bottom-0",
+                    )}
+                  />
+                )}
                 <div className="group/workspace relative">
                   <button
                     type="button"
                     aria-expanded={!collapsed}
-                    title={project.name}
-                    className="flex h-[34px] w-full items-center gap-1.5 rounded-[12px] px-2 text-left text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover"
+                    aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                    title={`${project.name}（拖动排序，或按 Alt + ↑ / ↓ 移动）`}
+                    draggable={projects.length > 1}
+                    className="flex h-[34px] w-full cursor-grab items-center gap-1.5 rounded-[12px] py-0 pl-2 pr-8 text-left text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover active:cursor-grabbing"
                     onClick={() => toggleProject(project.id)}
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("application/x-cca-workspace", project.id);
+                      setDraggedProjectId(project.id);
+                      setDropTarget(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedProjectId(null);
+                      setDropTarget(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+                      event.preventDefault();
+                      const index = orderedProjects.findIndex((workspace) => workspace.id === project.id);
+                      const movingUp = event.key === "ArrowUp";
+                      const target = orderedProjects[index + (movingUp ? -1 : 1)];
+                      if (target) reorderWorkspaces(project.id, target.id, movingUp ? "before" : "after");
+                    }}
                   >
                     <span className="relative flex size-4 shrink-0 items-center justify-center text-[var(--ds-label-caption)]">
                       <Folder
@@ -383,6 +451,13 @@ export function Sidebar({
                       )}
                     </span>
                     <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                    {projects.length > 1 && (
+                      <GripVertical
+                        aria-hidden="true"
+                        className="size-3.5 shrink-0 text-label-3 opacity-0 transition-opacity group-hover/workspace:opacity-100 group-focus-within/workspace:opacity-100"
+                        strokeWidth={1.8}
+                      />
+                    )}
                   </button>
                   <button
                     type="button"
