@@ -27,6 +27,7 @@ import { isLocalMode } from "./env.js";
 import { closeDb, initDb } from "./db.js";
 import { store } from "./store.js";
 import { registerUploadRoutes } from "./uploadRoutes.js";
+import { registerProjectFileRoutes } from "./projectFileRoutes.js";
 import { initThreadShares } from "./threadShares.js";
 import { getThreadAccess } from "./threadAccess.js";
 import { browserPool, NOVNC_ROOT } from "./browser.js";
@@ -67,6 +68,7 @@ export async function startServer(options: { port?: number; host?: string; insta
   await app.register(fastifyCors, { origin: true });
   await app.register(fastifyWebsocket);
   registerUploadRoutes(app, authenticate);
+  registerProjectFileRoutes(app, authenticate);
 
   const hub = new Hub();
 

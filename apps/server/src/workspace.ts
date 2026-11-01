@@ -197,6 +197,35 @@ export function readProjectBinary(root: string, relativePath: string): Buffer {
   return fs.readFileSync(target);
 }
 
+export function openProjectFileDownload(root: string, relativePath: string) {
+  const target = resolveInside(root, relativePath);
+  if (!fs.statSync(target).isFile()) throw new Error("目标不是文件");
+  const descriptor = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile()) throw new Error("目标不是文件");
+    return {
+      name: path.basename(relativePath),
+      size: stat.size,
+      stream: fs.createReadStream(target, { fd: descriptor, autoClose: true }),
+    };
+  } catch (error) {
+    fs.closeSync(descriptor);
+    throw error;
+  }
+}
+
+export function deleteProjectFile(root: string, relativePath: string): void {
+  const canonical = canonicalRoot(root);
+  const target = resolveInside(canonical, relativePath);
+  const lexicalTarget = path.resolve(canonical, relativePath);
+  if (fs.lstatSync(lexicalTarget).isSymbolicLink() || lexicalTarget !== target) {
+    throw new Error("不允许删除符号链接或通过符号链接访问的文件");
+  }
+  if (!fs.statSync(target).isFile()) throw new Error("目标不是文件");
+  fs.unlinkSync(lexicalTarget);
+}
+
 export function writeProjectFile(
   root: string,
   relativePath: string,

@@ -5,6 +5,7 @@ import type { AuthUser } from "@cca/protocol";
 import { store } from "./store.js";
 import { getThreadAccess } from "./threadAccess.js";
 import { validateThreadShareToken } from "./threadShares.js";
+import { downloadDisposition } from "./fileDownloads.js";
 import {
   IMAGE_EXTENSIONS,
   MAX_FILE_SIZE,
@@ -19,12 +20,6 @@ import {
 } from "./uploads.js";
 
 type Authenticate = (header: string | undefined) => AuthUser | null;
-
-function downloadDisposition(name: string): string {
-  const encoded = encodeURIComponent(name).replace(/[!'()*]/g, (character) =>
-    "%" + character.charCodeAt(0).toString(16).toUpperCase());
-  return `attachment; filename="download"; filename*=UTF-8''${encoded}`;
-}
 
 export function registerUploadRoutes(app: FastifyInstance, authenticate: Authenticate) {
   app.addContentTypeParser(Object.keys(IMAGE_EXTENSIONS),

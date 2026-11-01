@@ -1,0 +1,312 @@
+{
+  "client": [
+    {
+      "id": "contract",
+      "type": "shell.subscribe"
+    },
+    {
+      "id": "contract",
+      "type": "models.list"
+    },
+    {
+      "id": "contract",
+      "type": "workspace.create",
+      "name": "云端项目"
+    },
+    {
+      "id": "contract",
+      "type": "thread.subscribe",
+      "threadId": "thread-1"
+    },
+    {
+      "id": "contract",
+      "type": "thread.unsubscribe",
+      "threadId": "thread-1"
+    },
+    {
+      "id": "contract",
+      "type": "thread.create",
+      "projectId": "workspace-1",
+      "runtime": "codex",
+      "agentMode": "standard",
+      "permissionMode": "request"
+    },
+    {
+      "id": "contract",
+      "type": "thread.create",
+      "projectId": "workspace-1",
+      "runtime": "dsh",
+      "model": {
+        "providerId": "custom",
+        "modelId": "model-1",
+        "reasoningEffort": "high"
+      },
+      "agentMode": "standard",
+      "permissionMode": "request"
+    },
+    {
+      "id": "contract",
+      "type": "turn.start",
+      "threadId": "thread-1",
+      "text": "你好"
+    },
+    {
+      "id": "contract",
+      "type": "turn.interrupt",
+      "threadId": "thread-1"
+    },
+    {
+      "id": "contract",
+      "type": "permission.respond",
+      "threadId": "thread-1",
+      "requestId": "permission-1",
+      "decision": "accept"
+    },
+    {
+      "id": "contract",
+      "type": "permission.respond",
+      "threadId": "thread-1",
+      "requestId": "permission-1",
+      "decision": "decline"
+    }
+  ],
+  "server": [
+    {
+      "type": "auth.user",
+      "user": {
+        "username": "test-user",
+        "role": "user"
+      }
+    },
+    {
+      "type": "shell",
+      "data": {
+        "projects": [
+          {
+            "id": "workspace-1",
+            "name": "云端项目"
+          }
+        ],
+        "threads": [
+          {
+            "id": "thread-1",
+            "projectId": "workspace-1",
+            "title": "原生客户端测试",
+            "runtime": "codex",
+            "model": {
+              "providerId": "custom",
+              "modelId": "model-1",
+              "reasoningEffort": "high"
+            },
+            "createdAt": 1,
+            "updatedAt": 2,
+            "archived": false,
+            "access": "owner"
+          }
+        ],
+        "runningThreadIds": [
+          "thread-1"
+        ]
+      }
+    },
+    {
+      "type": "reply",
+      "id": "models",
+      "ok": true,
+      "data": [
+        {
+          "ref": {
+            "providerId": "custom",
+            "modelId": "model-1",
+            "reasoningEffort": "high"
+          },
+          "label": "自定义模型"
+        }
+      ]
+    },
+    {
+      "type": "reply",
+      "id": "create",
+      "ok": true,
+      "data": {
+        "id": "thread-1",
+        "projectId": "workspace-1",
+        "title": "原生客户端测试",
+        "runtime": "codex",
+        "model": {
+          "providerId": "custom",
+          "modelId": "model-1",
+          "reasoningEffort": "high"
+        },
+        "createdAt": 1,
+        "updatedAt": 2,
+        "archived": false,
+        "access": "owner"
+      }
+    },
+    {
+      "type": "reply",
+      "id": "rejected",
+      "ok": false,
+      "error": "无权访问该会话"
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "snapshot",
+        "messages": [],
+        "activities": [],
+        "running": true,
+        "live": {
+          "text": "",
+          "reasoning": "",
+          "turnId": "turn-1",
+          "startedAt": 1
+        }
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "turn.start",
+        "turnId": "turn-1",
+        "startedAt": 1
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "user.message",
+        "message": {
+          "id": "user-1",
+          "role": "user",
+          "text": "你好",
+          "turnId": "turn-1",
+          "createdAt": 1
+        }
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "assistant.reasoning_delta",
+        "messageId": "message-1",
+        "turnId": "turn-1",
+        "delta": "思考"
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "assistant.delta",
+        "messageId": "message-1",
+        "turnId": "turn-1",
+        "delta": "你好，云端"
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "tool.start",
+        "activity": {
+          "id": "tool-1",
+          "turnId": "turn-1",
+          "toolName": "exec_command",
+          "status": "running",
+          "args": "pwd",
+          "startedAt": 1
+        }
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "tool.complete",
+        "activity": {
+          "id": "tool-1",
+          "turnId": "turn-1",
+          "toolName": "exec_command",
+          "status": "complete",
+          "args": "pwd",
+          "startedAt": 1,
+          "result": "/workspace",
+          "endedAt": 2
+        }
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "permission.request",
+        "request": {
+          "requestId": "permission-1",
+          "kind": "command",
+          "command": "pwd",
+          "reason": "执行命令",
+          "cwd": "/workspace"
+        }
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "permission.resolve",
+        "requestId": "permission-1",
+        "decision": "accept"
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "assistant.message",
+        "message": {
+          "id": "message-1",
+          "role": "assistant",
+          "text": "你好，云端",
+          "turnId": "turn-1",
+          "createdAt": 1
+        }
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "turn.end",
+        "turnId": "turn-1"
+      }
+    },
+    {
+      "type": "thread.event",
+      "threadId": "thread-1",
+      "event": {
+        "kind": "title",
+        "title": "完成"
+      }
+    },
+    {
+      "type": "settings",
+      "data": {
+        "providers": [],
+        "connectors": [],
+        "mcpServers": [],
+        "skillDirectories": [],
+        "disabledSkills": []
+      }
+    },
+    {
+      "type": "auth.error",
+      "message": "未授权"
+    }
+  ]
+}

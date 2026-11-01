@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -24,9 +24,12 @@ import type {
   ProjectFileEntry,
   ProjectFileWriteResult,
 } from "@cca/protocol";
-import { request } from "../../lib/client";
+import { downloadProjectFile, request } from "../../lib/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { FileContextMenu } from "./FileContextMenu";
+import { clearFileDraft } from "./fileDrafts";
 import type { FileSaveState, ProjectFileEditorHandle } from "./ProjectFileEditor";
 
 const ProjectFileEditor = lazy(async () => {
@@ -129,6 +132,14 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
   const treeGenerationRef = useRef(0);
   const searchRequestRef = useRef(0);
   const previewRequestRef = useRef(0);
+  const directoryRequestsRef = useRef(new Map<string, number>());
+  const actionScope = useMemo(() => ({}), [projectId, threadId, draftOwner]);
+  const actionScopeRef = useRef(actionScope);
+  actionScopeRef.current = actionScope;
+  const busyPathsRef = useRef(new Set<string>());
+  const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
+  const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(null);
+  const [actionError, setActionError] = useState("");
   const [children, setChildren] = useState<DirectoryChildren>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loadingDirectories, setLoadingDirectories] = useState<Set<string>>(new Set([""]));
@@ -138,6 +149,8 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
   const [searching, setSearching] = useState(false);
   const [searchRefresh, setSearchRefresh] = useState(0);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const selectedPathRef = useRef(selectedPath);
+  selectedPathRef.current = selectedPath;
   const [selected, setSelected] = useState<ProjectFileContent | null>(null);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -152,6 +165,11 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
     generation = treeGenerationRef.current,
   ) => {
     const requestProject = projectId;
+    const revision = (directoryRequestsRef.current.get(directory) ?? 0) + 1;
+    directoryRequestsRef.current.set(directory, revision);
+    const isCurrent = () => projectRef.current === requestProject
+      && treeGenerationRef.current === generation
+      && directoryRequestsRef.current.get(directory) === revision;
     setLoadingDirectories((current) => new Set(current).add(directory));
     if (!directory) setTreeError("");
     try {
@@ -161,7 +179,7 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
           projectId: requestProject,
           path: directory || undefined,
         });
-        if (projectRef.current !== requestProject || treeGenerationRef.current !== generation) return false;
+        if (!isCurrent()) return false;
         setChildren((current) => ({
           ...(replace ? {} : current),
           [directory]: sortEntries(listing.entries),
@@ -169,17 +187,17 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
       } catch (directoryError) {
         if (directory) throw directoryError;
         const flatEntries = await request<ProjectFileEntry[]>({ type: "project.files", projectId: requestProject });
-        if (projectRef.current !== requestProject || treeGenerationRef.current !== generation) return false;
+        if (!isCurrent()) return false;
         setChildren(flatEntriesToChildren(flatEntries));
       }
       return true;
     } catch (reason) {
-      if (projectRef.current === requestProject && treeGenerationRef.current === generation) {
+      if (isCurrent()) {
         setTreeError(errorMessage(reason, "文件列表加载失败"));
       }
       return false;
     } finally {
-      if (projectRef.current === requestProject && treeGenerationRef.current === generation) {
+      if (isCurrent()) {
         setLoadingDirectories((current) => {
           const next = new Set(current);
           next.delete(directory);
@@ -204,8 +222,13 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
     setPreviewError("");
     setSaveState({ status: "saved" });
     setSaveRequest(0);
+    setPreviewLoading(false);
+    setPendingDeletePath(null);
+    setActionError("");
+    busyPathsRef.current = new Set();
+    setBusyPaths(new Set());
     void loadDirectory("", true, generation);
-  }, [loadDirectory, threadId]);
+  }, [loadDirectory, threadId, draftOwner]);
 
   useEffect(() => {
     const normalized = query.trim();
@@ -293,6 +316,69 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
     void loadDirectory("", true, generation);
   };
 
+  const runFileAction = async (path: string, action: "download" | "delete") => {
+    if (busyPathsRef.current.has(path) || (action === "delete" && !editable)) return;
+    busyPathsRef.current.add(path);
+    setBusyPaths(new Set(busyPathsRef.current));
+    setActionError("");
+    const scope = actionScope;
+    try {
+      if (action === "download") {
+        await downloadProjectFile(projectId, path);
+      } else {
+        await request({ type: "project.file.delete", threadId, projectId, path });
+        clearFileDraft(draftOwner, projectId, path);
+        if (actionScopeRef.current !== scope) return;
+        if (selectedPathRef.current === path) {
+          editorRef.current?.discard();
+          ++previewRequestRef.current;
+          setSelectedPath(null);
+          setSelected(null);
+          setPreviewLoading(false);
+          setPreviewError("");
+          setSaveState({ status: "saved" });
+        }
+        setChildren((current) => Object.fromEntries(Object.entries(current).map(([directory, entries]) => [
+          directory, entries.filter((entry) => entry.path !== path),
+        ])));
+        ++searchRequestRef.current;
+        setSearchResults((current) => current?.filter((entry) => entry !== path) ?? null);
+        setSearchRefresh((value) => value + 1);
+        void loadDirectory(parentPath(path));
+      }
+    } catch (reason) {
+      if (actionScopeRef.current === scope) {
+        setActionError(errorMessage(reason, action === "download" ? "文件下载失败" : "文件删除失败"));
+      }
+    } finally {
+      if (actionScopeRef.current === scope) {
+        busyPathsRef.current.delete(path);
+        setBusyPaths(new Set(busyPathsRef.current));
+      }
+    }
+  };
+
+  const actionFeedback = (
+    <>
+      {actionError && (
+        <div role="alert" className="flex shrink-0 items-start gap-2 bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 break-words">{actionError}</span>
+          <button type="button" aria-label="关闭文件操作错误" onClick={() => setActionError("")}><X className="h-3.5 w-3.5" /></button>
+        </div>
+      )}
+      <ConfirmDialog
+        open={pendingDeletePath !== null}
+        onOpenChange={(open) => { if (!open) setPendingDeletePath(null); }}
+        title="删除文件"
+        description={`确定删除「${pendingDeletePath ?? ""}」吗？此操作不可撤销，未保存的修改也会被丢弃。`}
+        confirmLabel="删除"
+        destructive
+        onConfirm={() => { if (pendingDeletePath) void runFileAction(pendingDeletePath, "delete"); }}
+      />
+    </>
+  );
+
   const renderDirectory = (directory: string, depth: number): ReactNode => {
     const entries = children[directory];
     if (!entries) return null;
@@ -302,31 +388,39 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
       const isLoading = isDirectory && loadingDirectories.has(entry.path);
       return (
         <div key={entry.path}>
-          <button
-            type="button"
-            role="treeitem"
-            aria-expanded={isDirectory ? isExpanded : undefined}
-            className="group flex h-7 w-full min-w-0 items-center gap-1 rounded-sm pr-2 text-left text-xs text-zinc-700 outline-none hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:ring-1 focus-visible:ring-zinc-400 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:focus-visible:bg-zinc-900"
-            style={{ paddingLeft: `${6 + depth * 14}px` }}
-            title={entry.path}
-            onClick={() => isDirectory ? void toggleDirectory(entry.path) : void openFile(entry.path)}
+          <FileContextMenu
+            enabled={!isDirectory}
+            editable={editable}
+            busy={busyPaths.has(entry.path)}
+            onDownload={() => void runFileAction(entry.path, "download")}
+            onDelete={() => setPendingDeletePath(entry.path)}
           >
-            <span className="flex h-4 w-4 shrink-0 items-center justify-center text-zinc-400">
-              {isLoading
-                ? <LoaderCircle className="h-3 w-3 animate-spin" />
-                : isDirectory
-                  ? isExpanded
-                    ? <ChevronDown className="h-3.5 w-3.5" />
-                    : <ChevronRight className="h-3.5 w-3.5" />
-                  : null}
-            </span>
-            {isDirectory
-              ? isExpanded
-                ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
-                : <Folder className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
-              : <FileCode2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />}
-            <span className="truncate">{entry.name}</span>
-          </button>
+            <button
+              type="button"
+              role="treeitem"
+              aria-expanded={isDirectory ? isExpanded : undefined}
+              className="group flex h-7 w-full min-w-0 items-center gap-1 rounded-sm pr-2 text-left text-xs text-zinc-700 outline-none hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:ring-1 focus-visible:ring-zinc-400 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:focus-visible:bg-zinc-900"
+              style={{ paddingLeft: `${6 + depth * 14}px` }}
+              title={entry.path}
+              onClick={() => isDirectory ? void toggleDirectory(entry.path) : void openFile(entry.path)}
+            >
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center text-zinc-400">
+                {isLoading
+                  ? <LoaderCircle className="h-3 w-3 animate-spin" />
+                  : isDirectory
+                    ? isExpanded
+                      ? <ChevronDown className="h-3.5 w-3.5" />
+                      : <ChevronRight className="h-3.5 w-3.5" />
+                    : null}
+              </span>
+              {isDirectory
+                ? isExpanded
+                  ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
+                  : <Folder className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
+                : <FileCode2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />}
+              <span className="truncate">{entry.name}</span>
+            </button>
+          </FileContextMenu>
           {isExpanded && (
             <>
               {renderDirectory(entry.path, depth + 1)}
@@ -363,7 +457,14 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <div className="min-w-0 flex-1 truncate font-mono text-xs" title={selectedPath}>{selectedPath}</div>
+          <FileContextMenu
+            editable={editable}
+            busy={busyPaths.has(selectedPath)}
+            onDownload={() => void runFileAction(selectedPath, "download")}
+            onDelete={() => setPendingDeletePath(selectedPath)}
+          >
+            <div tabIndex={0} className="min-w-0 flex-1 truncate font-mono text-xs" title={selectedPath}>{selectedPath}</div>
+          </FileContextMenu>
           {selected && <span className="shrink-0 text-[10px] text-zinc-400">{formatBytes(selected.size)}</span>}
           {selected && (editable ? (
             <SaveIndicator state={saveState} onRetry={() => setSaveRequest((value) => value + 1)} />
@@ -403,6 +504,7 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
             <RefreshCw className={`h-3.5 w-3.5 ${previewLoading ? "animate-spin" : ""}`} />
           </Button>
         </div>
+        {actionFeedback}
         {previewLoading ? (
           <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-zinc-500">
             <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />加载文件中…
@@ -447,6 +549,7 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
   const normalizedQuery = query.trim();
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {actionFeedback}
       <div className="shrink-0 border-b border-zinc-200 p-2 dark:border-zinc-800">
         <div className="flex items-center gap-1">
           <div className="relative min-w-0 flex-1">
@@ -500,11 +603,19 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
           ) : searchResults?.length ? (
             <div role="list" aria-label="文件搜索结果">
               {searchResults.map((path) => (
-                <button key={path} type="button" role="listitem" title={path} className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-sm px-2 py-1 text-left text-xs hover:bg-zinc-100 focus-visible:ring-1 focus-visible:ring-zinc-400 dark:hover:bg-zinc-900" onClick={() => void openFile(path)}>
-                  <FileCode2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-                  <span className="min-w-0 flex-1 truncate font-medium">{baseName(path)}</span>
-                  <span className="hidden min-w-0 max-w-[50%] truncate text-[10px] text-zinc-400 sm:block">{parentPath(path) || "."}</span>
-                </button>
+                <FileContextMenu
+                  key={path}
+                  editable={editable}
+                  busy={busyPaths.has(path)}
+                  onDownload={() => void runFileAction(path, "download")}
+                  onDelete={() => setPendingDeletePath(path)}
+                >
+                  <button type="button" role="listitem" title={path} className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-sm px-2 py-1 text-left text-xs hover:bg-zinc-100 focus-visible:ring-1 focus-visible:ring-zinc-400 dark:hover:bg-zinc-900" onClick={() => void openFile(path)}>
+                    <FileCode2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                    <span className="min-w-0 flex-1 truncate font-medium">{baseName(path)}</span>
+                    <span className="hidden min-w-0 max-w-[50%] truncate text-[10px] text-zinc-400 sm:block">{parentPath(path) || "."}</span>
+                  </button>
+                </FileContextMenu>
               ))}
             </div>
           ) : !searching ? (

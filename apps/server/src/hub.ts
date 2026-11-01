@@ -56,6 +56,7 @@ import { getThreadAccess } from "./threadAccess.js";
 import { readDshTrajectory } from "./dsh/dshTrajectory.js";
 import { discoverProviderModels } from "./providers.js";
 import {
+  deleteProjectFile,
   listProjectDirectory,
   listProjectFiles,
   projectDiff,
@@ -1316,6 +1317,12 @@ export class Hub {
         case "project.document.preview": {
           const project = this.requireOwnedProject(conn, msg.projectId);
           this.reply(conn, msg.id, previewProjectDocument(project.path, msg.path));
+          break;
+        }
+        case "project.file.delete": {
+          const { project } = this.requireOwnedThreadProject(conn, msg.threadId, msg.projectId);
+          deleteProjectFile(project.path, msg.path);
+          this.reply(conn, msg.id);
           break;
         }
         case "project.file.write": {

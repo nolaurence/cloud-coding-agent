@@ -879,6 +879,7 @@ export type ClientMessage =
   | { id: string; type: "project.files"; projectId: string }
   | { id: string; type: "project.directory.list"; projectId: string; path?: string }
   | { id: string; type: "project.file.read"; projectId: string; path: string }
+  | { id: string; type: "project.file.delete"; threadId: string; projectId: string; path: string }
   | { id: string; type: "project.document.preview"; projectId: string; path: string }
   | {
       id: string;

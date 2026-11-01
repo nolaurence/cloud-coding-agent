@@ -61,8 +61,14 @@ jobs:
       - name: Build app bundles
         run: npm run build
 
+      - name: Desktop regression tests
+        run: npm run test:desktop
+
       - name: Package deb + rpm
         run: npx electron-builder --linux deb rpm --${{ matrix.arch }} --publish never
+
+      - name: Smoke test packaged server
+        run: npm run test:desktop:packaged -- release/linux${{ matrix.arch == 'arm64' && '-arm64' || '' }}-unpacked/cloud-coding-agent
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -108,8 +114,14 @@ jobs:
       - name: Build app bundles
         run: npm run build
 
+      - name: Desktop regression tests
+        run: npm run test:desktop
+
       - name: Package dmg + zip
         run: npx electron-builder --mac dmg zip --${{ matrix.arch }} --publish never
+
+      - name: Smoke test packaged server
+        run: npm run test:desktop:packaged -- "release/mac${{ matrix.arch == 'arm64' && '-arm64' || '' }}/Kloud Work.app/Contents/MacOS/Kloud Work"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -146,8 +158,14 @@ jobs:
       - name: Build app bundles
         run: npm run build
 
+      - name: Desktop regression tests
+        run: npm run test:desktop
+
       - name: Package NSIS installer
         run: npx electron-builder --win nsis --x64 --publish never
+
+      - name: Smoke test packaged server
+        run: npm run test:desktop:packaged -- "release/win-unpacked/Kloud Work.exe"
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4

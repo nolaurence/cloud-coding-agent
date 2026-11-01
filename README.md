@@ -15,6 +15,7 @@
 - **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用
 - **插件市场**:兼容 [Agent Plugins 1.0.0](https://agent-plugins.org/specification) 标准(`plugin.json` + `skills/` + `mcp.json`),也兼容 Claude/Codex/Copilot 布局的插件目录;内置一方法插件与官方仓库精选,支持从 git 地址、`owner/repo` 或本地目录安装,插件贡献的技能与 MCP 服务器自动进入会话,可随时停用/卸载
 - **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
+- **文件操作**:文件面板的文件树、搜索结果和预览标题支持右键下载、删除。下载保留原始字节，不受文本预览限制；删除需二次确认及工作区/会话所有者权限，不支持递归删除目录。
 - **项目管理**:一个项目 = 服务器上的一个工作目录,会话在其 cwd 中执行
 - **代码托管账户**:在「设置 → 通用」绑定 GitHub / Gitee,Agent 可使用当前用户的授权执行 clone、fetch、pull、push
 - **用户系统**:登录/注册;管理员由环境变量 `ADMIN_USERNAME`/`ADMIN_PASSWORD` 创建,注册用户为普通用户;会话按用户隔离,管理员可见全部
@@ -32,6 +33,14 @@
 相关测试：`npm run test:overview -w @cca/server`。
 
 ## 架构
+
+### GPUI 原生云端客户端
+
+`apps/desktop-gpui` 提供 Rust + GPUI + Ely 原生桌面前端，默认连接 `https://agent.proxy.nolaurence.cn`，与网页共用账号、云端会话和执行后端，不启动本地服务或独立数据库。首版支持登录、工作区/会话、模型与引擎选择、聊天、工具记录和权限确认；文件、终端、预览及管理设置仍在网页使用。
+
+安装 Rust 和系统图形开发依赖后，运行 `npm run desktop:native`；构建使用 `npm run desktop:native:build`。环境要求、功能边界和安全说明见 [原生客户端文档](apps/desktop-gpui/README.md)。现有网页与本地桌面命令不变。
+
+### 云端服务
 
 ```
 apps/web (React 19 + Vite + Tailwind v4 + zustand + react-router)
@@ -73,7 +82,12 @@ npm ci
 npm run desktop          # 构建并启动未打包应用
 npm run desktop:dir      # 生成可运行的未安装包,便于检查
 npm run desktop:dist     # 当前平台生成 DMG/ZIP 或 NSIS 安装包
+npm run test:desktop:packaged -- "release/win-unpacked/Kloud Work.exe" # 验证打包后的服务、数据库和网页
 ```
+
+DSH 的必需运行时 peer 依赖在 `apps/server/package.json` 中显式声明为生产依赖,不要仅依赖 npm 在开发目录中的自动安装:electron-builder 不会收集仅通过 peer 关系可达的包,会导致安装后的桌面服务报 `ERR_MODULE_NOT_FOUND` 并以退出码 1 结束。`npm run test:desktop` 会检查该依赖闭包,发布工作流还会使用产物自带的运行时从 ASAR 内启动服务,验证 IPC、HTTP、本地数据库和网页,失败时不上传产物。
+
+启动失败时,错误窗口会显示服务的具体异常和完整日志路径。日志保存在应用数据目录下的 `logs/desktop-server.log`,每次启动覆盖,具体路径以错误窗口为准,无需先打开开发者工具。
 
 发布配置只构建当前主机架构。为覆盖 macOS Intel/Apple Silicon 与 Windows x64/arm64,请使用 `macos-*-x64`、`macos-*-arm64`、`windows-*-x64`、`windows-*-arm64` 四个原生 runner（可组成 CI matrix）,在每个 runner 上从干净目录执行 `npm ci && npm run desktop:dist`。不要在单个 runner 上用 `--x64 --arm64` 交叉打包。`node-pty`、Koffi、Codex 及兼容依赖的平台运行时保留在 ASAR 外;`npm ci` 会按构建主机安装对应可选平台包；`node-pty` 必须存在目标 OS/架构预编译文件（或在目标 runner 上安装编译工具后构建）。跨架构发布前请在每个目标架构的 runner 上执行并冒烟测试,不要复用其他平台的 `node_modules`。 浏览器网络策略会在顶层导航及 Electron 请求拦截阶段重新解析主机并拒绝本机、私网、链路本地和元数据目标（除非设置 `BROWSER_ALLOW_PRIVATE_NETWORK=true`）；这属于尽力过滤,不是 DNS pinning。正式发布还需配置 Apple Developer ID 签名/公证和 Windows Authenticode 证书;本仓库不会存放证书。产物写入 `release/`。
 

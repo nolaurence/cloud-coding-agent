@@ -1,3 +1,6 @@
+import type { ChildProcess } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
+
 export const LOOPBACK_HOST = "127.0.0.1";
 
 export function serverPortFromMessage(message: unknown): number | null {
@@ -11,6 +14,51 @@ export function serverPortFromMessage(message: unknown): number | null {
     candidate.port > 65_535
   ) return null;
   return candidate.port;
+}
+
+export function waitForServerReady(child: ChildProcess, timeoutMs = 30_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    let checkingHealth = false;
+    let settled = false;
+    const finish = (error: Error | null, origin?: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener("message", onMessage);
+      child.removeListener("error", onError);
+      child.removeListener("close", onClose);
+      controller.abort();
+      if (error) reject(error);
+      else resolve(origin!);
+    };
+    const onError = (error: Error) => finish(error);
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(new Error(`桌面服务在启动完成前退出（${signal ?? code ?? "unknown"}）`));
+    };
+    const onMessage = (message: unknown) => {
+      const port = serverPortFromMessage(message);
+      if (port === null || checkingHealth) return;
+      checkingHealth = true;
+      const origin = `http://${LOOPBACK_HOST}:${port}`;
+      void waitForHttpReady(`${origin}/health`, { signal: controller.signal }).then(
+        () => finish(null, origin),
+        (error: Error) => finish(error),
+      );
+    };
+    const timer = setTimeout(() => finish(new Error("等待桌面服务启动超时")), timeoutMs);
+    child.on("message", onMessage);
+    child.once("error", onError);
+    child.once("close", onClose);
+  });
+}
+
+export function startupFailureDetail(error: unknown, output: string, logPath: string | null): string {
+  return [
+    error instanceof Error ? error.message : String(error),
+    output.trim().slice(-4_000),
+    logPath ? `完整启动日志：${logPath}` : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 export async function waitForHttpReady(
@@ -30,13 +78,7 @@ export async function waitForHttpReady(
     } catch (error) {
       lastError = error;
     }
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(resolve, intervalMs);
-      options.signal?.addEventListener("abort", () => {
-        clearTimeout(timer);
-        reject(options.signal?.reason ?? new Error("Readiness wait aborted"));
-      }, { once: true });
-    });
+    await delay(intervalMs, undefined, { signal: options.signal });
   }
   throw new Error(`Server did not become ready within ${timeoutMs}ms`, { cause: lastError });
 }

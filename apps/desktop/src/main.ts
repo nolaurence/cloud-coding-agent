@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { isAllowedExternalUrl, LOOPBACK_HOST, serverPortFromMessage, waitForHttpReady } from "./lifecycle.js";
+import { isAllowedExternalUrl, LOOPBACK_HOST, startupFailureDetail, waitForServerReady } from "./lifecycle.js";
 import { ElectronBrowserViews, isBrowserIpcRequest } from "./browserViews.js";
 import { isValidBrowserBounds } from "./browserSecurity.js";
 
@@ -18,6 +18,8 @@ let serverOrigin: string | null = null;
 let quitting = false;
 let stopping: Promise<void> | null = null;
 let browserViews: ElectronBrowserViews | null = null;
+let serverLogPath: string | null = null;
+let serverOutput = "";
 
 function isMainRenderer(eventUrl: string | undefined, origin: string): boolean {
   if (!eventUrl) return false;
@@ -38,6 +40,16 @@ function configureDesktopEnvironment(): void {
 }
 
 async function startServer(): Promise<string> {
+  const logDirectory = app.getPath("logs");
+  fs.mkdirSync(logDirectory, { recursive: true });
+  serverLogPath = path.join(logDirectory, "desktop-server.log");
+  fs.writeFileSync(serverLogPath, `[${new Date().toISOString()}] ${APP_NAME} ${app.getVersion()}\n`, { mode: 0o600 });
+  const captureOutput = (chunk: Buffer) => {
+    const output = chunk.toString();
+    serverOutput = (serverOutput + output).slice(-16_000);
+    try { fs.appendFileSync(serverLogPath!, output); }
+    catch (error) { console.error("[desktop] 无法写入启动日志", error); }
+  };
   const child = spawn(process.execPath, [SERVER_ENTRY], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", HOST: LOOPBACK_HOST, PORT: "0" },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -52,23 +64,9 @@ async function startServer(): Promise<string> {
     }
     void browserViews.handle(message).then((response) => { if (child.connected) child.send(response); });
   });
-  child.stdout?.on("data", (chunk) => process.stdout.write(`[server] ${chunk}`));
-  child.stderr?.on("data", (chunk) => process.stderr.write(`[server] ${chunk}`));
-  const exited = new Promise<never>((_, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => reject(new Error(`Desktop server exited before startup (${signal ?? code ?? "unknown"})`)));
-  });
-  const port = await Promise.race([new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for the desktop server port")), 30_000);
-    child.on("message", (message) => {
-      const candidate = serverPortFromMessage(message);
-      if (candidate === null) return;
-      clearTimeout(timer);
-      resolve(candidate);
-    });
-  }), exited]);
-  const origin = `http://${LOOPBACK_HOST}:${port}`;
-  await Promise.race([waitForHttpReady(`${origin}/health`), exited]);
+  child.stdout?.on("data", (chunk: Buffer) => { captureOutput(chunk); process.stdout.write(`[server] ${chunk}`); });
+  child.stderr?.on("data", (chunk: Buffer) => { captureOutput(chunk); process.stderr.write(`[server] ${chunk}`); });
+  const origin = await waitForServerReady(child);
   serverOrigin = origin;
   return origin;
 }
@@ -200,7 +198,7 @@ void app.whenReady().then(async () => {
   mainWindow = createWindow(origin);
 }).catch(async (error: unknown) => {
   console.error("[desktop] startup failed", error);
-  await dialog.showMessageBox({ type: "error", title: APP_NAME, message: `无法启动 ${APP_NAME}`, detail: error instanceof Error ? error.message : String(error) });
+  await dialog.showMessageBox({ type: "error", title: APP_NAME, message: `无法启动 ${APP_NAME}`, detail: startupFailureDetail(error, serverOutput, serverLogPath) });
   await stopServer();
   app.exit(1);
 });

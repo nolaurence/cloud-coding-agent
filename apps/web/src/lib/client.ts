@@ -196,14 +196,11 @@ export async function discardUpload(attachment: { imageId?: string; fileId?: str
   });
 }
 
-export async function downloadFile(id: string, name: string, threadId: string, shareToken?: string): Promise<void> {
+async function saveFileDownload(path: string, name: string, shareToken?: string): Promise<void> {
   if (!currentToken) throw new Error("未登录");
   const headers: Record<string, string> = { Authorization: `Bearer ${currentToken}` };
   if (shareToken) headers["X-Thread-Share-Token"] = shareToken;
-  const response = await fetch(
-    `/api/uploads/files/${encodeURIComponent(id)}?threadId=${encodeURIComponent(threadId)}`,
-    { headers },
-  );
+  const response = await fetch(path, { headers });
   if (!response.ok) {
     const data = await response.json().catch(() => ({})) as { error?: string };
     throw new Error(data.error ?? `文件下载失败 (${response.status})`);
@@ -216,6 +213,17 @@ export async function downloadFile(id: string, name: string, threadId: string, s
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+export function downloadFile(id: string, name: string, threadId: string, shareToken?: string): Promise<void> {
+  return saveFileDownload(`/api/uploads/files/${encodeURIComponent(id)}?threadId=${encodeURIComponent(threadId)}`, name, shareToken);
+}
+
+export function downloadProjectFile(projectId: string, path: string): Promise<void> {
+  return saveFileDownload(
+    `/api/projects/${encodeURIComponent(projectId)}/files/download?path=${encodeURIComponent(path)}`,
+    path.split("/").at(-1) ?? "download",
+  );
 }
 
 export async function loadImage(

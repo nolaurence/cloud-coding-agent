@@ -14,13 +14,19 @@
     "build:dsh": "npm run build -w @cca/web",
     "build": "npm run build -w @cca/web && npm run build -w @cca/server && npm run build -w @cca/desktop",
     "start": "node apps/server/dist/index.js",
-    "test": "npm run test -w @cca/server",
+    "test": "npm run test -w @cca/server && npm run test:files -w @cca/server",
     "typecheck": "npm run typecheck -w @cca/dsh-ui-trajectory && npm run typecheck -w @cca/protocol && npm run typecheck -w @cca/server && npm run typecheck -w @cca/web && npm run typecheck -w @cca/desktop",
     "desktop": "npm run desktop:build && electron apps/desktop",
     "desktop:build": "npm run build -w @cca/web && npm run build -w @cca/desktop",
     "desktop:dir": "npm run desktop:build && electron-builder --dir",
     "desktop:dist": "npm run desktop:build && electron-builder",
-    "test:desktop": "npm run test -w @cca/desktop"
+    "test:desktop": "npm run test -w @cca/desktop",
+    "test:desktop:packaged": "node --import tsx apps/desktop/src/packagedSmoke.ts",
+    "desktop:native": "cargo run --manifest-path apps/desktop-gpui/Cargo.toml --locked",
+    "desktop:native:check": "cargo check --manifest-path apps/desktop-gpui/Cargo.toml --locked",
+    "desktop:native:build": "cargo build --manifest-path apps/desktop-gpui/Cargo.toml --release --locked",
+    "desktop:native:protocol": "node --import tsx packages/protocol/src/desktopFixtures.ts",
+    "test:desktop:native": "node --import tsx packages/protocol/src/desktopFixtures.ts --check && cargo test --manifest-path apps/desktop-gpui/Cargo.toml --locked --no-default-features"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
