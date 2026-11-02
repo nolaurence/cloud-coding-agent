@@ -8,6 +8,7 @@ import {
   ChevronsDownUp,
   Circle,
   FileCode2,
+  FileImage,
   Folder,
   FolderOpen,
   LoaderCircle,
@@ -17,18 +18,20 @@ import {
   WrapText,
   X,
 } from "lucide-react";
-import type {
-  ProjectDirectoryEntry,
-  ProjectDirectoryListing,
-  ProjectFileContent,
-  ProjectFileEntry,
-  ProjectFileWriteResult,
+import {
+  isProjectImagePath,
+  type ProjectDirectoryEntry,
+  type ProjectDirectoryListing,
+  type ProjectFileContent,
+  type ProjectFileEntry,
+  type ProjectFileWriteResult,
 } from "@cca/protocol";
 import { downloadProjectFile, request } from "../../lib/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FileContextMenu } from "./FileContextMenu";
+import { ProjectImagePreview } from "./ProjectImagePreview";
 import { clearFileDraft } from "./fileDrafts";
 import type { FileSaveState, ProjectFileEditorHandle } from "./ProjectFileEditor";
 
@@ -264,9 +267,14 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
     const requestId = ++previewRequestRef.current;
     setSelectedPath(path);
     setSelected(null);
-    setPreviewLoading(true);
     setPreviewError("");
     setSaveState({ status: "saved" });
+    if (isProjectImagePath(path)) {
+      setPreviewLoading(false);
+      setPreviewVersion((value) => value + 1);
+      return;
+    }
+    setPreviewLoading(true);
     try {
       const content = await request<ProjectFileContent>({ type: "project.file.read", projectId, path });
       if (projectRef.current === requestProject && requestId === previewRequestRef.current) {
@@ -417,7 +425,9 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
                 ? isExpanded
                   ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
                   : <Folder className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
-                : <FileCode2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />}
+                : isProjectImagePath(entry.path)
+                  ? <FileImage className="h-3.5 w-3.5 shrink-0 text-violet-500 dark:text-violet-400" />
+                  : <FileCode2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />}
               <span className="truncate">{entry.name}</span>
             </button>
           </FileContextMenu>
@@ -435,6 +445,8 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
       );
     });
   };
+
+  const imagePreviewPath = selectedPath && isProjectImagePath(selectedPath) ? selectedPath : null;
 
   if (selectedPath) {
     return (
@@ -466,24 +478,26 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
             <div tabIndex={0} className="min-w-0 flex-1 truncate font-mono text-xs" title={selectedPath}>{selectedPath}</div>
           </FileContextMenu>
           {selected && <span className="shrink-0 text-[10px] text-zinc-400">{formatBytes(selected.size)}</span>}
-          {selected && (editable ? (
+          {!imagePreviewPath && selected && (editable ? (
             <SaveIndicator state={saveState} onRetry={() => setSaveRequest((value) => value + 1)} />
           ) : (
             <span className="flex w-14 shrink-0 items-center justify-end gap-1 text-[10px] text-zinc-400">
               <LockKeyhole className="h-3 w-3" />只读
             </span>
           ))}
-          <Button
-            type="button"
-            variant={wordWrap ? "secondary" : "ghost"}
-            size="icon-sm"
-            aria-label={wordWrap ? "关闭自动换行" : "开启自动换行"}
-            aria-pressed={wordWrap}
-            title={wordWrap ? "关闭自动换行" : "开启自动换行"}
-            onClick={() => setWordWrap((value) => !value)}
-          >
-            <WrapText className="h-3.5 w-3.5" />
-          </Button>
+          {!imagePreviewPath && (
+            <Button
+              type="button"
+              variant={wordWrap ? "secondary" : "ghost"}
+              size="icon-sm"
+              aria-label={wordWrap ? "关闭自动换行" : "开启自动换行"}
+              aria-pressed={wordWrap}
+              title={wordWrap ? "关闭自动换行" : "开启自动换行"}
+              onClick={() => setWordWrap((value) => !value)}
+            >
+              <WrapText className="h-3.5 w-3.5" />
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -515,6 +529,12 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
             <div className="max-w-sm text-xs text-red-600 dark:text-red-400">{previewError}</div>
             <Button type="button" variant="outline" size="sm" onClick={() => void openFile(selectedPath)}>重试</Button>
           </div>
+        ) : imagePreviewPath ? (
+          <ProjectImagePreview
+            key={`${projectId}:${imagePreviewPath}:${previewVersion}`}
+            projectId={projectId}
+            path={imagePreviewPath}
+          />
         ) : selected ? (
           <Suspense fallback={<div className="flex min-h-0 flex-1 items-center justify-center text-xs text-zinc-500"><LoaderCircle className="mr-2 h-4 w-4 animate-spin" />正在加载编辑器…</div>}>
             <ProjectFileEditor
@@ -611,7 +631,9 @@ export function FilesPanel({ projectId, threadId, draftOwner, editable }: FilesP
                   onDelete={() => setPendingDeletePath(path)}
                 >
                   <button type="button" role="listitem" title={path} className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-sm px-2 py-1 text-left text-xs hover:bg-zinc-100 focus-visible:ring-1 focus-visible:ring-zinc-400 dark:hover:bg-zinc-900" onClick={() => void openFile(path)}>
-                    <FileCode2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                    {isProjectImagePath(path)
+                      ? <FileImage className="h-3.5 w-3.5 shrink-0 text-violet-500 dark:text-violet-400" />
+                      : <FileCode2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />}
                     <span className="min-w-0 flex-1 truncate font-medium">{baseName(path)}</span>
                     <span className="hidden min-w-0 max-w-[50%] truncate text-[10px] text-zinc-400 sm:block">{parentPath(path) || "."}</span>
                   </button>

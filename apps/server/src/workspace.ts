@@ -197,13 +197,18 @@ export function readProjectBinary(root: string, relativePath: string): Buffer {
   return fs.readFileSync(target);
 }
 
-export function openProjectFileDownload(root: string, relativePath: string) {
+export function openProjectFileDownload(root: string, relativePath: string, maxSize?: number) {
   const target = resolveInside(root, relativePath);
   if (!fs.statSync(target).isFile()) throw new Error("目标不是文件");
   const descriptor = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
   try {
     const stat = fs.fstatSync(descriptor);
     if (!stat.isFile()) throw new Error("目标不是文件");
+    if (maxSize !== undefined && stat.size > maxSize) {
+      const error = new Error("图片超过 32 MB，无法预览") as NodeJS.ErrnoException;
+      error.code = "EFBIG";
+      throw error;
+    }
     return {
       name: path.basename(relativePath),
       size: stat.size,

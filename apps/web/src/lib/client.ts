@@ -226,6 +226,27 @@ export function downloadProjectFile(projectId: string, path: string): Promise<vo
   );
 }
 
+export async function loadProjectImage(
+  projectId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  if (!currentToken) throw new Error("未登录");
+  const init: { headers: Record<string, string>; signal?: AbortSignal } = {
+    headers: { Authorization: `Bearer ${currentToken}` },
+  };
+  if (signal) init.signal = signal;
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/files/preview?path=${encodeURIComponent(path)}`,
+    init,
+  );
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(data.error ?? `图片加载失败 (${response.status})`);
+  }
+  return response.blob();
+}
+
 export async function loadImage(
   id: string,
   threadId: string,

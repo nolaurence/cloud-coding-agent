@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { connect, disconnect, downloadFile, downloadProjectFile } from "./client.js";
+import { isProjectImagePath, projectImageContentType } from "@cca/protocol";
+import { connect, disconnect, downloadFile, downloadProjectFile, loadProjectImage } from "./client.js";
+
+test("detects project image paths and their content types", () => {
+  assert.equal(projectImageContentType("screenshots/界面.PNG"), "image/png");
+  assert.equal(projectImageContentType("assets/photo.jpeg"), "image/jpeg");
+  assert.equal(projectImageContentType("assets/photo.JPG"), "image/jpeg");
+  assert.equal(projectImageContentType("assets/animation.gif"), "image/gif");
+  assert.equal(projectImageContentType("assets/logo.webp"), "image/webp");
+  assert.equal(projectImageContentType("assets/logo.ico"), "image/x-icon");
+  assert.equal(isProjectImagePath("assets/logo.png"), true);
+  for (const filePath of ["src/main.ts", "README", "assets/logo.svg", "assets/logo.png.txt", "folder.png/file"]) {
+    assert.equal(isProjectImagePath(filePath), false, filePath);
+  }
+});
 
 test("file downloads authenticate, encode paths and preserve the original binary blob", async (context) => {
   const link = { href: "", download: "", click: context.mock.fn(), remove: context.mock.fn() };
@@ -48,8 +62,16 @@ test("file downloads authenticate, encode paths and preserve the original binary
     "/api/uploads/files/attachment%2Fid?threadId=thread%2Fid",
     { headers: { Authorization: "Bearer test-token", "X-Thread-Share-Token": "share-token" } },
   ]);
+  const imagePath = "screenshots/界面 预览.PNG";
+  const image = await loadProjectImage("project/id", imagePath);
+  assert.deepEqual(fetchMock.mock.calls[2]?.arguments, [
+    `/api/projects/project%2Fid/files/preview?path=${encodeURIComponent(imagePath)}`,
+    { headers: { Authorization: "Bearer test-token" } },
+  ]);
+  assert.equal(image.size, blob.size);
   fetchMock.mock.mockImplementation(async () => new Response(JSON.stringify({ error: "无权访问" }), { status: 403 }));
   await assert.rejects(downloadProjectFile("project", "file"), /无权访问/);
+  await assert.rejects(loadProjectImage("project", "image.png"), /无权访问/);
   fetchMock.mock.mockImplementation(async () => new Response("unavailable", { status: 503 }));
   await assert.rejects(downloadProjectFile("project", "file"), /503/);
   assert.equal(link.click.mock.callCount(), 2);

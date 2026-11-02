@@ -560,6 +560,27 @@ export interface ProjectDirectoryListing {
   entries: ProjectDirectoryEntry[];
 }
 
+export const PROJECT_IMAGE_CONTENT_TYPES = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".avif": "image/avif",
+  ".ico": "image/x-icon",
+} as const;
+
+export function projectImageContentType(filePath: string): string | null {
+  const match = /\.([^./\\]+)$/.exec(filePath);
+  if (!match?.[1]) return null;
+  return PROJECT_IMAGE_CONTENT_TYPES[`.${match[1].toLowerCase()}` as keyof typeof PROJECT_IMAGE_CONTENT_TYPES] ?? null;
+}
+
+export function isProjectImagePath(filePath: string): boolean {
+  return projectImageContentType(filePath) !== null;
+}
+
 export interface ProjectFileContent {
   path: string;
   content: string;

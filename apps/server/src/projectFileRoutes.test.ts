@@ -45,6 +45,7 @@ function routes(context: TestContext) {
 }
 
 const downloadUrl = (filePath: string) => `/api/projects/project/files/download?path=${encodeURIComponent(filePath)}`;
+const previewUrl = (filePath: string) => `/api/projects/project/files/preview?path=${encodeURIComponent(filePath)}`;
 const headers = { authorization: "Bearer owner" };
 
 test("downloads original binary bytes beyond the preview limit with safe Unicode filenames", async (context) => {
@@ -67,6 +68,27 @@ test("downloads original binary bytes beyond the preview limit with safe Unicode
   const empty = await app.inject({ url: downloadUrl("empty.txt"), headers });
   assert.equal(empty.statusCode, 200);
   assert.equal(empty.rawPayload.length, 0);
+});
+
+test("previews project images inline with safe headers and rejects other file types", async (context) => {
+  const root = fixture(context);
+  const app = routes(context);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+  fs.writeFileSync(path.join(root, "src", "界面.PNG"), png);
+  const response = await app.inject({ url: previewUrl("src/界面.PNG"), headers });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.rawPayload, png);
+  assert.equal(response.headers["content-type"], "image/png");
+  assert.equal(response.headers["content-length"], String(png.length));
+  assert.equal(response.headers["content-disposition"], "inline");
+  assert.equal(response.headers["cache-control"], "no-store");
+  assert.equal(response.headers["x-content-type-options"], "nosniff");
+  assert.equal((await app.inject(previewUrl("src/界面.PNG"))).statusCode, 401);
+  assert.equal((await app.inject({ url: previewUrl("src/界面.PNG"), headers: { authorization: "Bearer other" } })).statusCode, 403);
+  assert.equal((await app.inject({ url: previewUrl("src/keep.txt"), headers })).statusCode, 415);
+  assert.equal((await app.inject({ url: previewUrl("missing.png"), headers })).statusCode, 404);
+  assert.ok([400, 404].includes((await app.inject({ url: previewUrl("../secret.png"), headers })).statusCode));
+  assert.throws(() => openProjectFileDownload(root, "src/界面.PNG", 1), { code: "EFBIG" });
 });
 
 test("project downloads enforce authentication, ownership and valid paths", async (context) => {
