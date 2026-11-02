@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import path from "node:path";
-import { clearBootstrapCredentials, packagedCopilotCliPath, sanitizedCopilotRuntimeEnv, sanitizedDshRuntimeEnv } from "./runtimeEnv.js";
+import { clearBootstrapCredentials, sanitizedCopilotRuntimeEnv, sanitizedDshRuntimeEnv } from "./runtimeEnv.js";
 
 test("Copilot runtime environment preserves essentials without service or provider secrets", () => {
   const env = sanitizedCopilotRuntimeEnv({
@@ -18,11 +17,9 @@ test("Copilot runtime environment preserves essentials without service or provid
   assert.equal(env.GH_TOKEN, undefined);
   assert.equal(env.GITHUB_TOKEN, undefined);
   assert.equal(typeof env.COPILOT_HOME, "string");
-  assert.equal(env.ELECTRON_RUN_AS_NODE, "1");
-  assert.equal(env.COPILOT_CLI_PATH, undefined);
+  assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
   assert.equal(env.ELECTRON_ENABLE_LOGGING, undefined);
   assert.equal(env.ELECTRON_EXTRA_LAUNCH_ARGS, undefined);
-  assert.equal(sanitizedCopilotRuntimeEnv({ ELECTRON_RUN_AS_NODE: "true" }).ELECTRON_RUN_AS_NODE, undefined);
   for (const key of ["ADMIN_PASSWORD", "DATABASE_URL", "OPENAI_API_KEY", "GITHUB_TOKEN", "FEISHU_APP_SECRET", "CCA_DATA_DIR"]) assert.equal(env[key], undefined);
 });
 
@@ -32,22 +29,8 @@ test("bootstrap credentials are deleted after authentication initialization", ()
   assert.deepEqual(env, { PATH: "/bin" });
 });
 
-
-test("packaged Electron uses the unpacked native Copilot CLI", () => {
-  const resourcesPath = "/opt/Cloud Coding Agent/resources";
-  const expected = path.join(resourcesPath, "app.asar.unpacked", "node_modules", "@github", "copilot-win32-arm64", "copilot.exe");
-  const runtime = { resourcesPath, platform: "win32" as const, arch: "arm64", exists: (candidate: string) => candidate === expected };
-  assert.equal(packagedCopilotCliPath(runtime), expected);
-  const env = sanitizedCopilotRuntimeEnv({ ELECTRON_RUN_AS_NODE: "1" }, runtime);
-  assert.equal(env.ELECTRON_RUN_AS_NODE, "1");
-  assert.equal(env.COPILOT_CLI_PATH, expected);
-});
-
-test("an explicit Copilot CLI path is not replaced", () => {
-  const env = sanitizedCopilotRuntimeEnv(
-    { ELECTRON_RUN_AS_NODE: "1", COPILOT_CLI_PATH: "/custom/copilot" },
-    { resourcesPath: "/resources", platform: "darwin", arch: "x64", exists: () => true },
-  );
+test("an explicit Copilot CLI path passes through unchanged", () => {
+  const env = sanitizedCopilotRuntimeEnv({ COPILOT_CLI_PATH: "/custom/copilot" });
   assert.equal(env.COPILOT_CLI_PATH, "/custom/copilot");
 });
 
@@ -76,7 +59,7 @@ test("DSH runtime environment isolates its home and only injects route credentia
   assert.equal(env.CCA_DSH_PATH, "/opt/dsh");
   assert.equal(env.DSH_HOME, "/data/dsh-home/thread-1");
   assert.equal(env.CCA_DSH_KEY_PROVIDER, "sk-secret");
-  assert.equal(env.ELECTRON_RUN_AS_NODE, "1");
+  assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
   assert.equal(env.ELECTRON_ENABLE_LOGGING, undefined);
   for (const key of ["ADMIN_PASSWORD", "DATABASE_URL", "OPENAI_API_KEY", "CCA_DATA_DIR"]) {
     assert.equal(env[key], undefined);

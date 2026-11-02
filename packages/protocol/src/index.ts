@@ -834,7 +834,7 @@ export type ThreadEvent =
 
 export type ClientMessage =
   | { id: string; type: "shell.subscribe" }
-  | { id: string; type: "workspace.create"; name: string; path?: string }
+  | { id: string; type: "workspace.create"; name: string }
   | { id: string; type: "workspace.remove"; projectId: string }
   | {
       id: string;

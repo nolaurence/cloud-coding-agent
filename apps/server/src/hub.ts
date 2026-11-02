@@ -91,8 +91,7 @@ import {
   revokeThreadShare,
   validateThreadShareToken,
 } from "./threadShares.js";
-import { createUserWorkspace, registerSelectedWorkspace } from "./workspaceProjects.js";
-import { isLocalMode } from "./env.js";
+import { createUserWorkspace } from "./workspaceProjects.js";
 import { previewProjectDocument } from "./documentPreview.js";
 import { runtimeResourceSampler } from "./runtimeResources.js";
 import { validateThreadOverview } from "./threadOverview.js";
@@ -652,11 +651,7 @@ export class Hub {
           break;
         }
         case "workspace.create": {
-          const project = msg.path
-            ? isLocalMode()
-              ? await registerSelectedWorkspace(conn.user.username, msg.name, msg.path)
-              : await createUserWorkspace(conn.user.username, msg.name)
-            : await createUserWorkspace(conn.user.username, msg.name);
+          const project = await createUserWorkspace(conn.user.username, msg.name);
           const { id, name } = project;
           this.broadcastShell();
           this.reply(conn, msg.id, { id, name });

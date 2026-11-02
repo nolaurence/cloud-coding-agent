@@ -7,7 +7,6 @@ import path from "node:path";
 import { defineTool, type Tool } from "@github/copilot-sdk";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { DATA_DIR } from "./env.js";
-import { BROWSER_IPC_CHANNEL, BROWSER_IPC_TIMEOUT_MS, isBrowserIpcResponse, type BrowserInspectResult, type BrowserIpcOperation, type BrowserIpcRequest } from "./electronBrowserIpc.js";
 
 const SCREEN = process.env.BROWSER_SCREEN?.trim() || "1280x900x24";
 const START_TIMEOUT_MS = 20_000;
@@ -32,6 +31,13 @@ export interface BrowserStatus {
   ready: boolean;
   starting: boolean;
   error?: string;
+}
+
+export interface BrowserInspectResult {
+  url: string;
+  title: string;
+  elements: Array<{ ref: string; tag: string; text: string; type?: string }>;
+  text: string;
 }
 
 interface VncTicket {
@@ -138,80 +144,8 @@ export interface BrowserController {
   status(): BrowserStatus;
   start(): Promise<void>;
   runAction(args: BrowserUseArgs): Promise<BrowserInspectResult>;
-  redeemTicket(ticket: string): Promise<void>;
   vncWebSocketPort?(): number;
   stop(): Promise<void>;
-}
-
-class ElectronIpcBrowserManager implements BrowserController {
-  readonly enabled = true;
-  private ready = false;
-  private starting: Promise<void> | null = null;
-  private error: string | undefined;
-  private operation = Promise.resolve();
-
-  constructor(private readonly threadId: string) {}
-
-  status(): BrowserStatus {
-    return { enabled: true, ready: this.ready, starting: this.starting !== null, error: this.error };
-  }
-
-  private request<T>(payload: BrowserIpcOperation): Promise<T> {
-    if (!process.send || !process.connected) return Promise.reject(new Error("Electron browser IPC is unavailable"));
-    const requestId = crypto.randomUUID();
-    const message: BrowserIpcRequest = { channel: BROWSER_IPC_CHANNEL, kind: "request", requestId, threadId: this.threadId, payload };
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => finish(new Error("Electron browser operation timed out")), BROWSER_IPC_TIMEOUT_MS);
-      const onDisconnect = () => finish(new Error("Electron browser IPC disconnected"));
-      const onMessage = (response: unknown) => {
-        if (!isBrowserIpcResponse(response) || response.requestId !== requestId) return;
-        finish(response.ok ? undefined : new Error(response.error || "Electron browser operation failed"), response.result as T);
-      };
-      const finish = (error?: Error, result?: T) => {
-        clearTimeout(timer);
-        process.off("message", onMessage);
-        process.off("disconnect", onDisconnect);
-        error ? reject(error) : resolve(result as T);
-      };
-      process.on("message", onMessage);
-      process.once("disconnect", onDisconnect);
-      process.send!(message, (error) => { if (error) finish(error); });
-    });
-  }
-
-  async start(): Promise<void> {
-    if (this.ready) return;
-    if (!this.starting) {
-      this.starting = this.request<BrowserStatus>({ operation: "start" }).then((status) => {
-        if (!status.ready) throw new Error(status.error || "Electron browser did not become ready");
-        this.ready = true;
-        this.error = undefined;
-      }).catch((error) => {
-        this.error = error instanceof Error ? error.message : String(error);
-        throw error;
-      }).finally(() => { this.starting = null; });
-    }
-    return this.starting;
-  }
-
-  runAction(args: BrowserUseArgs): Promise<BrowserInspectResult> {
-    const pending = this.operation.then(async () => {
-      await this.start();
-      return this.request<BrowserInspectResult>({ operation: "run", args });
-    });
-    this.operation = pending.then(() => undefined, () => undefined);
-    return pending;
-  }
-
-  async redeemTicket(ticket: string): Promise<void> {
-    await this.start();
-    await this.request({ operation: "redeem-ticket", ticket });
-  }
-
-  async stop(): Promise<void> {
-    if (process.connected) await this.request({ operation: "stop" }).catch(() => undefined);
-    this.ready = false;
-  }
 }
 
 export class BrowserManager implements BrowserController {
@@ -353,8 +287,6 @@ export class BrowserManager implements BrowserController {
     return this.run((page) => runPlaywrightAction(page, args));
   }
 
-  async redeemTicket(_ticket: string): Promise<void> {}
-
   async stop() {
     await this.stopProcesses();
   }
@@ -368,9 +300,7 @@ export class BrowserPool {
   forThread(threadId: string): BrowserController {
     let manager = this.managers.get(threadId);
     if (!manager) {
-      manager = process.env.BROWSER_BACKEND === "electron-ipc"
-        ? new ElectronIpcBrowserManager(threadId)
-        : new BrowserManager(threadId, this.nextSlot++);
+      manager = new BrowserManager(threadId, this.nextSlot++);
       this.managers.set(threadId, manager);
     }
     return manager;

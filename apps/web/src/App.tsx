@@ -21,12 +21,11 @@ import { useTheme } from "./lib/theme";
 export default function App() {
   useTheme();
   const user = useApp((s) => s.user);
-  const localMode = useApp((s) => s.localMode);
   const authReady = useApp((s) => s.authReady);
 
   useEffect(() => {
-    document.title = localMode ? "Kloud Work" : "Kloud Coding Agent";
-  }, [localMode]);
+    document.title = "Kloud Coding Agent";
+  }, []);
 
   if (!authReady) {
     return (
@@ -115,7 +114,7 @@ export default function App() {
           <Route
             path="users"
             element={
-              user.role === "admin" && !localMode ? (
+              user.role === "admin" ? (
                 <UsersSettings />
               ) : (
                 <Navigate to="/settings/general" replace />

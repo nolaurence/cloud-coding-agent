@@ -8,7 +8,7 @@ export function codexCommand(): { command: string; prefix: string[] } {
   if (process.env.CCA_CODEX_PATH) return { command: process.env.CCA_CODEX_PATH, prefix: [] };
   const require = createRequire(import.meta.url);
   const loader = path.join(path.dirname(require.resolve("@openai/codex/package.json")), "bin", "codex.js");
-  return { command: process.execPath, prefix: [loader.replace(/app\.asar([\\/])/, "app.asar.unpacked$1")] };
+  return { command: process.execPath, prefix: [loader] };
 }
 
 export class CodexRpc {
@@ -27,7 +27,7 @@ export class CodexRpc {
   }
   async start(cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
     const binary = codexCommand();
-    this.process = spawn(binary.command, [...binary.prefix, "app-server", "--listen", "stdio://"], { cwd, env: { ...env, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}) }, stdio: "pipe" });
+    this.process = spawn(binary.command, [...binary.prefix, "app-server", "--listen", "stdio://"], { cwd, env, stdio: "pipe" });
     const child = this.process;
     this.exit = new Promise((resolve) => child.once("close", () => resolve()));
     child.once("error", (error) => this.fail(error));

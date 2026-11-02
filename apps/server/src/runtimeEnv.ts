@@ -1,5 +1,3 @@
-import { existsSync } from "node:fs";
-import path from "node:path";
 import { COPILOT_HOME } from "./env.js";
 
 const SYSTEM_KEYS = [
@@ -20,39 +18,8 @@ const BLOCKED_KEYS = new Set([
   "ADMIN_USERNAME", "ADMIN_PASSWORD", "DATABASE_URL", "CCA_DATA_DIR", "WORKSPACE_ROOT",
 ]);
 
-export interface PackagedCopilotRuntime {
-  resourcesPath?: string;
-  platform: NodeJS.Platform;
-  arch: string;
-  exists: (candidate: string) => boolean;
-}
-
-function currentPackagedRuntime(): PackagedCopilotRuntime {
-  return {
-    resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
-    platform: process.platform,
-    arch: process.arch,
-    exists: existsSync,
-  };
-}
-
-export function packagedCopilotCliPath(runtime: PackagedCopilotRuntime): string | undefined {
-  if (!runtime.resourcesPath || !["darwin", "linux", "win32"].includes(runtime.platform)) return undefined;
-  const executable = runtime.platform === "win32" ? "copilot.exe" : "copilot";
-  const candidate = path.join(
-    runtime.resourcesPath,
-    "app.asar.unpacked",
-    "node_modules",
-    "@github",
-    `copilot-${runtime.platform}-${runtime.arch}`,
-    executable,
-  );
-  return runtime.exists(candidate) ? candidate : undefined;
-}
-
 export function sanitizedCopilotRuntimeEnv(
   source: NodeJS.ProcessEnv = process.env,
-  runtime: PackagedCopilotRuntime = currentPackagedRuntime(),
 ): NodeJS.ProcessEnv {
   const target: NodeJS.ProcessEnv = {};
   for (const key of SYSTEM_KEYS) if (source[key] !== undefined) target[key] = source[key];
@@ -62,15 +29,6 @@ export function sanitizedCopilotRuntimeEnv(
   const githubToken = COPILOT_AUTH_KEYS.map((key) => source[key]?.trim()).find(Boolean);
   if (githubToken) target.COPILOT_GITHUB_TOKEN = githubToken;
   if (source.GH_HOST?.trim()) target.GH_HOST = source.GH_HOST.trim();
-  // The SDK launches its JavaScript platform loader with process.execPath. In a packaged
-  // Electron server process that executable is Electron, so this exact mode flag is
-  // required for the loader to run as Node. No other ELECTRON_* variables are inherited.
-  if (source.ELECTRON_RUN_AS_NODE === "1") {
-    target.ELECTRON_RUN_AS_NODE = "1";
-    // Prefer the unpacked native CLI. Electron's Node mode can run the SDK's JS
-    // loader, but that loader sees Electron's script path as an extra CLI argument.
-    target.COPILOT_CLI_PATH ??= packagedCopilotCliPath(runtime);
-  }
   target.COPILOT_HOME = COPILOT_HOME;
   return target;
 }
@@ -97,8 +55,6 @@ export function sanitizedDshRuntimeEnv(
       target[key] = value;
     }
   }
-  // 打包 Electron 里 process.execPath 是 Electron 本体，dsh CLI 的 JS 入口需要按 Node 运行。
-  if (source.ELECTRON_RUN_AS_NODE === "1") target.ELECTRON_RUN_AS_NODE = "1";
   target.DSH_HOME = dshHome;
   // 与 Codex 会话一致：运行时的 HOME 指向会话私有目录，避免 agent 通过文件工具读到服务端用户主目录。
   target.HOME = dshHome;

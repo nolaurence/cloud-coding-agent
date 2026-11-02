@@ -217,7 +217,6 @@ function inferActiveTurn(
 
 interface AppState {
   user: AuthUser | null;
-  localMode: boolean;
   authReady: boolean;
   connected: boolean;
   projects: Workspace[];
@@ -252,8 +251,7 @@ interface AppState {
   revokeInvite: (inviteId: string) => Promise<void>;
   refreshModels: () => Promise<void>;
   discoverProviderModels: (provider: ProviderModelDiscoveryConfig) => Promise<ModelEntry[]>;
-  createWorkspace: (name: string, path?: string) => Promise<Workspace>;
-  selectLocalFolder: () => Promise<string | null>;
+  createWorkspace: (name: string) => Promise<Workspace>;
   removeWorkspace: (projectId: string) => Promise<void>;
   reorderWorkspaces: (sourceId: string, targetId: string, placement: WorkspaceDropPlacement) => void;
   createThread: (
@@ -658,7 +656,6 @@ export const useApp = create<AppState>((set, get) => {
 
   return {
     user: null,
-    localMode: false,
     authReady: false,
     connected: false,
     projects: [],
@@ -708,16 +705,6 @@ export const useApp = create<AppState>((set, get) => {
         })();
       });
       void (async () => {
-        try {
-          const runtime = await fetch("/api/runtime").then((response) => response.json()) as { localMode?: boolean };
-          if (runtime.localMode) {
-            set({ localMode: true });
-            startSession("cca-local-mode", { username: "local", role: "admin" });
-            return;
-          }
-        } catch {
-          // Older remote servers do not expose the runtime endpoint.
-        }
         const token = localStorage.getItem(TOKEN_KEY);
         if (!token) {
           set({ authReady: true });
@@ -829,15 +816,8 @@ export const useApp = create<AppState>((set, get) => {
       return request<ModelEntry[]>({ type: "provider.models.discover", provider });
     },
 
-    createWorkspace: async (name, path) => {
-      return request<Workspace>({ type: "workspace.create", name, path });
-    },
-
-    selectLocalFolder: async () => {
-      if (!window.ccaDesktop?.selectFolder) {
-        throw new Error("当前窗口未启用本地文件夹选择器");
-      }
-      return window.ccaDesktop.selectFolder();
+    createWorkspace: async (name) => {
+      return request<Workspace>({ type: "workspace.create", name });
     },
 
     removeWorkspace: async (projectId) => {

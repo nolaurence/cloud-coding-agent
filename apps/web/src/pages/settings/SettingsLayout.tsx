@@ -12,14 +12,13 @@ const adminNav = [
 
 export function SettingsLayout() {
   const user = useApp((state) => state.user);
-  const localMode = useApp((state) => state.localMode);
   const navItems =
     user?.role === "admin"
       ? [
           { to: "general", label: "通用", icon: Settings2 },
           { to: "archived", label: "归档对话", icon: Archive },
           ...adminNav,
-          ...(!localMode ? [{ to: "users", label: "用户管理", icon: Users }] : []),
+          { to: "users", label: "用户管理", icon: Users },
         ]
       : [
           { to: "general", label: "通用", icon: Settings2 },

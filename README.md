@@ -38,7 +38,7 @@
 
 `apps/desktop-gpui` 提供 Rust + GPUI + Ely 原生桌面前端，默认连接 `https://agent.proxy.nolaurence.cn`，与网页共用账号、云端会话和执行后端，不启动本地服务或独立数据库。首版支持登录、工作区/会话、模型与引擎选择、聊天、工具记录和权限确认；文件、终端、预览及管理设置仍在网页使用。
 
-安装 Rust 和系统图形开发依赖后，运行 `npm run desktop:native`；构建使用 `npm run desktop:native:build`。环境要求、功能边界和安全说明见 [原生客户端文档](apps/desktop-gpui/README.md)。现有网页与本地桌面命令不变。
+安装 Rust 和系统图形开发依赖后，运行 `npm run desktop:native`；构建使用 `npm run desktop:native:build`。环境要求、功能边界和安全说明见 [原生客户端文档](apps/desktop-gpui/README.md)。
 
 ### 云端服务
 
@@ -60,7 +60,7 @@ apps/server (Fastify + Codex/DSH 适配层)
 - DSH 的权限模式映射为文件沙箱(`request`/`auto` → `workspace-write`,`full` → `danger-full-access`),SDK 协议不支持交互式逐条审批,因此审批策略固定为拒绝升级、不阻塞执行。
 - DSH 当前限制:文本在回合结束时一次性到达(无逐 token 流式),不支持手动上下文压缩;`authenticated_git`、`browser_use` 与 Agent 资源工具仅对 Codex 会话可用;MCP 服务器会注册全部工具,暂不应用应用侧的 MCP 工具白名单;Agent Plugins 贡献的技能/MCP 也仅对 Codex 会话生效。删除会话时会同时清理 DSH 原生历史与应用事件记录。
 
-数据存储支持三种模式:`DATABASE_URL=sqlite:/path/to/cca.db` 使用内置 SQLite,`DATABASE_URL=h2:/path/to/cca.db` 是桌面本地模式使用的内置嵌入式数据库别名,`DATABASE_URL=mysql://...` 使用 MySQL;两者都会自动建表并从旧 JSON 文件迁移。未配置时继续使用 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。新会话在数据目录的 `codex-home/<会话 ID>/` 中保存原生历史、线程映射和应用事件,每个会话使用独立进程和 CODEX_HOME。配置 MySQL/SQLite 时,新会话消息、工具调用/结果及其时间戳写入 `thread_events` 表,按会话内序号读取,事件 ID 去重;写入串行分批提交。`cca-events.jsonl` 保留为故障补录日志,已有 Codex 会话在下次打开时自动补录,数据库故障会明确报错。未配置数据库时继续使用 JSONL。流式正文增量不逐 token 入库,完成消息保存全文;工具开始/完成事件保留参数、结果、状态和时间。Codex 原生状态仍用于续聊,数据库不能替代它,备份仍须覆盖数据库和数据目录。旧 `copilot-home/` 历史保留只读,不自动转换或续写;升级前应备份整个数据目录。旧 Copilot 默认模型会清空,请重新选择模型;连接器请重新选择非 Copilot 模型。
+数据存储支持两种模式:`DATABASE_URL=sqlite:/path/to/cca.db` 使用内置 SQLite,`DATABASE_URL=mysql://...` 使用 MySQL;两者都会自动建表并从旧 JSON 文件迁移。未配置时继续使用 JSON 文件存储(默认 `~/.cloud-coding-agent`,可用 `CCA_DATA_DIR` 覆盖)。新会话在数据目录的 `codex-home/<会话 ID>/` 中保存原生历史、线程映射和应用事件,每个会话使用独立进程和 CODEX_HOME。配置 MySQL/SQLite 时,新会话消息、工具调用/结果及其时间戳写入 `thread_events` 表,按会话内序号读取,事件 ID 去重;写入串行分批提交。`cca-events.jsonl` 保留为故障补录日志,已有 Codex 会话在下次打开时自动补录,数据库故障会明确报错。未配置数据库时继续使用 JSONL。流式正文增量不逐 token 入库,完成消息保存全文;工具开始/完成事件保留参数、结果、状态和时间。Codex 原生状态仍用于续聊,数据库不能替代它,备份仍须覆盖数据库和数据目录。旧 `copilot-home/` 历史保留只读,不自动转换或续写;升级前应备份整个数据目录。旧 Copilot 默认模型会清空,请重新选择模型;连接器请重新选择非 Copilot 模型。
 
 插件同样落在数据目录:安装的插件包在 `agent-plugins/<name>/`,每个插件的私有持久化目录在 `agent-plugin-data/<name>/`(作为 `PLUGIN_DATA` 传给插件的 MCP 子进程),安装记录与自定义市场源在 `agent-plugins.json`。插件安装时会校验清单、组件位置与包内路径边界,未知顶层字段只提示不拒绝;停用或卸载后对应技能与 MCP 立即从后续会话中移除。`skills/` 里由插件带来的技能是只读的,修改请改插件本身或卸载后自建。
 
@@ -73,23 +73,15 @@ npm install
 npm run dev        # server :8787 + web :5173(代理 /ws)
 ```
 
-## Desktop(macOS / Windows)
+## 原生桌面客户端(macOS / Windows / Linux)
 
-Electron 桌面版运行本地模式:关闭登录、注册和用户管理,使用 `userData/cca.db` 的内置嵌入式数据库,首次创建工作区时可通过原生文件夹选择器登记任意本地目录。数据和默认工作区保存在 Electron `userData` 目录;应用内启动同一个 Fastify 服务并使用随机的 `127.0.0.1` 端口。桌面进程设置 `BROWSER_BACKEND=electron-ipc`:每个会话使用独立、非持久化且沙箱化的 Electron `WebContentsView`,右侧浏览器面板显示该原生视图。请求会在服务子进程与 Electron 主进程之间通过受验证、限时的 IPC 转发;仅支持 `browser_use` 的固定操作,不提供任意 JavaScript。非桌面部署仍使用原有 Linux Xvfb/Chromium/noVNC 后端。
+`apps/desktop-gpui` 是基于 [Ely-GPUI-Components](https://github.com/ELY-Open-Source/Ely-GPUI-Components) 的原生客户端,默认连接 `https://agent.proxy.nolaurence.cn`。它不启动本地服务、不使用本地数据库,账号、工作区、会话、消息、模型与权限均与云端完全一致;仅服务地址设置、本地文件选择(附件)和在系统浏览器中打开云端网页属于本地交互。详见 [原生客户端文档](apps/desktop-gpui/README.md)。
 
 ```bash
-npm ci
-npm run desktop          # 构建并启动未打包应用
-npm run desktop:dir      # 生成可运行的未安装包,便于检查
-npm run desktop:dist     # 当前平台生成 DMG/ZIP 或 NSIS 安装包
-npm run test:desktop:packaged -- "release/win-unpacked/Kloud Work.exe" # 验证打包后的服务、数据库和网页
+npm run desktop:native          # 运行原生客户端(需 Rust 1.98+ 与系统图形依赖)
+npm run desktop:native:build    # 产物:apps/desktop-gpui/target/release/kloud-work
+npm run test:desktop:native     # 协议样例与 Rust 测试
 ```
-
-DSH 的必需运行时 peer 依赖在 `apps/server/package.json` 中显式声明为生产依赖,不要仅依赖 npm 在开发目录中的自动安装:electron-builder 不会收集仅通过 peer 关系可达的包,会导致安装后的桌面服务报 `ERR_MODULE_NOT_FOUND` 并以退出码 1 结束。`npm run test:desktop` 会检查该依赖闭包,发布工作流还会使用产物自带的运行时从 ASAR 内启动服务,验证 IPC、HTTP、本地数据库和网页,失败时不上传产物。
-
-启动失败时,错误窗口会显示服务的具体异常和完整日志路径。日志保存在应用数据目录下的 `logs/desktop-server.log`,每次启动覆盖,具体路径以错误窗口为准,无需先打开开发者工具。
-
-发布配置只构建当前主机架构。为覆盖 macOS Intel/Apple Silicon 与 Windows x64/arm64,请使用 `macos-*-x64`、`macos-*-arm64`、`windows-*-x64`、`windows-*-arm64` 四个原生 runner（可组成 CI matrix）,在每个 runner 上从干净目录执行 `npm ci && npm run desktop:dist`。不要在单个 runner 上用 `--x64 --arm64` 交叉打包。`node-pty`、Koffi、Codex 及兼容依赖的平台运行时保留在 ASAR 外;`npm ci` 会按构建主机安装对应可选平台包；`node-pty` 必须存在目标 OS/架构预编译文件（或在目标 runner 上安装编译工具后构建）。跨架构发布前请在每个目标架构的 runner 上执行并冒烟测试,不要复用其他平台的 `node_modules`。 浏览器网络策略会在顶层导航及 Electron 请求拦截阶段重新解析主机并拒绝本机、私网、链路本地和元数据目标（除非设置 `BROWSER_ALLOW_PRIVATE_NETWORK=true`）；这属于尽力过滤,不是 DNS pinning。正式发布还需配置 Apple Developer ID 签名/公证和 Windows Authenticode 证书;本仓库不会存放证书。产物写入 `release/`。
 
 ## Standalone 部署
 

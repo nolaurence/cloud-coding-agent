@@ -11,7 +11,6 @@ import {
   createInvite,
   getAdminRegistrationState,
   getBootstrapAdminUsername,
-  getLocalUser,
   getPublicRegistrationPolicy,
   initAuth,
   issueToken,
@@ -23,7 +22,6 @@ import {
   verifyToken,
   verifyUser,
 } from "./auth.js";
-import { isLocalMode } from "./env.js";
 import { closeDb, initDb } from "./db.js";
 import { store } from "./store.js";
 import { registerUploadRoutes } from "./uploadRoutes.js";
@@ -38,10 +36,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = path.resolve(__dirname, "../../web/dist");
 
 function authenticate(header: string | undefined) {
-  if (isLocalMode()) {
-    const user = getLocalUser();
-    return { username: user.username, role: user.role, exp: Number.MAX_SAFE_INTEGER };
-  }
   const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
   return token ? verifyToken(token) : null;
 }
@@ -50,8 +44,7 @@ export async function startServer(options: { port?: number; host?: string; insta
   const port = options.port ?? Number(process.env.PORT ?? 8787);
   const host = options.host ?? process.env.HOST ?? "0.0.0.0";
   ensureDataDirs();
-  const databaseUrl = process.env.DATABASE_URL ?? (isLocalMode() ? `h2:${path.join(DATA_DIR, "cca.db")}` : undefined);
-  if (databaseUrl && !process.env.DATABASE_URL) process.env.DATABASE_URL = databaseUrl;
+  const databaseUrl = process.env.DATABASE_URL;
   if (databaseUrl) {
     await initDb(databaseUrl);
   } else {
@@ -73,10 +66,6 @@ export async function startServer(options: { port?: number; host?: string; insta
   const hub = new Hub();
 
   app.get("/health", async () => ({ ok: true }));
-  app.get("/api/runtime", async () => ({
-    localMode: isLocalMode(),
-    database: isLocalMode() ? "h2" : "configured",
-  }));
   app.get("/api/browser/status", async (req, reply) => {
     const user = authenticate(req.headers.authorization);
     if (!user) return reply.code(401).send({ error: "未授权" });
@@ -103,11 +92,7 @@ export async function startServer(options: { port?: number; host?: string; insta
     const manager = browserPool.forThread(thread.id);
     await manager.start();
     const ticket = browserPool.issueTicket(thread.id, user.username);
-    if (process.env.BROWSER_BACKEND === "electron-ipc") {
-      if (!browserPool.consumeTicket(ticket)) throw new Error("浏览器显示凭据无效");
-      await manager.redeemTicket(ticket);
-    }
-    return { ticket, backend: process.env.BROWSER_BACKEND === "electron-ipc" ? "electron-native" : "novnc" };
+    return { ticket, backend: "novnc" as const };
   });
 
   if (fs.existsSync(NOVNC_ROOT)) {
@@ -152,13 +137,11 @@ export async function startServer(options: { port?: number; host?: string; insta
     });
   });
 
-  app.get("/api/auth/registration", async (_req, reply) => {
-    if (isLocalMode()) return reply.code(404).send({ error: "本地模式已关闭登录和注册" });
+  app.get("/api/auth/registration", async () => {
     return getPublicRegistrationPolicy();
   });
 
   app.post("/api/auth/register", async (req, reply) => {
-    if (isLocalMode()) return reply.code(404).send({ error: "本地模式已关闭登录和注册" });
     const body = (req.body ?? {}) as { username?: string; password?: string; inviteCode?: string };
     if (!body.username || !body.password) {
       return reply.code(400).send({ error: "用户名和密码必填" });
@@ -172,7 +155,6 @@ export async function startServer(options: { port?: number; host?: string; insta
   });
 
   app.post("/api/auth/login", async (req, reply) => {
-    if (isLocalMode()) return reply.code(404).send({ error: "本地模式已关闭登录和注册" });
     const body = (req.body ?? {}) as { username?: string; password?: string };
     if (!body.username || !body.password) {
       return reply.code(400).send({ error: "用户名和密码必填" });
@@ -193,7 +175,6 @@ export async function startServer(options: { port?: number; host?: string; insta
   });
 
   app.get("/api/admin/users", async (req, reply) => {
-    if (isLocalMode()) return reply.code(404).send({ error: "本地模式已关闭用户管理" });
     const actor = authenticate(req.headers.authorization);
     if (!actor) return reply.code(401).send({ error: "未授权" });
     if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
@@ -201,7 +182,6 @@ export async function startServer(options: { port?: number; host?: string; insta
   });
 
   app.patch("/api/admin/users/:username/role", async (req, reply) => {
-    if (isLocalMode()) return reply.code(404).send({ error: "本地模式已关闭用户管理" });
     const actor = authenticate(req.headers.authorization);
     if (!actor) return reply.code(401).send({ error: "未授权" });
     if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
@@ -220,7 +200,6 @@ export async function startServer(options: { port?: number; host?: string; insta
   });
 
   app.get("/api/admin/registration", async (req, reply) => {
-    if (isLocalMode()) return reply.code(404).send({ error: "本地模式已关闭用户管理" });
     const actor = authenticate(req.headers.authorization);
     if (!actor) return reply.code(401).send({ error: "未授权" });
     if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
@@ -228,7 +207,6 @@ export async function startServer(options: { port?: number; host?: string; insta
   });
 
   app.put("/api/admin/registration", async (req, reply) => {
-    if (isLocalMode()) return reply.code(404).send({ error: "本地模式已关闭用户管理" });
     const actor = authenticate(req.headers.authorization);
     if (!actor) return reply.code(401).send({ error: "未授权" });
     if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
@@ -241,7 +219,6 @@ export async function startServer(options: { port?: number; host?: string; insta
   });
 
   app.post("/api/admin/invites", async (req, reply) => {
-    if (isLocalMode()) return reply.code(404).send({ error: "本地模式已关闭用户管理" });
     const actor = authenticate(req.headers.authorization);
     if (!actor) return reply.code(401).send({ error: "未授权" });
     if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });
@@ -249,7 +226,6 @@ export async function startServer(options: { port?: number; host?: string; insta
   });
 
   app.delete("/api/admin/invites/:id", async (req, reply) => {
-    if (isLocalMode()) return reply.code(404).send({ error: "本地模式已关闭用户管理" });
     const actor = authenticate(req.headers.authorization);
     if (!actor) return reply.code(401).send({ error: "未授权" });
     if (actor.role !== "admin") return reply.code(403).send({ error: "仅管理员可以执行此操作" });

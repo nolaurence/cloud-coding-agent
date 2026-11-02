@@ -2,7 +2,6 @@ import { House, Package, PanelLeftClose, PanelLeftOpen, Settings, Sparkles } fro
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
-import { WindowControls } from "./WindowControls";
 
 type RailItem = {
   to: string;
@@ -13,7 +12,7 @@ type RailItem = {
 
 function railItemClass(active: boolean) {
   return cn(
-    "window-no-drag flex size-9 items-center justify-center rounded-[12px] text-label-2 transition-colors hover:bg-hover hover:text-label-1",
+    "flex size-9 items-center justify-center rounded-[12px] text-label-2 transition-colors hover:bg-hover hover:text-label-1",
     active && "bg-hover text-label-1",
   );
 }
@@ -68,9 +67,7 @@ export function NavRail({
       className="flex h-full w-11 shrink-0 flex-col items-center gap-1 bg-panel px-1 pt-1.5 pb-2 max-md:border-r max-md:border-line-1 md:w-[52px] md:px-2"
       aria-label="主导航"
     >
-      <div className="window-drag-region flex w-full shrink-0 items-center justify-center pb-1">
-        <WindowControls show="mac" className="scale-[0.8]" />
-      </div>
+      <div className="flex w-full shrink-0 items-center justify-center pb-1" />
       {onToggleSidebar && (
         <button
           type="button"

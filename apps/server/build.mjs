@@ -2,7 +2,7 @@ import { build } from "esbuild";
 import { builtinModules } from "node:module";
 import { fileURLToPath } from "node:url";
 
-const serverRoot = fileURLToPath(new URL("../server/", import.meta.url));
+const serverRoot = fileURLToPath(new URL("./", import.meta.url));
 await build({
   absWorkingDir: serverRoot,
   entryPoints: ["src/index.ts"], outfile: "dist/index.js", bundle: true, platform: "node", target: "node22", format: "esm", sourcemap: true,

@@ -7,7 +7,6 @@ import { useApp } from "../lib/store";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { BrandLogo } from "./BrandLogo";
-import { WindowControls } from "./WindowControls";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "cloud-coding-agent:sidebar-collapsed";
 
@@ -26,7 +25,6 @@ export function AppLayout() {
   const workspacePanelOpen = useApp((s) => s.workspacePanelOpen);
   const setWorkspacePanelOpen = useApp((s) => s.setWorkspacePanelOpen);
   const setShareDialogOpen = useApp((s) => s.setShareDialogOpen);
-  const localMode = useApp((s) => s.localMode);
   const panelPlacement = useApp((s) => s.panelPlacement);
   const setPanelPlacement = useApp((s) => s.setPanelPlacement);
   const location = useLocation();
@@ -47,7 +45,7 @@ export function AppLayout() {
     ? decodeURIComponent(threadPathMatch[1])
     : undefined;
   const routeThread = threads.find((thread) => thread.id === routeThreadId);
-  const appName = localMode ? "Kloud Work" : "Kloud Coding Agent";
+  const appName = "Kloud Coding Agent";
   const mobileTitle = routeThread?.title ?? appName;
   const canManageThread = routeThread?.access === "owner";
   const onNewChat = location.pathname === "/";
@@ -108,10 +106,6 @@ export function AppLayout() {
         </SheetContent>
       </Sheet>
 
-      <WindowControls
-        show="windows"
-        className="fixed right-1 top-1 z-50"
-      />
       <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:my-0 md:mr-0 md:rounded-[12px] md:border md:border-line-2 md:shadow-[0_2px_12px_rgba(15,23,42,0.08)] md:dark:shadow-[0_2px_12px_rgba(0,0,0,0.32)]">
         {!sidebarCollapsed && (
           <div className="hidden h-full min-h-0 shrink-0 md:flex">
