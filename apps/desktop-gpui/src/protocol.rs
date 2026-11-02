@@ -107,6 +107,8 @@ pub struct LiveMessage {
     pub text: String,
     pub reasoning: String,
     pub turn_id: String,
+    #[serde(default)]
+    pub started_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -122,7 +124,11 @@ pub enum ThreadEvent {
         error: Option<String>,
     },
     #[serde(rename = "turn.start", rename_all = "camelCase")]
-    TurnStart { turn_id: String },
+    TurnStart {
+        turn_id: String,
+        #[serde(default)]
+        started_at: Option<u64>,
+    },
     #[serde(rename = "turn.end")]
     TurnEnd {},
     #[serde(rename = "user.message")]
@@ -174,6 +180,18 @@ pub enum ServerMessage {
     Other,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnAttachment {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum ClientRequest {
@@ -196,8 +214,17 @@ pub enum ClientRequest {
         agent_mode: &'static str,
         permission_mode: &'static str,
     },
+    #[serde(rename = "thread.setPinned", rename_all = "camelCase")]
+    ThreadSetPinned { thread_id: String, pinned: bool },
+    #[serde(rename = "thread.delete", rename_all = "camelCase")]
+    ThreadDelete { thread_id: String },
     #[serde(rename = "turn.start", rename_all = "camelCase")]
-    TurnStart { thread_id: String, text: String },
+    TurnStart {
+        thread_id: String,
+        text: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<TurnAttachment>,
+    },
     #[serde(rename = "turn.interrupt", rename_all = "camelCase")]
     TurnInterrupt { thread_id: String },
     #[serde(rename = "permission.respond", rename_all = "camelCase")]

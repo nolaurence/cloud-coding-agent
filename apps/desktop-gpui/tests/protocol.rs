@@ -41,6 +41,24 @@ fn client_requests_match_typescript_contract() {
         ClientRequest::TurnStart {
             thread_id: thread_id.clone(),
             text: "你好".into(),
+            attachments: Vec::new(),
+        },
+        ClientRequest::TurnStart {
+            thread_id: thread_id.clone(),
+            text: "看这个文件".into(),
+            attachments: vec![TurnAttachment {
+                path: "uploads/user/notes.md".into(),
+                display_name: Some("notes.md".into()),
+                image_id: None,
+                file_id: Some("file-1".into()),
+            }],
+        },
+        ClientRequest::ThreadSetPinned {
+            thread_id: thread_id.clone(),
+            pinned: true,
+        },
+        ClientRequest::ThreadDelete {
+            thread_id: thread_id.clone(),
         },
         ClientRequest::TurnInterrupt {
             thread_id: thread_id.clone(),

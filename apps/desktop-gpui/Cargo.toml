@@ -12,20 +12,22 @@ required-features = ["desktop"]
 
 [features]
 default = ["desktop"]
-desktop = ["dep:ely-core", "dep:ely-chat", "dep:ely-documents", "dep:gpui", "dep:gpui_platform", "dep:open", "dep:env_logger"]
+desktop = ["dep:ely-core", "dep:ely-chat", "dep:ely-agent", "dep:ely-documents", "dep:gpui", "dep:gpui_platform", "dep:jiff", "dep:open", "dep:env_logger"]
 
 [dependencies]
 anyhow = "1"
 async-channel = "2"
 futures-util = { version = "0.3", features = ["sink"] }
+jiff = { version = "0.2", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "fs"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 url = "2"
 ely-core = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components", rev = "01fe68db06998203184ccf6da8de50f7cae2b628", features = ["runtime_shaders"], optional = true }
 ely-chat = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components", rev = "01fe68db06998203184ccf6da8de50f7cae2b628", optional = true }
+ely-agent = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components", rev = "01fe68db06998203184ccf6da8de50f7cae2b628", optional = true }
 ely-documents = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components", rev = "01fe68db06998203184ccf6da8de50f7cae2b628", optional = true }
 gpui = { package = "gpui-pre", version = "=0.3.10", default-features = false, optional = true }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["font-kit", "wayland", "x11"], optional = true }

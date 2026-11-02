@@ -4,9 +4,10 @@ mod ui;
 
 use ely_core::{
     Assets,
+    i18n::I18n,
     theme::{Mode, Theme},
 };
-use gpui::{App, AppContext, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui::{App, AppContext, Bounds, WindowAppearance, WindowBounds, WindowOptions, px, size};
 
 fn main() {
     env_logger::Builder::new()
@@ -21,7 +22,8 @@ fn main() {
                 return;
             }
             ely_documents::bind_keys(cx);
-            Theme::set_mode(Mode::Light, cx);
+            // Ely 的内置组件文案切换到中文;空 catalog 让查找回退到 Ely 的中文内置表。
+            cx.set_global(I18n::new("zh-CN").catalog("zh-CN", &[]));
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
@@ -36,6 +38,14 @@ fn main() {
             };
             if let Err(error) = cx.open_window(options, |window, cx| {
                 window.set_window_title("Kloud Work · 云端客户端");
+                Theme::set_mode(
+                    if window.appearance() == WindowAppearance::Dark {
+                        Mode::Dark
+                    } else {
+                        Mode::Light
+                    },
+                    cx,
+                );
                 cx.new(|cx| ui::CloudApp::new(window, cx))
             }) {
                 eprintln!("无法打开窗口：{error:#}");

@@ -1,10 +1,11 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::{
+    fs,
     net::TcpStream,
     sync::mpsc,
     time::{Instant, timeout},
@@ -34,12 +35,18 @@ pub enum Notification {
         request: ClientRequest,
         result: std::result::Result<Value, String>,
     },
+    /// Local files chosen in the composer finished uploading to the cloud.
+    Uploaded {
+        result: Result<Vec<TurnAttachment>, String>,
+    },
     Problem(String),
 }
 
 enum Command {
     SelectThread(Option<String>),
     Request(ClientRequest),
+    /// Upload local files picked in the composer to the cloud attachment store.
+    UploadAttachments(Vec<PathBuf>),
     Stop,
 }
 
@@ -76,6 +83,7 @@ impl ClientHandle {
                         events,
                         desired_thread: None,
                         sequence: 0,
+                        token: None,
                     };
                     let result = tokio::select! {
                         result = authenticate(&worker.server, &username, password) => result,
@@ -84,6 +92,7 @@ impl ClientHandle {
                     match result {
                         Ok(login) => {
                             if worker.emit(Notification::Authenticated(login.user)).await {
+                                worker.token = Some(login.token.clone());
                                 worker.run(login.token).await;
                             }
                         }
@@ -104,6 +113,13 @@ impl ClientHandle {
 
     pub fn select_thread(&self, thread_id: Option<String>) {
         let _ = self.commands.send(Command::SelectThread(thread_id));
+    }
+
+    /// Uploads local files to the cloud so they can ride along with the next turn.
+    pub fn upload_attachments(&self, paths: Vec<PathBuf>) {
+        if !paths.is_empty() {
+            let _ = self.commands.send(Command::UploadAttachments(paths));
+        }
     }
 }
 
@@ -165,6 +181,7 @@ struct Worker {
     events: async_channel::Sender<Notification>,
     desired_thread: Option<String>,
     sequence: u64,
+    token: Option<String>,
 }
 
 enum SessionExit {
@@ -187,6 +204,15 @@ impl Worker {
                         result: Err("当前未连接云端，请连接后重试".into()),
                     })
                     .await;
+            }
+            Some(Command::UploadAttachments(paths)) => {
+                let result = match self.token.as_deref() {
+                    Some(token) => upload_attachments(&self.server, token, &paths)
+                        .await
+                        .map_err(|error| error.to_string()),
+                    None => Err("当前未连接云端，请连接后重试".into()),
+                };
+                return self.emit(Notification::Uploaded { result }).await;
             }
             Some(Command::Stop) | None => return false,
         }
@@ -353,6 +379,19 @@ impl Worker {
                         Some(Command::Request(request)) => {
                             if !self.send(socket, pending, request).await { return SessionExit::Reconnect; }
                         }
+                        Some(Command::UploadAttachments(paths)) => {
+                            let token = self.token.clone().unwrap_or_default();
+                            let server = self.server.clone();
+                            let result = tokio::spawn(async move {
+                                upload_attachments(&server, &token, &paths).await
+                            })
+                            .await
+                            .unwrap_or_else(|error| Err(anyhow!("上传任务失败: {error}")))
+                            .map_err(|error| error.to_string());
+                            if !self.emit(Notification::Uploaded { result }).await {
+                                return SessionExit::Stop;
+                            }
+                        }
                         Some(Command::Stop) | None => return SessionExit::Stop,
                     }
                 }
@@ -415,4 +454,72 @@ impl Worker {
             }
         }
     }
+}
+
+#[derive(Deserialize)]
+struct UploadResponse {
+    id: String,
+    path: String,
+    #[serde(rename = "displayName", default)]
+    display_name: Option<String>,
+}
+
+/// Uploads each local file to the cloud attachment store, mirroring the web client.
+async fn upload_attachments(
+    server: &ServerAddress,
+    token: &str,
+    paths: &[PathBuf],
+) -> Result<Vec<TurnAttachment>> {
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(120))
+        .build()?;
+    let mut attachments = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = fs::read(path)
+            .await
+            .map_err(|_| anyhow!("无法读取本地文件: {}", path.display()))?;
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "附件".into());
+        let extension = path
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let (kind, content_type) = match extension.as_str() {
+            "jpg" | "jpeg" => ("images", "image/jpeg"),
+            "png" => ("images", "image/png"),
+            "gif" => ("images", "image/gif"),
+            "webp" => ("images", "image/webp"),
+            _ => ("files", "application/octet-stream"),
+        };
+        let response = http
+            .post(server.endpoint(&format!("/api/uploads/{kind}")))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", content_type)
+            .header(
+                "X-File-Name",
+                url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>(),
+            )
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|_| anyhow!("无法连接服务端，附件上传失败"))?;
+        let status = response.status();
+        let uploaded: UploadResponse = response
+            .json()
+            .await
+            .map_err(|_| anyhow!("附件上传失败 ({status})"))?;
+        if !status.is_success() || uploaded.id.is_empty() {
+            return Err(anyhow!("附件上传失败 ({status})"));
+        }
+        attachments.push(TurnAttachment {
+            path: uploaded.path,
+            display_name: Some(uploaded.display_name.unwrap_or(name)),
+            image_id: (kind == "images").then(|| uploaded.id.clone()),
+            file_id: (kind == "files").then_some(uploaded.id),
+        });
+    }
+    Ok(attachments)
 }

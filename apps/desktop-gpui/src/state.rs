@@ -60,10 +60,14 @@ impl ThreadState {
                 self.error = error;
                 self.loaded = true;
             }
-            ThreadEvent::TurnStart { turn_id } => {
+            ThreadEvent::TurnStart {
+                turn_id,
+                started_at,
+            } => {
                 self.running = true;
                 self.live = LiveMessage {
                     turn_id,
+                    started_at,
                     ..Default::default()
                 };
                 self.pending_permission = None;

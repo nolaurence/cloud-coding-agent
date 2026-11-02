@@ -52,6 +52,30 @@
     },
     {
       "id": "contract",
+      "type": "turn.start",
+      "threadId": "thread-1",
+      "text": "看这个文件",
+      "attachments": [
+        {
+          "path": "uploads/user/notes.md",
+          "displayName": "notes.md",
+          "fileId": "file-1"
+        }
+      ]
+    },
+    {
+      "id": "contract",
+      "type": "thread.setPinned",
+      "threadId": "thread-1",
+      "pinned": true
+    },
+    {
+      "id": "contract",
+      "type": "thread.delete",
+      "threadId": "thread-1"
+    },
+    {
+      "id": "contract",
       "type": "turn.interrupt",
       "threadId": "thread-1"
     },

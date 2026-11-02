@@ -1,22 +1,36 @@
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::PathBuf;
+use std::time::Duration;
 
-use ely_chat::StreamingMarkdown;
+use ely_agent::{AgentState, AgentStatus, Permission, PermissionPrompt, ToolCallCard};
+use ely_chat::{
+    Attachment, AttachmentButton, AttachmentChip, ChatContainer, Conversation, ConversationList,
+    MessageActions, MessageAvatar, MessageBubble, MessageFooter, MessageHeader, MessageList,
+    Project, ProjectList, PromptInput, Role, StepState, StreamingMarkdown, ThinkingBlock,
+    new_chat_button,
+};
 use ely_core::{
     buttons::{Button, ButtonVariant},
-    forms::{Choice, Input, InputEvent, Select, TextInput},
+    forms::{Choice, Input, InputEvent, SearchInput, Select, TextInput},
     primitives::FocusScope,
     theme::{ActiveTheme, Mode, Theme},
 };
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, ListAlignment, ListState, Render, SharedString,
-    Subscription, Window, div, list, prelude::*, px,
+    AnyElement, Context, ElementId, Entity, FocusHandle, Render, SharedString, Subscription,
+    Window, div, prelude::*, px,
 };
+use jiff::{Timestamp, civil::Date, tz::TimeZone};
+
 use kloud_work::{
     client::{ClientHandle, ConnectionState, Notification},
     config::{DEFAULT_SERVER, ServerAddress},
     protocol::*,
-    state::{SessionState, TimelineEntry},
+    state::{SessionState, ThreadState, TimelineEntry},
 };
+
+const APP_NAME: &str = "Kloud Work";
+const ASSISTANT_NAME: &str = "Agent";
 
 pub struct CloudApp {
     focus: FocusHandle,
@@ -25,6 +39,8 @@ pub struct CloudApp {
     password: Entity<TextInput>,
     composer: Entity<TextInput>,
     workspace_name: Entity<TextInput>,
+    search: Entity<TextInput>,
+    today: Date,
     client: Option<ClientHandle>,
     server: Option<ServerAddress>,
     user: Option<AuthUser>,
@@ -41,7 +57,14 @@ pub struct CloudApp {
     creating_workspace: bool,
     creating_thread: bool,
     pending_permission: Option<String>,
-    chat_list: ListState,
+    /// Chips above the composer for local files picked in this session.
+    attachments: Vec<Attachment>,
+    /// Uploaded cloud attachments keyed by their chip, sent with the next turn.
+    uploaded: Vec<(SharedString, TurnAttachment)>,
+    /// Keys of chips whose upload is still running, in pick order.
+    uploading_keys: Vec<SharedString>,
+    attachment_seq: u64,
+    confirm_delete: Option<String>,
     timeline: Vec<TimelineEntry>,
     error: Option<String>,
     dark: bool,
@@ -80,8 +103,13 @@ impl CloudApp {
                 .placeholder("新工作区名称")
                 .label("新工作区名称")
         });
+        let search = cx.new(|cx| {
+            TextInput::new(window, cx)
+                .placeholder("搜索会话")
+                .label("搜索会话")
+        });
         let mut subscriptions = Vec::new();
-        for input in [&server_input, &username, &workspace_name] {
+        for input in [&server_input, &username, &workspace_name, &search] {
             subscriptions.push(cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()));
         }
         subscriptions.push(cx.subscribe(&password, |view, _, event, cx| {
@@ -90,12 +118,10 @@ impl CloudApp {
             }
             cx.notify();
         }));
-        subscriptions.push(cx.subscribe(&composer, |view, _, event, cx| {
-            if *event == InputEvent::Submit {
-                view.send_turn(cx);
-            }
-            cx.notify();
-        }));
+        subscriptions.push(cx.subscribe(&composer, |_, _, _: &InputEvent, cx| cx.notify()));
+        let today = Timestamp::now()
+            .to_zoned(TimeZone::try_system().unwrap_or(TimeZone::UTC))
+            .date();
         Self {
             focus: cx.focus_handle(),
             server_input,
@@ -103,6 +129,8 @@ impl CloudApp {
             password,
             composer,
             workspace_name,
+            search,
+            today,
             client: None,
             server: None,
             user: None,
@@ -119,7 +147,11 @@ impl CloudApp {
             creating_workspace: false,
             creating_thread: false,
             pending_permission: None,
-            chat_list: ListState::new(0, ListAlignment::Bottom, px(500.0)),
+            attachments: Vec::new(),
+            uploaded: Vec::new(),
+            uploading_keys: Vec::new(),
+            attachment_seq: 0,
+            confirm_delete: None,
             timeline: Vec::new(),
             error: None,
             dark: false,
@@ -211,13 +243,16 @@ impl CloudApp {
         self.pending_permission = None;
         self.creating_thread = false;
         self.creating_workspace = false;
+        self.attachments.clear();
+        self.uploaded.clear();
+        self.uploading_keys.clear();
+        self.confirm_delete = None;
         self.model = None;
         self.error = None;
         self.composer.update(cx, |input, cx| input.set_text("", cx));
         self.password.update(cx, |input, cx| input.set_text("", cx));
         self.workspace_name
             .update(cx, |input, cx| input.set_text("", cx));
-        self.chat_list = ListState::new(0, ListAlignment::Bottom, px(500.0));
         cx.notify();
     }
 
@@ -233,6 +268,29 @@ impl CloudApp {
             }
             Notification::Connection(connection) => self.connection = connection,
             Notification::Problem(message) => self.error = Some(message),
+            Notification::Uploaded { result } => match result {
+                Ok(uploaded) => {
+                    let keys = std::mem::take(&mut self.uploading_keys);
+                    let mut pending = uploaded.len();
+                    for chip in &mut self.attachments {
+                        if chip.progress.is_some() {
+                            chip.progress = None;
+                            pending = pending.saturating_sub(1);
+                        }
+                    }
+                    if pending != 0 {
+                        // 上传结果与本地选择不一致时,以云端返回为准清理残留的上传中标记。
+                        self.attachments.retain(|chip| chip.progress.is_none());
+                    }
+                    self.uploaded = keys.into_iter().zip(uploaded).collect();
+                }
+                Err(message) => {
+                    self.attachments.retain(|chip| chip.progress.is_none());
+                    self.uploading_keys.clear();
+                    self.uploaded.clear();
+                    self.error = Some(message);
+                }
+            },
             Notification::Message(message) => {
                 self.state.apply(message);
                 if self.active_thread.as_ref().is_some_and(|id| {
@@ -262,22 +320,28 @@ impl CloudApp {
             }
             Notification::Response { request, result } => {
                 match &request {
-                    ClientRequest::TurnStart { thread_id, text } => {
+                    ClientRequest::TurnStart {
+                        thread_id, text, ..
+                    } => {
                         self.pending_sends.remove(thread_id);
                         if result.is_ok() {
                             if self.active_thread.as_ref() == Some(thread_id)
-                                && self.composer.read(cx).text() == text
+                                && self.composer.read(cx).text() == *text
                             {
                                 self.composer.update(cx, |input, cx| input.set_text("", cx));
                             }
                             if self.drafts.get(thread_id) == Some(text) {
                                 self.drafts.remove(thread_id);
                             }
+                            self.attachments.clear();
+                            self.uploaded.clear();
+                            self.uploading_keys.clear();
                         }
                     }
                     ClientRequest::WorkspaceCreate { .. } => self.creating_workspace = false,
                     ClientRequest::ThreadCreate { .. } => self.creating_thread = false,
                     ClientRequest::PermissionRespond { .. } => self.pending_permission = None,
+                    ClientRequest::ThreadDelete { .. } => self.confirm_delete = None,
                     _ => {}
                 }
                 match result {
@@ -330,6 +394,7 @@ impl CloudApp {
                 .insert(previous.clone(), self.composer.read(cx).text().to_string());
         }
         self.active_thread = thread_id.clone();
+        self.confirm_delete = None;
         if let Some(thread) = self
             .state
             .shell
@@ -346,7 +411,6 @@ impl CloudApp {
             .unwrap_or_default();
         self.composer
             .update(cx, |input, cx| input.set_text(draft, cx));
-        self.chat_list = ListState::new(0, ListAlignment::Bottom, px(500.0));
         if let Some(client) = &self.client {
             client.select_thread(thread_id);
         }
@@ -380,12 +444,37 @@ impl CloudApp {
         {
             return;
         }
+        if self.attachments.iter().any(|chip| chip.progress.is_some()) {
+            self.error = Some("附件仍在云端上传中，请稍候".into());
+            cx.notify();
+            return;
+        }
         self.pending_sends.insert(thread_id.clone());
         self.error = None;
+        let attachments: Vec<TurnAttachment> = self
+            .uploaded
+            .iter()
+            .map(|(_, attachment)| attachment.clone())
+            .collect();
         if let Some(client) = &self.client {
-            client.request(ClientRequest::TurnStart { thread_id, text });
+            client.request(ClientRequest::TurnStart {
+                thread_id,
+                text,
+                attachments,
+            });
         }
         cx.notify();
+    }
+
+    fn interrupt_turn(&mut self) {
+        if !self.online() || !self.can_interact() {
+            return;
+        }
+        if let (Some(client), Some(thread_id)) = (&self.client, &self.active_thread) {
+            client.request(ClientRequest::TurnInterrupt {
+                thread_id: thread_id.clone(),
+            });
+        }
     }
 
     fn create_thread(&mut self, cx: &mut Context<Self>) {
@@ -421,6 +510,26 @@ impl CloudApp {
         cx.notify();
     }
 
+    fn set_pinned(&mut self, thread_id: String, pinned: bool) {
+        if !self.online() {
+            return;
+        }
+        if let Some(client) = &self.client {
+            client.request(ClientRequest::ThreadSetPinned { thread_id, pinned });
+        }
+    }
+
+    fn delete_thread(&mut self, thread_id: String, cx: &mut Context<Self>) {
+        self.confirm_delete = None;
+        if !self.online() {
+            return;
+        }
+        if let Some(client) = &self.client {
+            client.request(ClientRequest::ThreadDelete { thread_id });
+        }
+        cx.notify();
+    }
+
     fn respond_permission(&mut self, decision: PermissionDecision, cx: &mut Context<Self>) {
         if !self.online() || !self.can_interact() || self.pending_permission.is_some() {
             return;
@@ -447,20 +556,54 @@ impl CloudApp {
         cx.notify();
     }
 
+    /// 本地交互:文件选择器选中的文件先上传到云端附件库,再随下一条消息发送。
+    fn pick_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if paths.is_empty() {
+            return;
+        }
+        if !self.online() {
+            self.error = Some("请先连接云端后再添加附件".into());
+            cx.notify();
+            return;
+        }
+        let mut keys = Vec::with_capacity(paths.len());
+        for path in &paths {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "附件".into());
+            let bytes = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+            self.attachment_seq += 1;
+            let key = SharedString::from(format!("attachment-{}", self.attachment_seq));
+            self.attachments.push(Attachment {
+                key: key.clone(),
+                name: name.into(),
+                bytes,
+                preview: None,
+                progress: Some(0.05),
+            });
+            keys.push(key);
+        }
+        self.uploading_keys.extend(keys);
+        if let Some(client) = &self.client {
+            client.upload_attachments(paths);
+        }
+        cx.notify();
+    }
+
+    fn remove_attachment(&mut self, key: &SharedString, cx: &mut Context<Self>) {
+        self.attachments.retain(|chip| &chip.key != key);
+        self.uploaded
+            .retain(|(uploaded_key, _)| uploaded_key != key);
+        cx.notify();
+    }
+
     fn sync_list(&mut self) {
         self.timeline = self
             .active_thread
             .as_ref()
             .and_then(|id| self.state.threads.get(id))
             .map_or_else(Vec::new, |thread| thread.timeline());
-        let count = self.timeline.len();
-        let known = self.chat_list.item_count();
-        if count > known {
-            self.chat_list.splice(known..known, count - known);
-        } else if count < known {
-            self.chat_list.splice(count..known, 0);
-        }
-        self.chat_list.remeasure_items(0..count);
     }
 
     fn open_web(&mut self, cx: &mut Context<Self>) {
@@ -472,6 +615,20 @@ impl CloudApp {
             self.error = Some("无法打开网页，请手动访问云端服务地址".into());
             cx.notify();
         }
+    }
+
+    fn toggle_theme(&mut self, cx: &mut Context<Self>) {
+        self.dark = !self.dark;
+        Theme::set_mode(if self.dark { Mode::Dark } else { Mode::Light }, cx);
+        cx.notify();
+    }
+
+    fn active_thread_meta(&self) -> Option<&ThreadMeta> {
+        self.state
+            .shell
+            .threads
+            .iter()
+            .find(|thread| Some(&thread.id) == self.active_thread.as_ref())
     }
 
     fn login_panel(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -492,18 +649,15 @@ impl CloudApp {
                     .border_1()
                     .border_color(colors.border)
                     .bg(colors.surface)
-                    .child(div().text_2xl().child("Kloud Work"))
+                    .child(div().text_2xl().child(APP_NAME))
                     .child(
                         div()
                             .text_sm()
                             .text_color(colors.fg_muted)
-                            .child("云端原生客户端 · 网页与桌面共用数据"),
+                            .child("云端原生客户端 · 与网页共用数据"),
                     )
-                    .child("服务地址")
                     .child(Input::new(&self.server_input))
-                    .child("用户名")
                     .child(Input::new(&self.username))
-                    .child("密码")
                     .child(Input::new(&self.password))
                     .child(
                         Button::new(
@@ -535,64 +689,106 @@ impl CloudApp {
 
     fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors.clone();
-        let mut projects = div()
-            .id("projects")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap_3();
-        for project in &self.state.shell.projects {
-            let project_id = project.id.clone();
-            let mut group = div().flex().flex_col().gap_1().child(
-                Button::new(
-                    SharedString::from(format!("project-{}", project.id)),
-                    project.name.clone(),
-                )
-                .variant(if self.active_project.as_ref() == Some(&project.id) {
-                    ButtonVariant::Secondary
-                } else {
-                    ButtonVariant::Ghost
-                })
-                .full_width()
-                .on_click(cx.listener(move |view, _, _, cx| {
-                    view.active_project = Some(project_id.clone());
-                    cx.notify();
-                })),
+        let entity = cx.entity().downgrade();
+        let projects: Vec<Project> = self
+            .state
+            .shell
+            .projects
+            .iter()
+            .map(|project| Project {
+                key: project.id.clone().into(),
+                name: project.name.clone().into(),
+                count: self
+                    .state
+                    .shell
+                    .threads
+                    .iter()
+                    .filter(|thread| thread.project_id == project.id && !thread.archived)
+                    .count(),
+            })
+            .collect();
+        let project_list = ProjectList::new("projects", projects).active(
+            self.active_project.clone().map(SharedString::from),
+            move |key, _, cx| {
+                if let Some(entity) = entity.upgrade() {
+                    entity.update(cx, |view, cx| {
+                        view.active_project = Some(key.to_string());
+                        cx.notify();
+                    });
+                }
+            },
+        );
+        let entity = cx.entity().downgrade();
+        let conversations: Vec<Conversation> = self
+            .state
+            .shell
+            .threads
+            .iter()
+            .filter(|thread| {
+                !thread.archived && Some(&thread.project_id) == self.active_project.as_ref()
+            })
+            .map(|thread| Conversation {
+                key: thread.id.clone().into(),
+                title: thread.title.clone().into(),
+                at: Timestamp::from_millisecond(thread.updated_at as i64)
+                    .unwrap_or(Timestamp::UNIX_EPOCH),
+                pinned: thread.pinned_at.is_some(),
+            })
+            .collect();
+        let select_entity = entity.clone();
+        let pin_entity = entity.clone();
+        let delete_entity = entity.clone();
+        let rename_entity = entity.clone();
+        let conversation_list = ConversationList::new("conversations", conversations, self.today)
+            .query(self.search.read(cx).text())
+            .active(
+                self.active_thread.clone().map(SharedString::from),
+                move |key, _, cx| {
+                    if let Some(entity) = select_entity.upgrade() {
+                        entity.update(cx, |view, cx| view.select_thread(Some(key.to_string()), cx));
+                    }
+                },
+            )
+            .actions(
+                move |_, _, cx| {
+                    if let Some(entity) = rename_entity.upgrade() {
+                        entity.update(cx, |view, cx| {
+                            view.error = Some("云端暂不支持在原生端重命名会话".into());
+                            cx.notify();
+                        });
+                    }
+                },
+                move |key, _, cx| {
+                    if let Some(entity) = pin_entity.upgrade() {
+                        entity.update(cx, |view, _| {
+                            let pinned = view
+                                .state
+                                .shell
+                                .threads
+                                .iter()
+                                .find(|thread| &thread.id == key.as_ref())
+                                .and_then(|thread| thread.pinned_at)
+                                .is_some();
+                            view.set_pinned(key.to_string(), !pinned);
+                        });
+                    }
+                },
+                move |key, _, cx| {
+                    if let Some(entity) = delete_entity.upgrade() {
+                        entity.update(cx, |view, cx| {
+                            view.confirm_delete = Some(key.to_string());
+                            cx.notify();
+                        });
+                    }
+                },
             );
-            for thread in self
-                .state
-                .shell
-                .threads
-                .iter()
-                .filter(|thread| thread.project_id == project.id && !thread.archived)
-            {
-                let thread_id = thread.id.clone();
-                let running = self.state.shell.running_thread_ids.contains(&thread.id);
-                group = group.child(
-                    Button::new(
-                        SharedString::from(format!("thread-{}", thread.id)),
-                        format!("{}{}", if running { "● " } else { "" }, thread.title),
-                    )
-                    .variant(if self.active_thread.as_ref() == Some(&thread.id) {
-                        ButtonVariant::Secondary
-                    } else {
-                        ButtonVariant::Ghost
-                    })
-                    .full_width()
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.select_thread(Some(thread_id.clone()), cx)
-                    })),
-                );
+        let new_chat = new_chat_button("new-chat").on_click(move |_, _, cx| {
+            if let Some(entity) = entity.upgrade() {
+                entity.update(cx, |view, cx| view.create_thread(cx));
             }
-            projects = projects.child(group);
-        }
-        if self.state.shell.projects.is_empty() {
-            projects = projects.child("暂无工作区，请在下方创建。");
-        }
+        });
         div()
-            .w(px(280.0))
+            .w(px(300.0))
             .h_full()
             .flex_none()
             .flex()
@@ -602,7 +798,18 @@ impl CloudApp {
             .border_r_1()
             .border_color(colors.border)
             .bg(colors.surface)
-            .child(div().text_xl().child("Kloud Work"))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_xl().child(APP_NAME))
+                    .child(
+                        Button::new("theme", if self.dark { "浅色" } else { "深色" })
+                            .variant(ButtonVariant::Ghost)
+                            .on_click(cx.listener(|view, _, _, cx| view.toggle_theme(cx))),
+                    ),
+            )
             .child(
                 div()
                     .text_xs()
@@ -613,8 +820,15 @@ impl CloudApp {
                         ConnectionState::Reconnecting => "○ 连接中断，正在重连…",
                     }),
             )
-            .child(projects)
-            .child(Input::new(&self.workspace_name))
+            .child(div().flex_none().child(project_list))
+            .child(div().flex_none().child(new_chat))
+            .child(
+                div()
+                    .flex_none()
+                    .child(SearchInput::new("search", &self.search)),
+            )
+            .child(div().flex_1().min_h_0().child(conversation_list))
+            .child(div().flex_none().child(Input::new(&self.workspace_name)))
             .child(
                 Button::new(
                     "create-workspace",
@@ -625,6 +839,7 @@ impl CloudApp {
                     },
                 )
                 .variant(ButtonVariant::Secondary)
+                .full_width()
                 .disabled(
                     !self.online()
                         || self.creating_workspace
@@ -645,6 +860,7 @@ impl CloudApp {
             .child(
                 Button::new("web", "在网页管理设置与文件")
                     .variant(ButtonVariant::Ghost)
+                    .full_width()
                     .on_click(cx.listener(|view, _, _, cx| view.open_web(cx))),
             )
             .child(
@@ -738,21 +954,159 @@ impl CloudApp {
                 .disabled(!self.online() || self.active_project.is_none() || self.creating_thread)
                 .on_click(cx.listener(|view, _, _, cx| view.create_thread(cx))),
             )
-            .child(div().flex_1())
-            .child(
-                Button::new("theme", if self.dark { "浅色" } else { "深色" })
-                    .variant(ButtonVariant::Ghost)
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.dark = !view.dark;
-                        Theme::set_mode(if view.dark { Mode::Dark } else { Mode::Light }, cx);
-                        cx.notify();
-                    })),
-            )
             .into_any_element()
     }
 
-    fn chat_row(&self, index: usize, cx: &App) -> AnyElement {
-        let colors = cx.theme().colors.clone();
+    fn message_row(&self, message: &ChatMessage) -> AnyElement {
+        let id = message.id.clone();
+        let meta = self.active_thread_meta();
+        let model_label = meta
+            .and_then(|thread| thread.model.as_ref())
+            .map(|model| model.model_id.clone())
+            .unwrap_or_else(|| "服务端默认".into());
+        let timestamp =
+            Timestamp::from_millisecond(message.created_at as i64).unwrap_or(Timestamp::UNIX_EPOCH);
+        let role = if message.role == "user" {
+            Role::User
+        } else {
+            Role::Assistant
+        };
+        let mut bubble = MessageBubble::new(role)
+            .avatar(MessageAvatar::new(
+                (ElementId::from("avatar"), id.clone()),
+                role,
+                if role == Role::User {
+                    "你"
+                } else {
+                    ASSISTANT_NAME
+                },
+            ))
+            .header(
+                MessageHeader::new(
+                    (ElementId::from("header"), id.clone()),
+                    if role == Role::User {
+                        "你"
+                    } else {
+                        ASSISTANT_NAME
+                    },
+                )
+                .at(timestamp)
+                .model(model_label),
+            );
+        if let Some(reasoning) = message.reasoning.as_ref().filter(|text| !text.is_empty()) {
+            bubble = bubble.child(ThinkingBlock::new(
+                (ElementId::from("reasoning"), id.clone()),
+                reasoning.clone(),
+                false,
+                Duration::ZERO,
+            ));
+        }
+        bubble = bubble.child(StreamingMarkdown::new(
+            (ElementId::from("text"), id.clone()),
+            message.text.clone(),
+            false,
+        ));
+        if role == Role::Assistant {
+            bubble = bubble.footer(MessageFooter::new().child(MessageActions::new(
+                (ElementId::from("actions"), id),
+                message.text.clone(),
+            )));
+        }
+        div()
+            .px_6()
+            .py_3()
+            .w_full()
+            .min_w_0()
+            .child(bubble)
+            .into_any_element()
+    }
+
+    fn live_row(&self, thread: &ThreadState) -> AnyElement {
+        let turn_id = thread.live.turn_id.clone();
+        let elapsed = thread
+            .live
+            .started_at
+            .map(|started| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_millis() as u64)
+                    .unwrap_or(started);
+                Duration::from_millis(now.saturating_sub(started))
+            })
+            .unwrap_or(Duration::ZERO);
+        let meta = self.active_thread_meta();
+        let model_label = meta
+            .and_then(|thread| thread.model.as_ref())
+            .map(|model| model.model_id.clone())
+            .unwrap_or_else(|| "服务端默认".into());
+        let mut bubble = MessageBubble::new(Role::Assistant)
+            .avatar(MessageAvatar::new(
+                (ElementId::from("live-avatar"), turn_id.clone()),
+                Role::Assistant,
+                ASSISTANT_NAME,
+            ))
+            .header(
+                MessageHeader::new(
+                    (ElementId::from("live-header"), turn_id.clone()),
+                    ASSISTANT_NAME,
+                )
+                .model(model_label),
+            );
+        if !thread.live.reasoning.is_empty() {
+            bubble = bubble.child(ThinkingBlock::new(
+                (ElementId::from("live-reasoning"), turn_id.clone()),
+                thread.live.reasoning.clone(),
+                true,
+                elapsed,
+            ));
+        }
+        bubble = bubble.child(StreamingMarkdown::new(
+            (ElementId::from("live-text"), turn_id.clone()),
+            thread.live.text.clone(),
+            true,
+        ));
+        div()
+            .px_6()
+            .py_3()
+            .w_full()
+            .min_w_0()
+            .child(bubble)
+            .into_any_element()
+    }
+
+    fn tool_row(&self, activity: &ToolActivity) -> AnyElement {
+        let status = match activity.status.as_str() {
+            "running" => StepState::Working,
+            "complete" => StepState::Done,
+            _ => StepState::Failed,
+        };
+        let summary = match activity.status.as_str() {
+            "running" => "执行中",
+            "complete" => "已完成",
+            _ => "失败",
+        };
+        let mut card = ToolCallCard::new(
+            (ElementId::from("tool"), activity.id.clone()),
+            activity.tool_name.clone(),
+            status,
+        )
+        .summary(summary);
+        if let Some(args) = activity.args.as_ref().filter(|args| !args.is_empty()) {
+            card = card.arguments(preview(args));
+        }
+        if let Some(result) = activity.result.as_ref().filter(|result| !result.is_empty()) {
+            card = card.result(preview(result));
+        }
+        div()
+            .px_6()
+            .py_3()
+            .w_full()
+            .min_w_0()
+            .child(card)
+            .into_any_element()
+    }
+
+    fn chat_row(&self, index: usize) -> AnyElement {
         let Some(thread) = self
             .active_thread
             .as_ref()
@@ -760,93 +1114,164 @@ impl CloudApp {
         else {
             return div().into_any_element();
         };
-        let base = div()
-            .px_8()
-            .py_3()
-            .w_full()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap_2();
-        let Some(entry) = self.timeline.get(index) else {
-            return div().into_any_element();
-        };
-        if let TimelineEntry::Message(message_index) = entry {
-            let message = &thread.messages[*message_index];
-            return base
-                .child(div().text_xs().text_color(colors.fg_muted).child(
-                    match message.role.as_str() {
-                        "user" => "你",
-                        "assistant" => "Agent",
-                        _ => "系统",
-                    },
-                ))
-                .children(
-                    message
-                        .reasoning
-                        .as_ref()
-                        .filter(|text| !text.is_empty())
-                        .map(|text| {
-                            div()
-                                .text_sm()
-                                .text_color(colors.fg_muted)
-                                .child(text.clone())
-                        }),
-                )
-                .child(StreamingMarkdown::new(
-                    SharedString::from(format!("message-{}", message.id)),
-                    message.text.clone(),
-                    false,
-                ))
-                .into_any_element();
-        }
-        if matches!(entry, TimelineEntry::Live) {
-            return base
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(colors.fg_muted)
-                        .child("Agent · 正在输出"),
-                )
-                .children((!thread.live.reasoning.is_empty()).then(|| {
-                    div()
-                        .text_sm()
-                        .text_color(colors.fg_muted)
-                        .child(thread.live.reasoning.clone())
-                }))
-                .child(StreamingMarkdown::new(
-                    SharedString::from(format!("live-{}", thread.live.turn_id)),
-                    thread.live.text.clone(),
-                    true,
-                ))
-                .into_any_element();
-        }
-        let TimelineEntry::Tool(tool_index) = entry else {
-            return div().into_any_element();
-        };
-        let activity = &thread.activities[*tool_index];
-        base.child(div().text_sm().text_color(colors.fg_muted).child(format!(
-            "工具 · {} · {}",
-            activity.tool_name,
-            match activity.status.as_str() {
-                "running" => "执行中",
-                "complete" => "已完成",
-                _ => "失败",
+        match self.timeline.get(index) {
+            Some(TimelineEntry::Message(message_index)) => {
+                match thread.messages.get(*message_index) {
+                    Some(message) => self.message_row(message),
+                    None => div().into_any_element(),
+                }
             }
-        )))
-        .children(
-            activity
-                .args
-                .as_ref()
-                .map(|args| div().text_xs().child(preview(args))),
-        )
-        .children(activity.result.as_ref().map(|result| {
-            div()
-                .text_xs()
-                .text_color(colors.fg_muted)
-                .child(preview(result))
+            Some(TimelineEntry::Tool(tool_index)) => match thread.activities.get(*tool_index) {
+                Some(activity) => self.tool_row(activity),
+                None => div().into_any_element(),
+            },
+            Some(TimelineEntry::Live) => self.live_row(thread),
+            None => div().into_any_element(),
+        }
+    }
+
+    fn permission_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(request) = self
+            .active_thread
+            .as_ref()
+            .and_then(|id| self.state.threads.get(id))
+            .and_then(|thread| thread.pending_permission.clone())
+        else {
+            return div().into_any_element();
+        };
+        let colors = cx.theme().colors.clone();
+        let title = request
+            .reason
+            .clone()
+            .unwrap_or_else(|| request.kind.clone());
+        let detail = [request.command.clone(), request.cwd.clone()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let entity = cx.entity().downgrade();
+        let prompt = PermissionPrompt::new(
+            (ElementId::from("permission"), request.request_id.clone()),
+            title,
+            move |answer, _, cx| {
+                if let Some(entity) = entity.upgrade() {
+                    entity.update(cx, |view, cx| {
+                        let decision = match answer {
+                            Permission::Deny => PermissionDecision::Decline,
+                            _ => PermissionDecision::Accept,
+                        };
+                        view.respond_permission(decision, cx)
+                    });
+                }
+            },
+        );
+        let prompt = if detail.is_empty() {
+            prompt
+        } else {
+            prompt.detail(detail)
+        };
+        div()
+            .mx_5()
+            .mb_3()
+            .p_4()
+            .rounded_lg()
+            .border_1()
+            .border_color(colors.border)
+            .bg(colors.surface)
+            .child(prompt)
+            .into_any_element()
+    }
+
+    fn confirm_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(thread_id) = self.confirm_delete.clone() else {
+            return div().into_any_element();
+        };
+        let colors = cx.theme().colors.clone();
+        div()
+            .mx_5()
+            .mb_3()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(colors.border)
+            .bg(colors.surface)
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .child("确认删除该会话?云端历史将一并移除,且不可撤销。"),
+            )
+            .child(Button::new("confirm-delete", "删除").on_click(
+                cx.listener(move |view, _, _, cx| view.delete_thread(thread_id.clone(), cx)),
+            ))
+            .child(
+                Button::new("cancel-delete", "取消")
+                    .variant(ButtonVariant::Ghost)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.confirm_delete = None;
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity().downgrade();
+        let send_entity = entity.clone();
+        let stop_entity = entity.clone();
+        let attach_entity = entity.clone();
+        let drop_entity = entity.clone();
+        let running = self
+            .active_thread
+            .as_ref()
+            .and_then(|id| self.state.threads.get(id))
+            .is_some_and(|thread| thread.running);
+        let chips: Vec<_> = self
+            .attachments
+            .iter()
+            .enumerate()
+            .map(|(index, chip)| {
+                let key = chip.key.clone();
+                let entity = entity.clone();
+                AttachmentChip::new(("attachment", index), chip.clone()).on_remove(move |_, cx| {
+                    if let Some(entity) = entity.upgrade() {
+                        entity.update(cx, |view, cx| view.remove_attachment(&key, cx));
+                    }
+                })
+            })
+            .collect();
+        let mut input = PromptInput::new("composer", &self.composer, move |_, cx| {
+            if let Some(entity) = send_entity.upgrade() {
+                entity.update(cx, |view, cx| view.send_turn(cx));
+            }
+        })
+        .tool(AttachmentButton::new("attach", move |paths, _, cx| {
+            if let Some(entity) = attach_entity.upgrade() {
+                entity.update(cx, |view, cx| view.pick_attachments(paths, cx));
+            }
         }))
-        .into_any_element()
+        .on_drop(move |paths, _, cx| {
+            if let Some(entity) = drop_entity.upgrade() {
+                entity.update(cx, |view, cx| view.pick_attachments(paths, cx));
+            }
+        });
+        if !chips.is_empty() {
+            input = input.above(div().flex().flex_wrap().gap_2().children(chips));
+        }
+        if running {
+            input = input.busy(move |_, cx| {
+                if let Some(entity) = stop_entity.upgrade() {
+                    entity.update(cx, |view, cx| {
+                        view.interrupt_turn();
+                        cx.notify();
+                    });
+                }
+            });
+        }
+        input
     }
 
     fn conversation(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -855,18 +1280,10 @@ impl CloudApp {
             .active_thread
             .as_ref()
             .and_then(|id| self.state.threads.get(id));
-        let meta = self
-            .state
-            .shell
-            .threads
-            .iter()
-            .find(|thread| Some(&thread.id) == self.active_thread.as_ref());
+        let meta = self.active_thread_meta();
         let running = thread.is_some_and(|thread| thread.running);
         let loaded = thread.is_some_and(|thread| thread.loaded);
-        let sending = self
-            .active_thread
-            .as_ref()
-            .is_some_and(|id| self.pending_sends.contains(id));
+        let count = self.timeline.len();
         let entity = cx.entity().downgrade();
         let history = if self.active_thread.is_none() {
             div()
@@ -880,15 +1297,15 @@ impl CloudApp {
         } else if !loaded {
             div().p_8().child("正在读取云端会话…").into_any_element()
         } else {
-            list(self.chat_list.clone(), move |index, _, cx| {
+            MessageList::new("messages", count, move |index, _, cx| {
                 entity.upgrade().map_or_else(
                     || div().into_any_element(),
-                    |entity| entity.read(cx).chat_row(index, cx),
+                    |entity| entity.read(cx).chat_row(index),
                 )
             })
-            .size_full()
             .into_any_element()
         };
+        let chat = ChatContainer::new(history).composer(self.composer(cx));
         let mut body = div()
             .flex_1()
             .min_w_0()
@@ -902,22 +1319,29 @@ impl CloudApp {
                     .py_3()
                     .border_b_1()
                     .border_color(colors.border)
+                    .flex()
+                    .items_center()
+                    .gap_3()
                     .child(
-                        meta.map(|thread| {
-                            format!(
-                                "{} · {}",
-                                thread.title,
-                                if thread.runtime == AgentRuntime::Codex {
-                                    "Codex"
-                                } else {
-                                    "DSH"
-                                }
-                            )
-                        })
-                        .unwrap_or_else(|| "云端工作台".into()),
+                        div().flex_1().child(
+                            meta.map(|thread| {
+                                format!(
+                                    "{} · {}",
+                                    thread.title,
+                                    if thread.runtime == AgentRuntime::Codex {
+                                        "Codex"
+                                    } else {
+                                        "DSH"
+                                    }
+                                )
+                            })
+                            .unwrap_or_else(|| "云端工作台".into()),
+                        ),
+                    )
+                    .children(
+                        running.then(|| AgentStatus::new("agent-status", AgentState::Working)),
                     ),
-            )
-            .child(div().flex_1().min_h_0().child(history));
+            );
         if let Some(error) = thread.and_then(|thread| thread.error.as_ref()) {
             body = body.child(
                 div()
@@ -927,106 +1351,10 @@ impl CloudApp {
                     .child(error.clone()),
             );
         }
-        if let Some(permission) = thread.and_then(|thread| thread.pending_permission.as_ref()) {
-            body = body.child(
-                div()
-                    .mx_5()
-                    .p_4()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(colors.border)
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child("Agent 请求授权")
-                    .child(
-                        permission
-                            .reason
-                            .clone()
-                            .unwrap_or_else(|| permission.kind.clone()),
-                    )
-                    .children(permission.command.clone())
-                    .children(permission.cwd.clone())
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(
-                                Button::new("accept", "允许")
-                                    .disabled(
-                                        !self.online()
-                                            || !self.can_interact()
-                                            || self.pending_permission.is_some(),
-                                    )
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.respond_permission(PermissionDecision::Accept, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("decline", "拒绝")
-                                    .variant(ButtonVariant::Secondary)
-                                    .disabled(
-                                        !self.online()
-                                            || !self.can_interact()
-                                            || self.pending_permission.is_some(),
-                                    )
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.respond_permission(PermissionDecision::Decline, cx)
-                                    })),
-                            ),
-                    ),
-            );
-        }
-        body.child(
-            div()
-                .p_5()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(Input::new(&self.composer))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(div().flex_1().text_xs().text_color(colors.fg_muted).child(
-                            if running {
-                                "Agent 正在云端执行；关闭客户端不会主动停止任务。"
-                            } else {
-                                "Ctrl / ⌘ + Enter 发送 · 工作区和命令均在云端"
-                            },
-                        ))
-                        .child(
-                            Button::new("stop", "停止")
-                                .variant(ButtonVariant::Secondary)
-                                .disabled(!self.online() || !self.can_interact() || !running)
-                                .on_click(cx.listener(|view, _, _, _| {
-                                    if view.online()
-                                        && view.can_interact()
-                                        && let (Some(client), Some(thread_id)) =
-                                            (&view.client, &view.active_thread)
-                                    {
-                                        client.request(ClientRequest::TurnInterrupt {
-                                            thread_id: thread_id.clone(),
-                                        });
-                                    }
-                                })),
-                        )
-                        .child(
-                            Button::new("send", if sending { "正在提交…" } else { "发送" })
-                                .disabled(
-                                    !self.online()
-                                        || !self.can_interact()
-                                        || !loaded
-                                        || running
-                                        || sending
-                                        || self.composer.read(cx).text().trim().is_empty(),
-                                )
-                                .on_click(cx.listener(|view, _, _, cx| view.send_turn(cx))),
-                        ),
-                ),
-        )
-        .into_any_element()
+        body.child(self.permission_bar(cx))
+            .child(self.confirm_bar(cx))
+            .child(div().flex_1().min_h_0().child(chat))
+            .into_any_element()
     }
 }
 

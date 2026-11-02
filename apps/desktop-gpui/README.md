@@ -1,18 +1,19 @@
-# Kloud Work 原生云端客户端
+# Kloud Work 原生客户端
 
-Rust + GPUI + Ely 实现的原生桌面前端，默认连接 `https://agent.proxy.nolaurence.cn`。不包含 WebView，不启动本地服务、数据库、Codex 或 DSH；账号、工作区、会话和执行任务均由现有 `apps/server` 管理。网页继续独立使用，同账号的已订阅会话通过现有 WebSocket 广播更新。
+Rust + GPUI + [Ely-GPUI-Components](https://github.com/ELY-Open-Source/Ely-GPUI-Components) 实现的原生桌面前端，界面完全由 Ely 的聊天与代理组件构成（`ChatContainer`/`MessageList`/`PromptInput`/`ToolCallCard`/`PermissionPrompt` 等）。默认连接 `https://agent.proxy.nolaurence.cn`。不包含 WebView，不启动本地服务、数据库、Codex 或 DSH；账号、工作区、会话、消息、模型与执行任务全部由云端 `apps/server` 管理，与网页数据完全一致。除服务地址设置、本地文件选择（附件上传）和在系统浏览器打开云端网页外，没有任何本地状态。
 
-## 首版功能
+## 功能
 
 - 用户名/密码登录，连接状态提示，退出并清除当前账号的内存状态。
-- 云端工作区和未归档会话列表，创建工作区、创建 Codex / DSH 会话。
+- 云端工作区（`ProjectList`）与未归档会话列表（`ConversationList`，含置顶/删除），支持搜索；创建工作区、创建 Codex / DSH 会话。
 - 新建会话时选择模型，使用标准模式和请求授权模式；DSH 的实际权限行为沿用服务端。
-- 历史消息、Markdown、流式正文、思考内容和工具记录；消息列表按可见区域渲染。
-- 发送消息、停止任务、允许/拒绝权限请求，只读分享会话禁用操作。
+- 历史消息、Markdown 流式正文、思考过程（`ThinkingBlock`）与工具记录（`ToolCallCard`）；消息列表按可见区域渲染。
+- 发送消息、停止任务、允许/拒绝权限请求（`PermissionPrompt`），只读分享会话禁用操作。
+- 本地文件选择器挑选附件，先上传到云端附件库，再随消息发送（与网页附件链路一致）。
 - 自动重连，重新订阅工作区列表和当前会话，以服务端快照恢复状态。
-- 当前启动期间按会话保留草稿，切换明暗主题，在系统浏览器打开云端网页。
+- 当前启动期间按会话保留草稿，跟随系统深浅色并可手动切换，在系统浏览器打开云端网页。
 
-这是新增的云端原生前端，不替换现有网页，也不改变已有 `apps/desktop` 的本地桌面模式。文件管理、上传下载、终端、Git 操作、交互式浏览器、Office 预览、插件和管理设置暂时仍在网页使用；原生工具记录过长时只显示摘要。带附件的消息首版只显示正文，附件请在网页查看。原生端不提供离线执行、跨设备草稿同步或长期本地缓存。
+文件管理、上传下载、终端、Git 操作、交互式浏览器、Office 预览、插件和管理设置仍在网页使用；原生工具记录过长时只显示摘要。原生端不提供离线执行、跨设备草稿同步或长期本地缓存。
 
 ## 环境要求
 
@@ -50,7 +51,7 @@ npm run desktop:native:build
 CCA_SERVER_URL=http://127.0.0.1:8787 npm run desktop:native
 ```
 
-仅本机回环地址允许 HTTP，远端必须使用 HTTPS。地址只能包含协议、主机和端口，不支持子路径部署。连接本机开发服务时，应启动普通账号登录模式的服务端，而不是 `CCA_LOCAL_MODE`。
+仅本机回环地址允许 HTTP，远端必须使用 HTTPS。地址只能包含协议、主机和端口，不支持子路径部署。连接本机开发服务时，应启动普通账号登录模式的服务端。
 
 ## 数据与安全边界
 
@@ -85,6 +86,6 @@ cargo test --manifest-path apps/desktop-gpui/Cargo.toml --locked --no-default-fe
 
 ## 依赖维护
 
-Ely 当前仍为早期不稳定库，因此锁定 Git 提交 `01fe68db06998203184ccf6da8de50f7cae2b628`，GPUI 固定为该提交使用的 `gpui-pre = 0.3.10`，并提交 `Cargo.lock`。只使用 Ely 的 core、chat、documents 模块，不引入无关业务组件。升级时应成套验证，避免跟随 `main` 自动变更。
+Ely 当前仍为早期不稳定库，因此锁定 Git 提交 `01fe68db06998203184ccf6da8de50f7cae2b628`，GPUI 固定为该提交使用的 `gpui-pre = 0.3.10`，并提交 `Cargo.lock`。只使用 Ely 的 core、chat、agent、documents 模块，不引入无关业务组件。升级时应成套验证，避免跟随 `main` 自动变更。
 
 Ely 使用 MIT 许可，图标与字体另有第三方许可；打包分发时应随产物保留所用依赖、图标及字体的许可声明。

@@ -274,6 +274,7 @@ async fn reconnect_restores_subscription_and_never_replays_a_mutation() {
     client.request(ClientRequest::TurnStart {
         thread_id: "thread-1".into(),
         text: "消息只发送一次".into(),
+        attachments: Vec::new(),
     });
     wait_for(&events, |event| {
         matches!(
