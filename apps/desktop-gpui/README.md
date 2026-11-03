@@ -45,6 +45,30 @@ npm run desktop:native:build
 
 发布模式可执行文件生成于 `apps/desktop-gpui/target/release/kloud-work`，Windows 为 `kloud-work.exe`。当前未生成安装包、签名、公证或自动更新配置；不要把未签名开发产物当作正式安装包。
 
+### Windows 安装包(在 Linux 上交叉编译)
+
+没有 Windows 构建机时，可用 Docker 在 Linux 上交叉编译并用 Linux 版 NSIS 打包：
+
+```sh
+# 1. 交叉编译(容器内)
+docker run --rm -v $PWD:/work -v cargo-cache:/cargo -v xwin-cache:/xwin-cache \
+  -w /work -e CARGO_TERM_COLOR=never rust:1-slim-bookworm bash -c "
+    export CARGO_HOME=/cargo XWIN_CACHE_DIR=/xwin-cache
+    apt-get update -qq && apt-get install -y -qq clang llvm curl
+    rustup target add x86_64-pc-windows-msvc
+    cargo install --locked cargo-xwin          # 或下载预编译二进制
+    cd /work/apps/desktop-gpui && cargo xwin build --release --target x86_64-pc-windows-msvc"
+
+# 2. 打包(容器内)
+docker run --rm -v $PWD:/work -w /work debian:bookworm-slim bash -c "
+    apt-get update -qq && apt-get install -y -qq nsis
+    mkdir -p pkg dist
+    cp apps/desktop-gpui/target/x86_64-pc-windows-msvc/release/kloud-work.exe pkg/
+    makensis -DVERSION=0.1.0 -DSRCDIR=/work/pkg -DOUT=/work/dist installer.nsi"
+```
+
+注意：`gpui-pre-windows` 的 release 构建原本只在 Windows 主机上用 fxc 预编译 HLSL 着色器；在 Linux 上交叉编译时需要给该 crate 打补丁，改为把展平后的 HLSL 源码内嵌进二进制、运行时调用 `D3DCompile`(依赖用户系统自带的 `d3dcompiler_47.dll`)。补丁方式：复制该 crate 到本地目录，将 `#include "alpha_correction.hlsl"` 替换为文件内容，并让 `RawShaderBytes::new` 始终走运行时编译，然后在构建副本的 `Cargo.toml` 中加 `[patch.crates-io]` 指向它。正式发布仍建议在 Windows runner 上构建以获得 fxc 预编译的着色器。
+
 登录页可以修改服务地址，也可通过 `CCA_SERVER_URL` 指定初始值：
 
 ```sh
