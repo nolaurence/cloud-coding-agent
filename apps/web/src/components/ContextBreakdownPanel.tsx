@@ -5,10 +5,9 @@ const compactTokens = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
 });
 
-function percentOf(usage: ContextUsage): string {
-  if (usage.maxTokens <= 0) return "0";
-  const ratio = Math.max(0, Math.min(usage.usedTokens / usage.maxTokens, 1));
-  return ratio > 0 && ratio < 0.01 ? "<1" : String(Math.round(ratio * 100));
+function ratioOf(usage: ContextUsage): number {
+  if (usage.maxTokens <= 0) return 0;
+  return Math.max(0, Math.min(usage.usedTokens / usage.maxTokens, 1));
 }
 
 function rowsOf(breakdown: ContextBreakdown) {
@@ -20,7 +19,8 @@ function rowsOf(breakdown: ContextBreakdown) {
 }
 
 export function ContextBreakdownPanel({ usage }: { usage: ContextUsage }) {
-  const percent = percentOf(usage);
+  const ratio = ratioOf(usage);
+  const percent = ratio > 0 && ratio < 0.01 ? "<1" : String(Math.round(ratio * 100));
   const breakdown = usage.breakdown;
   const total = breakdown
     ? breakdown.systemTokens + breakdown.toolsTokens + breakdown.messageTokens
@@ -36,20 +36,19 @@ export function ContextBreakdownPanel({ usage }: { usage: ContextUsage }) {
         </span>
       </div>
       <div className="flex h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800" aria-hidden="true">
-        {breakdown && total > 0 ? (
-          rows.map((row) => (
-            <span
-              key={row.label}
-              className={`h-full ${row.color}`}
-              style={{ width: `${Math.max(0, (row.tokens / total) * 100)}%` }}
-            />
-          ))
-        ) : (
-          <span
-            className="h-full bg-zinc-500"
-            style={{ width: `${Math.max(0, Math.min(100, Number(percent) || 0))}%` }}
-          />
-        )}
+        <div className="flex h-full" style={{ width: `${ratio * 100}%` }}>
+          {breakdown && total > 0 ? (
+            rows.map((row) => (
+              <span
+                key={row.label}
+                className={`h-full ${row.color}`}
+                style={{ width: `${Math.max(0, (row.tokens / total) * 100)}%` }}
+              />
+            ))
+          ) : (
+            <span className="h-full w-full bg-zinc-500" />
+          )}
+        </div>
       </div>
       {breakdown && total > 0 ? (
         <dl className="space-y-1 border-t border-zinc-200 pt-1.5 dark:border-zinc-800">
