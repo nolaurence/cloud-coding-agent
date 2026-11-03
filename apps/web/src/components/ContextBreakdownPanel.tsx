@@ -36,19 +36,17 @@ export function ContextBreakdownPanel({ usage }: { usage: ContextUsage }) {
         </span>
       </div>
       <div className="flex h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800" aria-hidden="true">
-        <div className="flex h-full" style={{ width: `${ratio * 100}%` }}>
-          {breakdown && total > 0 ? (
-            rows.map((row) => (
-              <span
-                key={row.label}
-                className={`h-full ${row.color}`}
-                style={{ width: `${Math.max(0, (row.tokens / total) * 100)}%` }}
-              />
-            ))
-          ) : (
-            <span className="h-full w-full bg-zinc-500" />
-          )}
-        </div>
+        {breakdown && total > 0 ? (
+          rows.map((row) => (
+            <span
+              key={row.label}
+              className={`h-full shrink-0 ${row.color}`}
+              style={{ width: `${Math.max(0, (row.tokens / total) * ratio * 100)}%` }}
+            />
+          ))
+        ) : (
+          <span className="h-full shrink-0 bg-zinc-500" style={{ width: `${ratio * 100}%` }} />
+        )}
       </div>
       {breakdown && total > 0 ? (
         <dl className="space-y-1 border-t border-zinc-200 pt-1.5 dark:border-zinc-800">
