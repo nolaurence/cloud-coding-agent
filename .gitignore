@@ -8,4 +8,4 @@ data
 release
 /workspace/
 /.codex-tmp/
-/apps/desktop-gpui/target/
+/.dsh-acl-recovery/

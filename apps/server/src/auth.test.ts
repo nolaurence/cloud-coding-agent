@@ -107,7 +107,7 @@ test("admin roles and invite registration persist without storing invite plainte
   assert.equal(auth.listUsers().find((user) => user.username === "member-one")?.role, "admin");
 });
 
-test("desktop bootstrap forces invite-only registration", async () => {
+test("invite-required environment forces invite-only registration", async () => {
   const original = process.env.REGISTRATION_INVITE_REQUIRED;
   process.env.REGISTRATION_INVITE_REQUIRED = "true";
   try {

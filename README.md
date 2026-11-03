@@ -34,12 +34,6 @@
 
 ## 架构
 
-### GPUI 原生云端客户端
-
-`apps/desktop-gpui` 提供 Rust + GPUI + Ely 原生桌面前端，默认连接 `https://agent.proxy.nolaurence.cn`，与网页共用账号、云端会话和执行后端，不启动本地服务或独立数据库。首版支持登录、工作区/会话、模型与引擎选择、聊天、工具记录和权限确认；文件、终端、预览及管理设置仍在网页使用。
-
-安装 Rust 和系统图形开发依赖后，运行 `npm run desktop:native`；构建使用 `npm run desktop:native:build`。环境要求、功能边界和安全说明见 [原生客户端文档](apps/desktop-gpui/README.md)。
-
 ### 云端服务
 
 ```
@@ -71,16 +65,6 @@ apps/server (Fastify + Codex/DSH 适配层)
 ```bash
 npm install
 npm run dev        # server :8787 + web :5173(代理 /ws)
-```
-
-## 原生桌面客户端(macOS / Windows / Linux)
-
-`apps/desktop-gpui` 是基于 [Ely-GPUI-Components](https://github.com/ELY-Open-Source/Ely-GPUI-Components) 的原生客户端,默认连接 `https://agent.proxy.nolaurence.cn`。它不启动本地服务、不使用本地数据库,账号、工作区、会话、消息、模型与权限均与云端完全一致;仅服务地址设置、本地文件选择(附件)和在系统浏览器中打开云端网页属于本地交互。详见 [原生客户端文档](apps/desktop-gpui/README.md)。
-
-```bash
-npm run desktop:native          # 运行原生客户端(需 Rust 1.98+ 与系统图形依赖)
-npm run desktop:native:build    # 产物:apps/desktop-gpui/target/release/kloud-work
-npm run test:desktop:native     # 协议样例与 Rust 测试
 ```
 
 ## Standalone 部署
