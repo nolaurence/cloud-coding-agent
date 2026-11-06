@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import fixtures from "./dockerSandboxFixtures.json" with { type: "json" };
 import { applySandboxChanges, DockerSandbox, readDockerSandboxConfig, snapshotWorkspace, validateWorkspaceName, type SandboxResult } from "./dockerSandbox.js";
 
 const result = (files: Record<string, { data: string; executable: boolean }>, deleted: string[] = []): SandboxResult => ({
@@ -57,7 +58,29 @@ test("sync refuses traversal, reserved names, links and concurrent editor change
   assert.deepEqual(await fs.readdir(outside), []);
 });
 
-test("real Docker executes loops, persists files, bounds output and kills cancelled processes", {
+test("nested Python, Node, Go and Java projects synchronize source but never generated files", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-polyglot-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (const name of [...fixtures.source, ...fixtures.generated]) {
+    const file = path.join(root, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, name);
+  }
+  // A cache larger than the per-file limit must be pruned before reading/stat accounting.
+  const largeCache = await fs.open(path.join(root, "services/java/target/huge.jar"), "w");
+  try { await largeCache.truncate(9 * 1024 * 1024); } finally { await largeCache.close(); }
+  const before = await snapshotWorkspace(root);
+  assert.deepEqual(Object.keys(before).sort(), [...fixtures.source].sort());
+  for (const name of fixtures.generated) {
+    await assert.rejects(applySandboxChanges(root, before, result({ [name]: entry("remote cache") })), /无效.*路径/);
+    await assert.rejects(applySandboxChanges(root, before, result({}, [name])), /无效.*路径/);
+    assert.equal(await fs.readFile(path.join(root, name), "utf8"), name, "local caches must remain untouched");
+  }
+  await applySandboxChanges(root, before, result({ "services/java/src/Main.java": entry("updated") }));
+  assert.equal(await fs.readFile(path.join(root, "services/java/src/Main.java"), "utf8"), "updated");
+});
+
+test("real Docker executes loops, discards dependencies, bounds output and kills cancelled processes", {
   skip: !process.env.CCA_SANDBOX_INTEGRATION_CONFIG, timeout: 180000,
 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-docker-integration-"));
@@ -73,7 +96,10 @@ test("real Docker executes loops, persists files, bounds output and kills cancel
     }
     print(results);
     print(await tools.exec('id -u; test -f /.dockerenv && echo docker; touch /root/should-fail'));
-    await tools.write_file('node_modules/persisted.txt', 'remote dependency');
+    await tools.write_file('nested/node/node_modules/disposable.txt', 'remote dependency');
+    await tools.write_file('nested/python/.venv/disposable.txt', 'remote dependency');
+    await tools.write_file('nested/go/.gomodcache/disposable.txt', 'remote dependency');
+    await tools.write_file('nested/java/target/disposable.txt', 'remote build');
   `);
   assert.equal(first.exitCode, 0, first.stderr);
   assert.match(first.stdout, /\["0","1","2"\]/);
@@ -81,9 +107,9 @@ test("real Docker executes loops, persists files, bounds output and kills cancel
   assert.match(first.stdout, /docker/);
   assert.match(first.stdout, /Permission denied|Read-only/);
   assert.equal(await fs.readFile(path.join(root, "loop-2.txt"), "utf8"), "2");
-  await assert.rejects(fs.access(path.join(root, "node_modules")));
-  const next = await sandbox.run(`print(await tools.read_file('node_modules/persisted.txt')); await tools.exec('rm loop-0.txt');`);
-  assert.match(next.stdout, /remote dependency/);
+  await assert.rejects(fs.access(path.join(root, "nested")));
+  const next = await sandbox.run(`print(await tools.exec('test ! -e nested && echo caches-clean')); await tools.exec('rm loop-0.txt');`);
+  assert.match(next.stdout, /caches-clean/);
   await assert.rejects(fs.access(path.join(root, "loop-0.txt")));
   const timeout = await sandbox.run(`await tools.write_file('before-timeout', 'saved'); while (true) {}`, 1500);
   assert.equal(timeout.timedOut, true);

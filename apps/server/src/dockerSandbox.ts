@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { DATA_DIR } from "./env.js";
+import { isSandboxPathIgnored, SANDBOX_WORKSPACE_POLICY_VERSION } from "./dockerSandboxFiles.js";
 
 export interface DockerSandboxConfig {
   host: string;
@@ -23,13 +24,14 @@ export interface SandboxResult {
   files: Snapshot;
   deleted: string[];
 }
-const IGNORED = new Set([".git", "node_modules", ".next", "dist", "build", "coverage", ".cache", "__pycache__"]);
 const MAX_BYTES = 64 * 1024 * 1024;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 export const SANDBOX_INSTRUCTIONS = `本会话使用远端 Docker 工作区 /workspace。所有代码、命令和项目文件操作必须使用 cca_sandbox 的 run_code 工具。
 run_code 接收 JavaScript async 函数体，可在同一代码块内使用 for/while、条件和 Promise.all 调用 tools.exec(command, {cwd?, timeout_ms?})、tools.read_file(path)、tools.write_file(path, content)、tools.list_files(path?)。
 用 print(value) 输出需要反馈给模型的结果，或 return JSON 值；不要每次循环都请求模型。示例：for (const file of await tools.list_files('.')) { print(file); }
-每次执行使用独立 Linux Docker 容器，项目文件自动同步回工作区；JS 内存和后台进程不跨调用保留。依赖目录 node_modules、.git、dist、build、.next、coverage、.cache、__pycache__ 不同步；容器内安装的依赖保留在远端工作区。Git 元数据不在沙箱中，认证 Git 操作使用平台入口。禁止尝试回退到服务端本地命令执行。`;
+每次执行使用独立 Linux Docker 容器和全新工作目录，源码及普通文件自动同步回工作区；依赖、构建缓存、JS 内存、/tmp 和后台进程均不跨代码块保留。安装依赖、构建和测试必须放在同一个 run_code 中完成，先检查 tools.exec 的 exitCode 再执行后续步骤。
+工作区可能包含多层嵌套或多个工程，先定位 package.json、pyproject.toml/requirements.txt、go.mod/go.work、pom.xml/build.gradle(.kts) 等清单，再用 tools.exec 的 cwd 指定实际工程目录，不要假设工程在 /workspace 根目录。
+所有层级的 node_modules、Python 虚拟环境/字节码、Go 模块/编译缓存、Maven/Gradle 构建目录及通用 dist/build/coverage 等生成物均不参与同步。保留源码、清单、锁文件、Yarn/Maven/Gradle wrapper 和 Go vendor 源码。需要交付的构建产物请在同一代码块内复制到未排除的目录。Git 元数据不在沙箱中，认证 Git 操作使用平台入口。禁止尝试回退到服务端本地命令执行。`;
 
 export async function readDockerSandboxConfig(): Promise<DockerSandboxConfig | undefined> {
   const file = process.env.CCA_DOCKER_SANDBOX_CONFIG || path.join(DATA_DIR, "docker-sandbox.json");
@@ -51,7 +53,7 @@ export async function readDockerSandboxConfig(): Promise<DockerSandboxConfig | u
 
 export function validateWorkspaceName(name: string): string[] {
   const parts = name.split("/");
-  if (!name || name.includes("\\") || parts.some(p => !p || p === "." || p === ".." || IGNORED.has(p) ||
+  if (!name || name.includes("\\") || isSandboxPathIgnored(name) || parts.some(p => !p || p === "." || p === ".." ||
       /[<>:"|?*\x00-\x1f]/.test(p) || /[. ]$/.test(p) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p))) {
     throw new Error("沙箱返回了无效的工作区路径");
   }
@@ -71,22 +73,24 @@ async function safeLocalPath(root: string, name: string): Promise<string> {
 export async function snapshotWorkspace(root: string): Promise<Snapshot> {
   const files: Snapshot = Object.create(null);
   let total = 0;
+  let count = 0;
   async function walk(directory: string, prefix: string) {
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      if (IGNORED.has(entry.name) || entry.isSymbolicLink()) continue;
       const name = prefix + entry.name;
+      if (entry.isSymbolicLink() || isSandboxPathIgnored(name, entry.isDirectory())) continue;
       validateWorkspaceName(name);
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) { await walk(file, name + "/"); continue; }
       if (!entry.isFile()) continue;
       const stat = await fs.stat(file);
       total += stat.size;
-      if (stat.size > MAX_FILE_BYTES || total > MAX_BYTES || Object.keys(files).length >= 10000) {
+      if (stat.size > MAX_FILE_BYTES || total > MAX_BYTES || count >= 10000) {
         throw new Error("沙箱同步上限：单文件 8 MiB、合计 64 MiB、10000 个文件；请缩小工作区");
       }
       const data = await fs.readFile(file);
       if (data.length !== stat.size) throw new Error("同步期间文件发生变化，请重试");
       files[name] = { data: data.toString("base64"), executable: process.platform !== "win32" && Boolean(stat.mode & 0o111) };
+      count++;
     }
   }
   await walk(root, "");
@@ -185,7 +189,7 @@ export class DockerSandbox {
       if (this.closed) throw new Error("Docker 沙箱已关闭");
       controller.signal.throwIfAborted();
       dispatched = true;
-      const result = await invokeSandbox<SandboxResult>(this.config, { action: "run", workspace: this.workspace, run: id, code, timeout_ms: timeoutMs, files: before, network: this.network });
+      const result = await invokeSandbox<SandboxResult>(this.config, { action: "run", workspace_policy_version: SANDBOX_WORKSPACE_POLICY_VERSION, workspace: this.workspace, run: id, code, timeout_ms: timeoutMs, files: before, network: this.network });
       try { await applySandboxChanges(this.cwd, before, result); }
       catch (error) {
         const recovery = path.join(DATA_DIR, "sandbox-recovery", id + ".json");
@@ -214,7 +218,10 @@ export async function startDockerSandboxServer(sessionId: string, cwd: string, n
   const config = await readDockerSandboxConfig();
   if (!config) return;
   // A configured remote sandbox must fail closed; never silently execute locally.
-  await invokeSandbox(config, { action: "health" }, 45000);
+  const health = await invokeSandbox<{ workspacePolicyVersion?: number }>(config, { action: "health" }, 45000);
+  if (health.workspacePolicyVersion !== SANDBOX_WORKSPACE_POLICY_VERSION) {
+    throw new Error("远端 Docker 沙箱网关版本不匹配，请同步更新 gateway.py 和 dockerSandboxPolicy.json 后重新打开会话");
+  }
   const sandbox = new DockerSandbox(config, sessionId, cwd, network);
   const token = randomBytes(32).toString("hex");
   let activeRequest: unknown;

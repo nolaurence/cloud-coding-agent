@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "directories": [
+    ".git", ".cache", "dist", "build", "coverage",
+    "node_modules", ".next", ".nuxt", ".output", ".svelte-kit", ".angular", ".parcel-cache", ".turbo", ".npm", ".pnpm-store",
+    ".venv", "venv", "__pycache__", "__pypackages__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".pytype", ".tox", ".nox", ".hypothesis", "htmlcov",
+    ".gocache", ".gomodcache",
+    ".gradle", "target", "out"
+  ],
+  "directorySuffixes": [".egg-info", ".dist-info"],
+  "files": [".coverage", ".pnp.cjs", ".pnp.loader.mjs", ".pnp.data.json"],
+  "fileSuffixes": [".pyc", ".pyo", ".class", ".tsbuildinfo", ".test", ".test.exe"],
+  "paths": [
+    [".yarn", "cache"], [".yarn", "unplugged"], [".yarn", "install-state.gz"], [".yarn", "build-state.yml"],
+    [".m2", "repository"], ["pkg", "mod"], ["pkg", "sumdb"]
+  ]
+}

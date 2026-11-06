@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import shutil
 import subprocess
 import sys
 import time
@@ -15,7 +16,10 @@ ROOT = Path(__file__).resolve().parent / "workspaces"
 IMAGE = "ghcr.io/converge-ai-labs/a13n-sandbox:0.3.0"
 LIMIT = 64 * 1024 * 1024
 OUTPUT_LIMIT = 256 * 1024
-IGNORED = {".git", "node_modules", ".next", "dist", "build", "coverage", ".cache", "__pycache__"}
+POLICY_FILE = Path(__file__).with_name("dockerSandboxPolicy.json")
+if not POLICY_FILE.exists():  # Repository checkout; the installer copies the same file beside the gateway.
+    POLICY_FILE = Path(__file__).resolve().parents[2] / "apps/server/src/dockerSandboxPolicy.json"
+POLICY = json.loads(POLICY_FILE.read_text(encoding="utf8"))
 RUNNER = r"""
 const fs = require('node:fs/promises');
 const {execFile} = require('node:child_process');
@@ -60,11 +64,24 @@ def identifier(value):
     return value
 
 
+def ignored(name, directory=False):
+    parts = name.split("/")
+    if any(part in POLICY["directories"] or
+           ((directory or index < len(parts) - 1) and any(part.endswith(s) for s in POLICY["directorySuffixes"]))
+           for index, part in enumerate(parts)):
+        return True
+    if any(parts[index:index + len(pattern)] == pattern
+           for pattern in POLICY["paths"] for index in range(len(parts))):
+        return True
+    return not directory and (parts[-1] in POLICY["files"] or parts[-1].startswith(".coverage.") or
+                              any(parts[-1].endswith(s) for s in POLICY["fileSuffixes"]))
+
+
 def safe_path(root, name):
     if not isinstance(name, str) or not name or "\\" in name or "\x00" in name:
         raise ValueError("Invalid workspace path")
     parts = name.split("/")
-    if any(p in ("", ".", "..") or p in IGNORED or ":" in p for p in parts):
+    if ignored(name) or any(p in ("", ".", "..") or ":" in p for p in parts):
         raise ValueError("Invalid workspace path")
     target = root
     for part in parts:
@@ -74,22 +91,29 @@ def safe_path(root, name):
     return target
 
 
+def walk_error(error):
+    raise error  # An unreadable source directory must not look like a deletion.
+
+
 def snapshot(root):
     files, total = {}, 0
-    for directory, dirs, names in os.walk(root, followlinks=False):
-        dirs[:] = [d for d in dirs if d not in IGNORED and not (Path(directory) / d).is_symlink()]
+    for directory, dirs, names in os.walk(root, followlinks=False, onerror=walk_error):
+        dirs[:] = [d for d in dirs if not ignored((Path(directory) / d).relative_to(root).as_posix(), True)
+                   and not (Path(directory) / d).is_symlink()]
         for name in names:
             file = Path(directory) / name
             if file.is_symlink() or not file.is_file():
                 continue
             relative = file.relative_to(root).as_posix()
+            if ignored(relative):
+                continue
             safe_path(root, relative)
             size = file.stat().st_size
             total += size
             if size > 8 * 1024 * 1024 or total > LIMIT or len(files) >= 10000:
                 raise ValueError("Workspace synchronization limit exceeded (8 MiB/file, 64 MiB total, 10000 files)")
             # O_NOFOLLOW closes the symlink race; code containers have already exited on export.
-            fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            fd = os.open(file, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
             with os.fdopen(fd, "rb") as stream:
                 data = stream.read(8 * 1024 * 1024 + 1)
             if len(data) > 8 * 1024 * 1024:
@@ -107,19 +131,27 @@ def stop(name):
 def run(request):
     import fcntl
     workspace = ROOT / identifier(request["workspace"])
-    workspace.mkdir(parents=True, exist_ok=True)
+    ROOT.mkdir(parents=True, exist_ok=True)
     with open(ROOT / (workspace.name + ".lock"), "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return run_locked(request, workspace)
 
 
 def run_locked(request, workspace):
+    if request.get("workspace_policy_version") != POLICY["version"]:
+        raise ValueError("Sandbox workspace policy mismatch; update both the CCA application and sandbox gateway")
     run_id = identifier(request["run"])
     cancelled = ROOT / (run_id + ".cancelled")
     if cancelled.exists():
         cancelled.unlink()
         raise ValueError("Code execution cancelled")
-    before = snapshot(workspace)
+    # Only gateway-owned workspace directories may be reset; never follow a
+    # symlink placed by a previous execution or touch a different workspace.
+    if workspace.parent.resolve() != ROOT.resolve() or workspace.is_symlink():
+        raise ValueError("Invalid sandbox workspace directory")
+    dirty = ROOT / (workspace.name + ".dirty")
+    if dirty.exists():
+        raise ValueError("Previous workspace export failed; recover remote files before retrying: " + str(workspace))
     incoming = request["files"]
     if not isinstance(incoming, dict) or len(incoming) > 10000:
         raise ValueError("Invalid workspace files")
@@ -131,34 +163,98 @@ def run_locked(request, workspace):
         if len(data) > 8 * 1024 * 1024 or total > LIMIT:
             raise ValueError("Workspace synchronization limit exceeded")
         decoded[name] = (target, data, entry.get("executable", False))
-    # A failed export is retained for diagnosis; never silently overwrite it on retry.
-    dirty = ROOT / (workspace.name + ".dirty")
-    if dirty.exists():
-        raise ValueError("Previous workspace export failed; recover remote files before retrying: " + str(workspace))
-    for name in before.keys() - incoming.keys():
-        safe_path(workspace, name).unlink()
-    for target, data, executable in decoded.values():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-        target.chmod(0o755 if executable else 0o644)
     code = request["code"]
     if not isinstance(code, str) or not code.strip() or len(code.encode()) > 256 * 1024:
         raise ValueError("Invalid code block")
     timeout = request.get("timeout_ms", 60000)
     if not isinstance(timeout, int) or not 100 <= timeout <= 300000:
         raise ValueError("Invalid timeout")
+    # Never reuse the previous execution directory or its dependencies.
+    # An old gateway's clean workspace is disposable: its source was exported.
+    if workspace.exists():
+        discard_tree(workspace)
+    workspace.mkdir()
+    for target, data, executable in decoded.values():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        target.chmod(0o755 if executable else 0o644)
+    dirty.touch()
+    try:
+        output = execute_code(request, workspace, code, timeout)
+        after = snapshot(workspace)
+        changes = {n: e for n, e in after.items() if n not in incoming or e["data"] != incoming[n]["data"] or e["executable"] != incoming[n].get("executable", False)}
+    except BaseException:
+        # Keep unsynchronized source for recovery, but discard known generated
+        # files even when export exceeds the limits or execution fails.
+        prune_generated(workspace)
+        raise
+    result = {**output, "files": changes, "deleted": list(incoming.keys() - after.keys())}
+    try:
+        discard_tree(workspace)
+    except Exception as error:
+        # Cleanup may have removed some source already. Preserve the complete
+        # export so a filesystem/permission failure cannot lose those edits.
+        recovery = ROOT / (workspace.name + ".recovery.json")
+        recovery.write_text(json.dumps(result), encoding="utf8")
+        recovery.chmod(0o600)
+        raise RuntimeError("Workspace cleanup failed; recover exported changes from " + str(recovery)) from error
+    dirty.unlink()
+    return result
+
+
+def discard_tree(root):
+    # Go modules and other package managers can create read-only directories.
+    # Only make our own execution tree writable, without following symlinks.
+    if root.is_symlink():
+        raise ValueError("Cannot remove a symlink as a sandbox workspace")
+    root.chmod(root.stat().st_mode | 0o700)
+    for directory, dirs, names in os.walk(root, followlinks=False, onerror=walk_error):
+        for name in dirs:
+            target = Path(directory) / name
+            if not target.is_symlink():
+                target.chmod(target.stat().st_mode | 0o700)
+        if os.name == "nt":  # Offline tests also run on Windows.
+            for name in names:
+                target = Path(directory) / name
+                if not target.is_symlink():
+                    target.chmod(target.stat().st_mode | 0o600)
+    shutil.rmtree(root)
+
+
+def prune_generated(root):
+    for directory, dirs, names in os.walk(root, followlinks=False, onerror=walk_error):
+        for name in dirs[:]:
+            target = Path(directory) / name
+            if target.is_symlink():
+                target.unlink()
+                dirs.remove(name)
+            elif ignored(target.relative_to(root).as_posix(), True):
+                discard_tree(target)
+                dirs.remove(name)
+        for name in names:
+            target = Path(directory) / name
+            if target.is_symlink() or ignored(target.relative_to(root).as_posix()):
+                target.unlink()
+
+
+def execute_code(request, workspace, code, timeout):
+    run_id = identifier(request["run"])
+    cancelled = ROOT / (run_id + ".cancelled")
     name = "cca-code-" + run_id
     command = ["docker", "run", "--rm", "-i", "--name", name, "--label", "cca.code-sandbox=true",
                "--init", "--user", f"{os.getuid()}:{os.getgid()}", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges", "--memory", "2g", "--memory-swap", "2g",
                "--cpus", "2", "--pids-limit", "256", "--read-only", "--tmpfs", "/tmp:rw,nosuid,size=512m",
+               "--env", "HOME=/tmp", "--env", "XDG_CACHE_HOME=/tmp/.cache",
+               "--env", "npm_config_cache=/tmp/.npm", "--env", "PIP_CACHE_DIR=/tmp/pip", "--env", "UV_CACHE_DIR=/tmp/uv",
+               "--env", "GOPATH=/tmp/go", "--env", "GOCACHE=/tmp/go-build", "--env", "GOMODCACHE=/tmp/go/pkg/mod",
+               "--env", "GRADLE_USER_HOME=/tmp/.gradle", "--env", "JAVA_TOOL_OPTIONS=-Duser.home=/tmp",
                "--network", "bridge" if request.get("network") is True else "none",
                "--workdir", "/workspace", "--mount", f"type=bind,src={workspace},dst=/workspace",
                "--entrypoint", "/usr/local/bin/node", IMAGE, "--disable-sigusr1", "-e", RUNNER]
     output = {"stdout": bytearray(), "stderr": bytearray()}
     timed_out, truncated = False, False
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    dirty.touch()
     try:
         process.stdin.write(json.dumps({"code": code, "timeout_ms": timeout}).encode())
         process.stdin.close()
@@ -197,12 +293,8 @@ def run_locked(request, workspace):
             process.kill()
             process.wait(timeout=10)
         cancelled.unlink(missing_ok=True)
-    after = snapshot(workspace)
-    changes = {n: e for n, e in after.items() if n not in incoming or e["data"] != incoming[n]["data"] or e["executable"] != incoming[n].get("executable", False)}
-    dirty.unlink()
     return {"stdout": output["stdout"].decode(errors="replace"), "stderr": output["stderr"].decode(errors="replace"),
-            "exitCode": process.returncode, "timedOut": timed_out, "truncated": truncated,
-            "files": changes, "deleted": list(incoming.keys() - after.keys())}
+            "exitCode": process.returncode, "timedOut": timed_out, "truncated": truncated}
 
 
 def main():
@@ -213,7 +305,8 @@ def main():
     action = request.get("action")
     if action == "health":
         docker("image", "inspect", IMAGE)
-        return {"docker": docker("version", "--format", "{{.Server.Version}}").stdout.strip(), "image": IMAGE}
+        return {"docker": docker("version", "--format", "{{.Server.Version}}").stdout.strip(), "image": IMAGE,
+                "workspacePolicyVersion": POLICY["version"]}
     if action == "cancel":
         run_id = identifier(request["run"])
         ROOT.mkdir(parents=True, exist_ok=True)

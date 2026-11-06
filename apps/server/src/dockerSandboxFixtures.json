@@ -1,0 +1,23 @@
+{
+  "source": [
+    "README.md", "apps/web/package.json", "apps/web/package-lock.json", "apps/web/pnpm-lock.yaml", "apps/web/yarn.lock",
+    "apps/web/src/index.ts", "apps/web/.yarnrc.yml", "apps/web/.yarn/releases/yarn.cjs", "apps/web/.yarn/plugins/plugin.cjs", "apps/web/.yarn/patches/fix.patch",
+    "services/python/pyproject.toml", "services/python/requirements.txt", "services/python/uv.lock", "services/python/poetry.lock", "services/python/src/main.py",
+    "services/go/go.mod", "services/go/go.sum", "go.work", "go.work.sum", "services/go/cmd/api/main.go", "services/go/pkg/server/server.go", "services/go/vendor/example/library.go",
+    "services/java/pom.xml", "services/java/mvnw", "services/java/.mvn/wrapper/maven-wrapper.jar", "services/java/.mvn/maven.config",
+    "services/java/gradlew", "services/java/gradle/wrapper/gradle-wrapper.jar", "services/java/gradle/wrapper/gradle-wrapper.properties",
+    "services/java/build.gradle.kts", "services/java/settings.gradle", "services/java/gradle.lockfile", "services/java/src/Main.java", "services/java/lib/checked-in.jar"
+  ],
+  "generated": [
+    "node_modules/root/index.js", "apps/web/node_modules/pkg/index.js", "apps/web/.next/cache/data", "apps/web/.nuxt/output", "apps/web/.turbo/task",
+    "apps/web/.pnpm-store/pkg/index.js", "apps/web/.npm/_cacache/data", "apps/web/.yarn/cache/pkg.zip", "apps/web/.yarn/unplugged/pkg/index.js",
+    "apps/web/.yarn/install-state.gz", "apps/web/.yarn/build-state.yml", "apps/web/.pnp.cjs", "apps/web/.pnp.loader.mjs", "apps/web/tsconfig.tsbuildinfo",
+    "services/python/.venv/lib/site-packages/pkg/__init__.py", "services/python/venv/bin/python", "services/python/__pypackages__/3.12/lib/pkg.py",
+    "services/python/src/__pycache__/main.pyc", "services/python/src/main.pyc", "services/python/src/main.pyo", "services/python/.pytest_cache/state",
+    "services/python/.mypy_cache/state", "services/python/.ruff_cache/state", "services/python/.tox/py/python", "services/python/.nox/py/python",
+    "services/python/project.egg-info/PKG-INFO", "services/python/project.dist-info/METADATA", "services/python/.coverage", "services/python/.coverage.machine", "services/python/htmlcov/index.html",
+    "services/go/.gocache/object", "services/go/.gomodcache/example/mod.go", "services/go/pkg/mod/example/mod.go", "services/go/pkg/sumdb/sum.golang.org/state", "services/go/api.test", "services/go/api.test.exe",
+    "services/java/target/classes/Main.class", "services/java/submodule/build/classes/Main.class", "services/java/out/classes/Main.class", "services/java/src/Main.class",
+    "services/java/.gradle/caches/state", "services/java/.m2/repository/example.jar", "nested/project/dist/bundle.js", "nested/project/coverage/report.html", "nested/project/.cache/file", "nested/project/.git/config"
+  ]
+}

@@ -35,6 +35,8 @@ try:
         try: sftp.mkdir(directory, 0o700)
         except OSError: sftp.stat(directory)
     gateway = remote_root + "/gateway.py"
+    policy = Path(__file__).resolve().parents[2] / "apps/server/src/dockerSandboxPolicy.json"
+    sftp.put(str(policy), remote_root + "/dockerSandboxPolicy.json")
     sftp.put(str(Path(__file__).with_name("gateway.py")), gateway)
     sftp.chmod(gateway, 0o700)
     key_root = args.data_dir.resolve() / "sandbox-ssh"
