@@ -60,6 +60,8 @@ apps/server (Fastify + Codex/DSH 适配层)
 
 ## 本地开发
 
+Codex 与 DSH 均可使用远端 Docker 执行代码块，在一个代码块内完成循环和多次工具调用。安装、SSH 配置、文件同步范围和验证命令见 [Docker 代码沙箱](deploy/docker-sandbox/README.md)。
+
 需要 Node.js 22.13 或更高版本。
 
 ```bash

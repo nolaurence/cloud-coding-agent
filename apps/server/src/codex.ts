@@ -20,6 +20,7 @@ import { sanitizedCopilotRuntimeEnv } from "./runtimeEnv.js";
 import { IMAGE_EXTENSIONS, MAX_IMAGE_SIZE, hasImageSignature, storeUploadedImage } from "./uploads.js";
 import { startImageGenerationServer, type ImageGenerationProvider } from "./imageGeneration.js";
 import { attachmentReferenceText } from "./attachmentPrompt.js";
+import { startDockerSandboxServer, SANDBOX_INSTRUCTIONS } from "./dockerSandbox.js";
 
 const CODEX_HOME = path.join(DATA_DIR, "codex-home");
 const MAX_CONTEXT_OUTPUT_RESERVE_TOKENS = 16_000;
@@ -144,6 +145,7 @@ class ArchivedSession implements AgentSession {
 }
 
 export class CodexSession implements AgentSession {
+  private sandboxServer: Awaited<ReturnType<typeof startDockerSandboxServer>>;
   connection: CodexRpc;
   private listeners = new Set<(event: SessionEvent) => void>();
   private threadId = "";
@@ -361,6 +363,11 @@ export class CodexSession implements AgentSession {
     }
     const provider = this.config.provider;
     try {
+      this.sandboxServer = await startDockerSandboxServer(this.sessionId, this.cwd, this.permissionMode === "full");
+      if (this.sandboxServer) {
+        mcp.cca_sandbox = { url: this.sandboxServer.url, http_headers: { Authorization: "Bearer " + this.sandboxServer.token }, tool_timeout_sec: 360 };
+        overrides.features = { ...object(overrides.features), shell_tool: false, unified_exec: false, js_repl: false, code_mode: false };
+      }
       const imageProvider = this.config.imageGenerationProvider ??
         (provider?.type === "openai" && this.config.imageGenerationModel
           ? { baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: this.config.imageGenerationModel }
@@ -401,7 +408,7 @@ export class CodexSession implements AgentSession {
       overrides.show_raw_agent_reasoning = true;
       await this.connection.start(this.cwd, runtimeEnv(this.home));
       const common: JsonObject = { cwd: this.cwd, model: this.model, approvalPolicy: permission.approvalPolicy, sandbox: permission.sandbox, approvalsReviewer: permission.approvalsReviewer, config: overrides,
-        developerInstructions: [this.config.systemMessage?.content, ...(this.imageServer ? [
+        developerInstructions: [this.config.systemMessage?.content, ...(this.sandboxServer ? [SANDBOX_INSTRUCTIONS] : []), ...(this.imageServer ? [
           "本会话已启用生图工具 mcp__cca_imagegen__image_gen（imagegen 技能所说的 image_gen 在此环境中的入口）。用户请求生成新图片时使用此工具;如果工具尚未出现在列表中,先用 tool_search 搜索 +cca_imagegen 加载工具,再调用。工具使用服务端配置的 GPT Image 提供商,凭据已配置,无需额外 OPENAI_API_KEY 或 CLI 回退确认。生成图片会自动作为助手附件显示,工具同时返回本地文件路径。此入口只支持生成新图片,不支持编辑参考图片。",
         ] : [])].filter(Boolean).join("\n"), persistExtendedHistory: true };
       if (provider) common.modelProvider = "cca";
@@ -675,9 +682,13 @@ export class CodexSession implements AgentSession {
   }
   async abort() {
     this.imageServer?.abort();
-    if (this.reconnectTask) return;
-    if (this.startingTurn) await this.startingTurn;
-    if (this.turnId) await this.connection.request("turn/interrupt", { threadId: this.threadId, turnId: this.turnId });
+    try { await this.sandboxServer?.abort(); }
+    finally {
+      if (!this.reconnectTask) {
+        if (this.startingTurn) await this.startingTurn;
+        if (this.turnId) await this.connection.request("turn/interrupt", { threadId: this.threadId, turnId: this.turnId });
+      }
+    }
   }
   async setModel(model: string, options?: Parameters<AgentSession["setModel"]>[1]) {
     await this.waitForReconnect();
@@ -710,7 +721,7 @@ export class CodexSession implements AgentSession {
     for (const waiter of this.waiters) waiter.reject(new Error("Codex session disconnected"));
     this.waiters.clear();
     try { await this.connection.close(); }
-    finally { try { await this.imageServer?.close(); } finally { try { await this.gateway?.close(); } finally { try { await this.eventStore.flush(); } finally { this.release(); } } } }
+    finally { try { await this.sandboxServer?.close(); } finally { try { await this.imageServer?.close(); } finally { try { await this.gateway?.close(); } finally { try { await this.eventStore.flush(); } finally { this.release(); } } } } }
   }
 }
 

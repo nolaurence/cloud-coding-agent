@@ -35,6 +35,7 @@ import { store } from "../store.js";
 import { ThreadEventStore, deleteThreadEvents } from "../threadEvents.js";
 import { object, array, startLlmGateway, text } from "../llmGateway.js";
 import { sanitizedDshRuntimeEnv } from "../runtimeEnv.js";
+import { startDockerSandboxServer, SANDBOX_INSTRUCTIONS } from "../dockerSandbox.js";
 import { DshEventMapper } from "./dshEvents.js";
 import {
   applyDshStatsEvent,
@@ -142,6 +143,7 @@ interface IdleWaiter {
 }
 
 export class DshSession implements AgentSession {
+  private sandboxServer: Awaited<ReturnType<typeof startDockerSandboxServer>>;
   private listeners = new Set<(event: SessionEvent) => void>();
   private events: SessionEvent[] = [];
   private readonly eventStore: ThreadEventStore;
@@ -389,15 +391,23 @@ export class DshSession implements AgentSession {
     if (this.closed) throw new Error("Harness 会话已断开");
     if (this.runtime) return this.runtime;
     const route = this.providerRoute();
+    this.sandboxServer ??= await startDockerSandboxServer(this.sessionId, this.cwd, (this.config.permissionMode ?? "full") === "full");
+    const mcpRows = this.mcpRows();
+    if (this.sandboxServer) mcpRows.push({
+      id: "cca-docker-sandbox", serverName: "cca_sandbox", timeoutMs: 360000,
+      config: { transport: "streamable-http", serverName: "cca_sandbox", url: this.sandboxServer.url, headers: { Authorization: "Bearer " + this.sandboxServer.token } },
+    });
     const credentials = route.apiKey ? { [credentialEnvName(ROUTE_ID)]: route.apiKey } : {};
     const { patchPath } = prepareDshHome(
       {
         homeDir: this.home,
         skillDirs: this.config.skillDirectories ?? [],
         disabledSkills: this.config.disabledSkills ?? [],
-        mcpRows: this.mcpRows(),
+        mcpRows,
         sandboxMode: sandboxModeFor(this.config.permissionMode),
         workspaceRoot: this.cwd,
+        dockerSandbox: Boolean(this.sandboxServer),
+        systemInstructions: [this.config.systemMessage?.content, ...(this.sandboxServer ? [SANDBOX_INSTRUCTIONS] : [])].filter(Boolean).join("\n"),
       },
       [route],
     );
@@ -563,10 +573,13 @@ export class DshSession implements AgentSession {
   async abort() {
     // SDK 协议没有取消原语：回收运行时即中断在途回合；会话日志保留，可继续对话。
     this.aborted = true;
-    await this.disposeRuntime();
-    this.emitAll(this.mapper.mapAborted("用户中断"));
-    this.notifyFailure(new Error("回合已中断"));
-    await this.eventStore.flush().catch(() => {});
+    try { await this.sandboxServer?.abort(); }
+    finally {
+      await this.disposeRuntime();
+      this.emitAll(this.mapper.mapAborted("用户中断"));
+      this.notifyFailure(new Error("回合已中断"));
+      await this.eventStore.flush().catch(() => {});
+    }
   }
 
   async setModel(model: string, options?: SetModelOptions) {
@@ -602,7 +615,8 @@ export class DshSession implements AgentSession {
       await this.disposeRuntime();
     } finally {
       try {
-        await this.eventStore.flush();
+        try { await this.sandboxServer?.close(); }
+        finally { await this.eventStore.flush(); }
       } finally {
         this.release();
       }

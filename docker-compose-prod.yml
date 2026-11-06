@@ -11,6 +11,8 @@ services:
       - /home/nolaurence/dev:/codeprojects
     environment:
       - PORT=8787
+      # 只传配置路径；SSH 私钥和主机指纹存放在持久化 /data 卷中
+      - CCA_DOCKER_SANDBOX_CONFIG=${CCA_DOCKER_SANDBOX_CONFIG:-}
       # 生产环境仅连接外部 MySQL
       - DATABASE_URL=${DATABASE_URL:?请在 .env 中配置外部 MySQL 连接串}
       # 管理员账户(首次启动时创建);其他用户通过注册页面创建,均为普通用户

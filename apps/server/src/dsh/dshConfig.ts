@@ -59,6 +59,8 @@ export interface DshHomeSetup {
   mcpRows: DshMcpRow[];
   sandboxMode: DshSandboxMode;
   workspaceRoot: string;
+  dockerSandbox?: boolean;
+  systemInstructions?: string;
 }
 
 export function sandboxModeFor(permissionMode: PermissionMode | undefined): DshSandboxMode {
@@ -154,6 +156,8 @@ export function patchDocFor(
   mcpRows: readonly DshMcpRow[],
   sandboxMode: DshSandboxMode,
   workspaceRoot: string,
+  dockerSandbox = false,
+  systemInstructions?: string,
 ): unknown {
   const providers: Record<string, unknown> = {};
   for (const route of routes) providers[route.id] = providerRow(route);
@@ -168,6 +172,17 @@ export function patchDocFor(
       config: { defaultPreset: sandboxMode, presets: PERMISSION_PRESETS },
     },
   ];
+  if (systemInstructions) rows.push({ id: "system-prompt", config: { personaPrefix: systemInstructions } });
+  if (dockerSandbox) {
+    rows.push({ id: "tools", config: { mode: "native" } });
+    // The sole code executor is the Docker MCP tool. Disable host execution,
+    // filesystem mutation and the local PTC/workflow escape routes together.
+    for (const id of ["tool-bash", "tool-pwsh", "tool-jobs", "tool-fs", "tool-fs-search",
+      "tool-working-directory", "tool-workflow", "tool-skill", "tool-subagent", "tool-subagent-fork",
+      "tool-subagent-control", "tool-subagent-list-agents", "workspace-dependencies"]) {
+      rows.push({ id, disabled: true });
+    }
+  }
   if (firstRoute && firstModel) {
     rows.push({
       id: "agent-default-model",
@@ -193,8 +208,10 @@ export function patchYamlFor(
   mcpRows: readonly DshMcpRow[],
   sandboxMode: DshSandboxMode,
   workspaceRoot: string,
+  dockerSandbox = false,
+  systemInstructions?: string,
 ): string {
-  return JSON.stringify(patchDocFor(routes, mcpRows, sandboxMode, workspaceRoot), null, 2);
+  return JSON.stringify(patchDocFor(routes, mcpRows, sandboxMode, workspaceRoot, dockerSandbox, systemInstructions), null, 2);
 }
 
 /**
@@ -236,7 +253,7 @@ export function prepareDshHome(
   const patchPath = path.join(setup.homeDir, "cca.patch.json");
   fs.writeFileSync(
     patchPath,
-    patchYamlFor(routes, setup.mcpRows, setup.sandboxMode, setup.workspaceRoot),
+    patchYamlFor(routes, setup.mcpRows, setup.sandboxMode, setup.workspaceRoot, setup.dockerSandbox, setup.systemInstructions),
     { encoding: "utf8", mode: 0o600 },
   );
   try {
