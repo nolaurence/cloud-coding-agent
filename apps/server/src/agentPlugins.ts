@@ -16,7 +16,7 @@ import type {
   PluginSkillInfo,
 } from "@cca/protocol";
 import { BUILTIN_CATALOG, BUILTIN_PLUGIN_PACKAGES, type CatalogPlugin } from "./agentPluginCatalog.js";
-import { PLUGIN_DATA_DIR, PLUGINS_DIR, PLUGINS_STATE_FILE } from "./env.js";
+import { LOCAL_PLUGINS_DIR, PLUGIN_DATA_DIR, PLUGINS_DIR, PLUGINS_STATE_FILE } from "./env.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -798,11 +798,77 @@ function builtinPackage(source: string) {
   return BUILTIN_PLUGIN_PACKAGES.find((entry) => entry.id === id);
 }
 
+/** 本地仓库插件:source 形如 local:<dirName>,目录位于 LOCAL_PLUGINS_DIR。 */
+function resolveLocalPluginDir(source: string): string | undefined {
+  if (!source.startsWith("local:")) return undefined;
+  const id = source.slice("local:".length).trim();
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("..")) {
+    throw new Error("本地插件标识不合法");
+  }
+  const candidate = path.resolve(LOCAL_PLUGINS_DIR, id);
+  if (!isInside(path.resolve(LOCAL_PLUGINS_DIR), realpathNearest(candidate))) {
+    throw new Error("本地插件路径超出 plugins 目录");
+  }
+  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) {
+    throw new Error(`本地插件目录不存在:${id}`);
+  }
+  return fs.realpathSync(candidate);
+}
+
+const LOCAL_MARKETPLACE_ID = "local";
+const LOCAL_MARKETPLACE_NAME = "本地仓库";
+const LOCAL_MARKETPLACE_DESCRIPTION = "随应用仓库 plugins/ 目录发布的插件;默认未安装,需在市场中手动安装后才会进入会话。";
+
+/**
+ * 扫描仓库 plugins/ 下带 plugin.json 的子目录,生成市场条目。
+ * 不自动安装:仅列出,source 为 local:<name>。
+ */
+export function discoverLocalCatalogPlugins(): MarketplacePlugin[] {
+  const keys = installedKeys();
+  let entries: fs.Dirent[];
+  try {
+    if (!fs.existsSync(LOCAL_PLUGINS_DIR) || !fs.statSync(LOCAL_PLUGINS_DIR).isDirectory()) return [];
+    entries = fs.readdirSync(LOCAL_PLUGINS_DIR, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const plugins: MarketplacePlugin[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const root = path.join(LOCAL_PLUGINS_DIR, entry.name);
+    const manifestPath = findManifest(root);
+    if (!manifestPath) continue;
+    try {
+      const manifest = parseManifest(manifestPath, root);
+      const source = `local:${entry.name}`;
+      const tags = manifest.keywords.length > 0 ? manifest.keywords : ["local"];
+      plugins.push({
+        id: `${LOCAL_MARKETPLACE_ID}/${manifest.name}`,
+        marketplaceId: LOCAL_MARKETPLACE_ID,
+        name: manifest.name,
+        description: manifest.description ?? "",
+        source,
+        ...(manifest.version === undefined ? {} : { version: manifest.version }),
+        ...(manifest.author?.name === undefined ? {} : { author: manifest.author.name }),
+        ...(manifest.homepage === undefined ? {} : { homepage: manifest.homepage }),
+        ...(manifest.license === undefined ? {} : { license: manifest.license }),
+        tags,
+        category: "本地",
+        conformance: manifest.conformance,
+        installed: keys.names.has(manifest.name) || keys.sources.has(`${source}|`),
+      });
+    } catch {
+      // 单个损坏的本地插件不影响其它条目
+    }
+  }
+  return plugins.sort((left, right) => left.name.localeCompare(right.name));
+}
+
 function normalizeGitSource(source: string): string {
   if (/^(?:https?|git|ssh):\/\//i.test(source) || /^git@[^:]+:/.test(source)) return source;
   if (/^[\w.-]+\/[\w.-]+$/.test(source)) return `https://github.com/${source}`;
   if (/^(?:github\.com|gitlab\.com|gitee\.com)\//i.test(source)) return `https://${source}`;
-  throw new Error("来源格式不正确:请填 git 地址、owner/repo 或本地目录");
+  throw new Error("来源格式不正确:请填 git 地址、owner/repo、local:<名> 或本地目录");
 }
 
 async function git(args: string[], cwd?: string): Promise<void> {
@@ -862,7 +928,7 @@ function assertInstallableName(name: string, records: readonly PluginRecord[]): 
 
 /**
  * 安装一个 Agent Plugin。
- * @param source builtin:<id>、git 地址、owner/repo 或本地目录
+ * @param source builtin:<id>、local:<名>、git 地址、owner/repo 或本地目录
  * @param subdirectory 仓库内插件所在子目录
  */
 export async function installPlugin(source: string, subdirectory?: string): Promise<PluginInstallResult> {
@@ -876,11 +942,14 @@ export async function installPlugin(source: string, subdirectory?: string): Prom
     const staged = path.join(PLUGINS_DIR, `.staging-${randomUUID()}`);
     try {
       const builtin = builtinPackage(trimmed);
+      const localDir = trimmed.startsWith("local:") ? resolveLocalPluginDir(trimmed) : undefined;
       let sourceRoot: string;
       if (builtin) {
         sourceRoot = path.join(temp, "plugin");
         fs.mkdirSync(sourceRoot, { recursive: true });
         writeBuiltinFiles(builtin.files, sourceRoot);
+      } else if (localDir) {
+        sourceRoot = localDir;
       } else if (fs.existsSync(trimmed) && fs.statSync(trimmed).isDirectory()) {
         sourceRoot = fs.realpathSync(trimmed);
         if (isInside(fs.realpathSync(PLUGINS_DIR), sourceRoot)) throw new Error("不能从插件安装目录自身安装");
@@ -1081,6 +1150,7 @@ async function fetchRemoteCatalog(source: PluginSource): Promise<CatalogPlugin[]
 
 export function listPluginMarketplaces(): PluginMarketplace[] {
   const state = readPluginState();
+  const localPlugins = discoverLocalCatalogPlugins();
   return [
     {
       id: BUILTIN_CATALOG.id,
@@ -1089,6 +1159,14 @@ export function listPluginMarketplaces(): PluginMarketplace[] {
       source: "builtin",
       kind: "builtin",
       pluginCount: BUILTIN_CATALOG.plugins.length,
+    },
+    {
+      id: LOCAL_MARKETPLACE_ID,
+      name: LOCAL_MARKETPLACE_NAME,
+      description: LOCAL_MARKETPLACE_DESCRIPTION,
+      source: LOCAL_PLUGINS_DIR,
+      kind: "local",
+      pluginCount: localPlugins.length,
     },
     ...state.sources.map((source) => ({
       id: source.id,
@@ -1103,6 +1181,7 @@ export function listPluginMarketplaces(): PluginMarketplace[] {
 
 export async function browsePluginMarketplace(marketplaceId: string): Promise<MarketplacePlugin[]> {
   if (marketplaceId === BUILTIN_CATALOG.id) return builtinMarketplacePlugins();
+  if (marketplaceId === LOCAL_MARKETPLACE_ID) return discoverLocalCatalogPlugins();
   const source = readPluginState().sources.find((entry) => entry.id === marketplaceId);
   if (!source) throw new Error("市场不存在");
   const plugins = await fetchRemoteCatalog(source);
@@ -1146,7 +1225,7 @@ export async function addPluginMarketplace(source: string): Promise<PluginMarket
 }
 
 export function removePluginMarketplace(marketplaceId: string): void {
-  if (marketplaceId === BUILTIN_CATALOG.id) throw new Error("内置市场不能移除");
+  if (marketplaceId === BUILTIN_CATALOG.id || marketplaceId === LOCAL_MARKETPLACE_ID) throw new Error("内置/本地市场不能移除");
   const state = readPluginState();
   if (!state.sources.some((entry) => entry.id === marketplaceId)) throw new Error("市场不存在");
   remoteCatalogCache.delete(marketplaceId);

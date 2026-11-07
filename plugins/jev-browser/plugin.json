@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "jev-browser",
+  "version": "1.0.0",
+  "description": "Jev Ultrafast browser skill for Codex: one-shot navigation, search, forms and filtering via TypeSafe Jev. Adapted from wanghai673/jev-browser-skill (browser-use/jev-ultrafast).",
+  "author": {
+    "name": "Kloud",
+    "url": "https://github.com/wanghai673/jev-browser-skill"
+  },
+  "homepage": "https://github.com/wanghai673/jev-browser-skill",
+  "repository": "https://github.com/wanghai673/jev-browser-skill",
+  "license": "MIT",
+  "keywords": [
+    "browser",
+    "jev",
+    "ultrafast",
+    "chrome",
+    "automation",
+    "codex"
+  ]
+}

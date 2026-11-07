@@ -1,6 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const root = process.env.CCA_DATA_DIR
   ? path.resolve(process.env.CCA_DATA_DIR)
@@ -22,6 +23,14 @@ export const PLUGINS_DIR = path.join(root, "agent-plugins");
 export const PLUGIN_DATA_DIR = path.join(root, "agent-plugin-data");
 /** 插件安装记录与自定义市场源。 */
 export const PLUGINS_STATE_FILE = path.join(root, "agent-plugins.json");
+
+/** 仓库根目录(源码 apps/server/src 与打包后 apps/server/dist 均为上溯三级)。 */
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+export const REPO_ROOT = path.resolve(MODULE_DIR, "../../..");
+/** 随仓库发布的本地插件包目录(默认 <repo>/plugins)。可被 CCA_LOCAL_PLUGINS_DIR 覆盖。 */
+export const LOCAL_PLUGINS_DIR = process.env.CCA_LOCAL_PLUGINS_DIR?.trim()
+  ? path.resolve(process.env.CCA_LOCAL_PLUGINS_DIR.trim())
+  : path.join(REPO_ROOT, "plugins");
 export const COPILOT_HOME = path.join(root, "copilot-home");
 export const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT?.trim() || "/workspace");
 export const UPLOADS_DIR = path.join(root, "uploads");

@@ -61,3 +61,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Jev Browser / Jev Ultrafast
+
+`plugins/jev-browser` packages the community skill from
+[wanghai673/jev-browser-skill](https://github.com/wanghai673/jev-browser-skill),
+which includes a modified copy of
+[browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast)
+(base `1231850a0bf1a0c0341fe408ef1668dbbfdfac46`). Upstream copyright Browser Use,
+MIT License. Full attribution is retained in `plugins/jev-browser/NOTICE` and
+`plugins/jev-browser/LICENSE`.
+

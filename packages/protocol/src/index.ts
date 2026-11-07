@@ -469,9 +469,9 @@ export interface PluginMarketplace {
   id: string;
   name: string;
   description?: string;
-  /** 内置市场为 builtin,远程市场为清单 URL。 */
+  /** 内置市场为 builtin,本地仓库为 local,远程市场为清单 URL。 */
   source: string;
-  kind: "builtin" | "remote";
+  kind: "builtin" | "local" | "remote";
   pluginCount: number;
 }
 
