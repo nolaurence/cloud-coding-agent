@@ -31,6 +31,7 @@ function initialOf(name: string): string {
 
 function sourceLabel(plugin: { source: string; subdirectory?: string }): string {
   if (plugin.source.startsWith("builtin:")) return "内置插件";
+  if (plugin.source.startsWith("local:")) return `本地仓库 · ${plugin.source.slice("local:".length)}`;
   const shorthand = plugin.source.replace(/^https?:\/\/(?:www\.)?/, "").replace(/\.git$/, "");
   return plugin.subdirectory ? `${shorthand}#${plugin.subdirectory}` : shorthand;
 }
@@ -449,8 +450,10 @@ export function PluginsPage() {
                   {marketplace.name}
                   <span className="ml-1 text-label-3">{marketplace.source}</span>
                 </span>
-                {marketplace.kind === "builtin" ? (
-                  <span className="shrink-0 text-[11px] text-label-3">内置</span>
+                {marketplace.kind === "builtin" || marketplace.kind === "local" ? (
+                  <span className="shrink-0 text-[11px] text-label-3">
+                    {marketplace.kind === "local" ? "本地" : "内置"}
+                  </span>
                 ) : (
                   <Button
                     type="button"
