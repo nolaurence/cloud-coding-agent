@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useState, type DragEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Archive,
@@ -12,13 +12,9 @@ import {
   Loader2,
   LogOut,
   MessagesSquare,
-  Package,
-  PanelLeftClose,
   Pin,
   Search,
-  Settings,
   ShieldCheck,
-  Sparkles,
   SquarePen,
   Trash2,
   User,
@@ -46,12 +42,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 /** 侧栏时间:与工作区视图一致,只保留跨度,超过一个月显示日期。 */
 function relativeTime(at: number): string {
@@ -72,53 +62,12 @@ function workspaceDropPlacement(event: DragEvent<HTMLElement>): WorkspaceDropPla
   return event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
 }
 
-function HeaderIconButton({
-  label,
-  onClick,
-  disabled,
-  children,
-  pressed,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  children: ReactNode;
-  pressed?: boolean;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          aria-pressed={pressed}
-          disabled={disabled}
-          title={label}
-          className={cn(
-            "flex size-7 shrink-0 items-center justify-center rounded-md text-label-3 transition-colors hover:bg-hover hover:text-label-1 disabled:pointer-events-none disabled:opacity-50",
-            pressed && "bg-hover text-label-1",
-          )}
-          onClick={onClick}
-        >
-          {children}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" showArrow={false}>
-        {label}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
 export function Sidebar({
   onNavigate,
   onClose,
-  onCollapse,
 }: {
   onNavigate?: () => void;
   onClose?: () => void;
-  /** Desktop: collapse the persistent sidebar (t3-style offcanvas). */
-  onCollapse?: () => void;
 }) {
   const projects = useApp((s) => s.projects);
   const workspaceOrder = useApp((s) => s.workspaceOrder);
@@ -132,13 +81,14 @@ export function Sidebar({
   const user = useApp((s) => s.user);
   const logout = useApp((s) => s.logout);
   const connected = useApp((s) => s.connected);
+  const appName = "Kloud Coding Agent";
   const location = useLocation();
   const navigate = useNavigate();
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
   const [workspaceError, setWorkspaceError] = useState("");
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(new Set());
   const [expandedProjects, setExpandedProjects] = useState<ReadonlySet<string>>(new Set());
@@ -159,7 +109,6 @@ export function Sidebar({
   >(null);
 
   const keyword = query.trim().toLowerCase();
-  const isSearching = keyword.length > 0;
   const orderedProjects = sortSidebarWorkspaces(projects, workspaceOrder);
   const matches = (thread: ThreadMeta) => !keyword || thread.title.toLowerCase().includes(keyword);
   const ownedProjectIds = new Set(projects.map((project) => project.id));
@@ -231,11 +180,6 @@ export function Sidebar({
     }
   };
 
-  const go = (to: string) => {
-    navigate(to);
-    onNavigate?.();
-  };
-
   const renderThread = (thread: ThreadMeta, options: { manage: boolean }) => {
     const active = location.pathname === `/thread/${thread.id}`;
     const running = runningIds.includes(thread.id);
@@ -260,8 +204,8 @@ export function Sidebar({
                 : thread.title
           }
           className={cn(
-            "flex h-8 items-center gap-2 rounded-md px-2.5 text-[13px] leading-5 text-label-1 transition-colors hover:bg-hover",
-            active && "bg-hover font-medium",
+            "flex h-8 items-center gap-1.5 rounded-[12px] px-2 text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover",
+            active && "bg-hover",
           )}
         >
           <span className="flex size-4 shrink-0 items-center justify-center">{status}</span>
@@ -300,7 +244,7 @@ export function Sidebar({
               type="button"
               aria-label={pinned ? `取消置顶 ${thread.title}` : `置顶 ${thread.title}`}
               title={pinned ? "取消置顶" : "置顶"}
-              className="flex size-6 items-center justify-center rounded-md text-label-3 transition-colors hover:bg-hover hover:text-label-1"
+              className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
               onClick={() => void togglePinned(thread)}
             >
               <Pin
@@ -312,7 +256,7 @@ export function Sidebar({
               type="button"
               aria-label={`归档会话 ${thread.title}`}
               title="归档"
-              className="flex size-6 items-center justify-center rounded-md text-label-3 transition-colors hover:bg-hover hover:text-label-1"
+              className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
               onClick={() => void archiveThread(thread)}
             >
               <Archive className="size-3.5" strokeWidth={1.8} />
@@ -324,400 +268,336 @@ export function Sidebar({
   };
 
   return (
-    <TooltipProvider delayDuration={300}>
-      <aside
-        className="flex h-full w-full min-w-0 shrink-0 flex-col bg-panel px-2 py-1.5 md:w-64"
-        aria-label="会话侧栏"
-      >
-        {/* Brand + collapse — mirrors t3 SidebarChromeHeader */}
-        <div className="window-drag-region flex h-10 shrink-0 items-center gap-1.5 px-1">
-          <Link
-            to="/"
-            onClick={onNavigate}
-            aria-label="Kloud Coding Agent 首页"
-            className="window-no-drag flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden rounded-md outline-none ring-ring focus-visible:ring-2"
+    <aside className="flex h-full w-full min-w-0 shrink-0 flex-col border-r-[0.5px] border-line-3 bg-panel px-3 py-1.5 md:w-[280px]">
+      <div className="window-drag-region -mx-1 flex h-[60px] shrink-0 items-center gap-2 pl-1 pr-0">
+        <BrandLogo className="size-6 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-[17px] font-semibold leading-6 tracking-[0.02em] text-label-1">{appName}</span>
+        {!connected && (
+          <WifiOff className="size-3.5 shrink-0 text-[var(--ds-label-caption)]" aria-label="正在连接服务器" />
+        )}
+        {onClose && (
+          <button
+            type="button"
+            aria-label="关闭侧栏"
+            className="window-no-drag flex size-7 shrink-0 items-center justify-center rounded-[8px] text-label-2 transition-colors hover:bg-hover hover:text-label-1"
+            onClick={onClose}
           >
-            <BrandLogo className="size-5 shrink-0" />
-            <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight text-label-1">
-              <span className="shrink-0">Kloud</span>
-              <span className="truncate text-label-3">Agent</span>
-            </span>
-          </Link>
-          {!connected && (
-            <WifiOff
-              className="size-3.5 shrink-0 text-[var(--ds-label-caption)]"
-              aria-label="正在连接服务器"
-            />
+            <X className="size-4" strokeWidth={1.8} />
+          </button>
+        )}
+      </div>
+
+      <div className="shrink-0 pb-2">
+        <button
+          type="button"
+          className="flex h-[38px] w-full items-center justify-center gap-1.5 rounded-[12px] border-[0.5px] border-line-3 bg-elevated px-3 text-[14px] font-medium leading-[22px] text-label-1 transition-colors hover:bg-hover-solid"
+          onClick={() => {
+            navigate("/");
+            onNavigate?.();
+          }}
+        >
+          <SquarePen className="size-3.5 shrink-0" strokeWidth={1.8} />
+          <span className="truncate">新聊天</span>
+        </button>
+      </div>
+
+      <div className="flex h-9 shrink-0 items-center gap-1 pr-0.5 pl-2">
+        <span className="min-w-0 flex-1 text-[12px] font-medium leading-5 text-label-3">工作区</span>
+        <button
+          type="button"
+          aria-label="搜索会话"
+          title="搜索会话"
+          aria-pressed={searchOpen}
+          className={cn(
+            "flex size-7 shrink-0 items-center justify-center rounded-[8px] transition-colors hover:bg-hover hover:text-label-1",
+            searchOpen ? "bg-hover text-label-1" : "text-label-3",
           )}
-          {onCollapse && (
-            <HeaderIconButton label="隐藏侧栏 (⌘B)" onClick={onCollapse}>
-              <PanelLeftClose className="size-4" strokeWidth={1.8} />
-            </HeaderIconButton>
-          )}
-          {onClose && (
+          onClick={() => {
+            setSearchOpen((open) => !open);
+            if (searchOpen) setQuery("");
+          }}
+        >
+          <Search className="size-4" strokeWidth={1.8} />
+        </button>
+        <button
+          type="button"
+          aria-label="创建工作区"
+          title="创建工作区"
+          className="flex size-7 shrink-0 items-center justify-center rounded-[8px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
+          onClick={() => setAddOpen(true)}
+        >
+          <FolderPlus className="size-4" strokeWidth={1.8} />
+        </button>
+      </div>
+
+      {searchOpen && (
+        <div className="mb-1.5 flex h-8 shrink-0 items-center gap-1.5 rounded-[10px] border-[0.5px] border-line-3 px-2 focus-within:border-[var(--ds-label-caption)]">
+          <Search className="size-3.5 shrink-0 text-label-caption" strokeWidth={1.8} />
+          <input
+            autoFocus
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索会话"
+            aria-label="搜索会话"
+            className="min-w-0 flex-1 bg-transparent text-[13px] leading-5 text-label-1 outline-none placeholder:text-label-3"
+          />
+          {query && (
             <button
               type="button"
-              aria-label="关闭侧栏"
-              className="window-no-drag flex size-7 shrink-0 items-center justify-center rounded-md text-label-2 transition-colors hover:bg-hover hover:text-label-1"
-              onClick={onClose}
+              aria-label="清空搜索"
+              className="flex size-4 shrink-0 items-center justify-center rounded-[4px] text-label-3 hover:text-label-1"
+              onClick={() => setQuery("")}
             >
-              <X className="size-4" strokeWidth={1.8} />
+              <X className="size-3" strokeWidth={1.8} />
             </button>
           )}
         </div>
+      )}
 
-        {/* Search + actions — mirrors t3 SidebarThreadHeader */}
-        <div className="flex shrink-0 items-center gap-1 px-0.5 pb-1.5 pt-0.5">
-          <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-sm text-label-3 transition-colors hover:bg-hover hover:text-label-1 focus-within:bg-hover focus-within:text-label-1 focus-within:ring-1 focus-within:ring-inset focus-within:ring-[var(--ds-label-caption)]/50">
-            <Search className="size-4 shrink-0" strokeWidth={1.8} />
-            <input
-              ref={searchInputRef}
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索"
-              aria-label="搜索会话"
-              className="min-w-0 flex-1 bg-transparent text-[13px] leading-5 text-label-1 outline-none placeholder:text-label-3 [&::-webkit-search-cancel-button]:hidden"
-            />
-            {isSearching && (
-              <button
-                type="button"
-                aria-label="清空搜索"
-                className="flex size-5 shrink-0 items-center justify-center rounded text-label-3 hover:text-label-1"
-                onClick={() => {
-                  setQuery("");
-                  searchInputRef.current?.focus();
+      {actionError && (
+        <div role="alert" className="mx-1 mb-1.5 rounded-[8px] bg-red-50 px-2 py-1.5 text-[12px] leading-4 text-red-700 dark:bg-red-950/40 dark:text-red-300">
+          {actionError}
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+        {orderedProjects
+          .filter((project) => !keyword || threadsByProject(project.id).some(matches))
+          .map((project) => {
+            const matchedThreads = threadsByProject(project.id).filter(matches);
+            const collapsed = !keyword && collapsedProjects.has(project.id);
+            const expanded = keyword !== "" || expandedProjects.has(project.id);
+            const { visible: projectThreads, hiddenCount } = visibleSidebarThreads(
+              matchedThreads,
+              expanded,
+            );
+            return (
+              <section
+                key={project.id}
+                className={cn("relative pb-1", draggedProjectId === project.id && "opacity-40")}
+                onDragOver={(event) => {
+                  if (!draggedProjectId || draggedProjectId === project.id) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  const placement = workspaceDropPlacement(event);
+                  setDropTarget((current) => current?.id === project.id && current.placement === placement
+                    ? current
+                    : { id: project.id, placement });
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                    setDropTarget((current) => current?.id === project.id ? null : current);
+                  }
+                }}
+                onDrop={(event) => {
+                  if (!draggedProjectId) return;
+                  event.preventDefault();
+                  reorderWorkspaces(draggedProjectId, project.id, workspaceDropPlacement(event));
+                  setDraggedProjectId(null);
+                  setDropTarget(null);
                 }}
               >
-                <X className="size-3" strokeWidth={1.8} />
-              </button>
-            )}
+                {dropTarget?.id === project.id && (
+                  <div
+                    aria-hidden="true"
+                    className={cn(
+                      "pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-[var(--ds-link)]",
+                      dropTarget.placement === "before" ? "top-0" : "bottom-0",
+                    )}
+                  />
+                )}
+                <div className="group/workspace relative">
+                  <button
+                    type="button"
+                    aria-expanded={!collapsed}
+                    aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                    title={`${project.name}（拖动排序，或按 Alt + ↑ / ↓ 移动）`}
+                    draggable={projects.length > 1}
+                    className="flex h-[34px] w-full cursor-grab items-center gap-1.5 rounded-[12px] py-0 pl-2 pr-8 text-left text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover active:cursor-grabbing"
+                    onClick={() => toggleProject(project.id)}
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("application/x-cca-workspace", project.id);
+                      setDraggedProjectId(project.id);
+                      setDropTarget(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedProjectId(null);
+                      setDropTarget(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+                      event.preventDefault();
+                      const index = orderedProjects.findIndex((workspace) => workspace.id === project.id);
+                      const movingUp = event.key === "ArrowUp";
+                      const target = orderedProjects[index + (movingUp ? -1 : 1)];
+                      if (target) reorderWorkspaces(project.id, target.id, movingUp ? "before" : "after");
+                    }}
+                  >
+                    <span className="relative flex size-4 shrink-0 items-center justify-center text-[var(--ds-label-caption)]">
+                      <Folder
+                        className="size-4 transition-opacity group-hover/workspace:opacity-0"
+                        strokeWidth={1.6}
+                      />
+                      {collapsed ? (
+                        <ChevronRight className="absolute size-3.5 opacity-0 transition-opacity group-hover/workspace:opacity-100" />
+                      ) : (
+                        <ChevronDown className="absolute size-3.5 opacity-0 transition-opacity group-hover/workspace:opacity-100" />
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                    {projects.length > 1 && (
+                      <GripVertical
+                        aria-hidden="true"
+                        className="size-3.5 shrink-0 text-label-3 opacity-0 transition-opacity group-hover/workspace:opacity-100 group-focus-within/workspace:opacity-100"
+                        strokeWidth={1.8}
+                      />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`移除工作区 ${project.name}`}
+                    title="移除工作区"
+                    className="absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-label-3 opacity-0 transition-colors hover:bg-hover hover:text-label-1 group-hover/workspace:opacity-100"
+                    onClick={() => setConfirmTarget({ kind: "project", id: project.id, name: project.name })}
+                  >
+                    <Trash2 className="size-3.5" strokeWidth={1.8} />
+                  </button>
+                </div>
+                {!collapsed && projectThreads.map((thread) => renderThread(thread, { manage: thread.access === "owner" }))}
+                {!collapsed && !keyword && matchedThreads.length > SIDEBAR_THREAD_LIMIT && (
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    className="flex h-7 w-full items-center gap-1 rounded-[10px] py-1 pl-[30px] pr-2 text-left text-[12px] leading-5 text-label-3 transition-colors hover:bg-hover hover:text-label-1"
+                    onClick={() => toggleExpanded(project.id)}
+                  >
+                    {expanded
+                      ? <><ChevronUp className="size-3.5" strokeWidth={1.8} />收起</>
+                      : <><ChevronDown className="size-3.5" strokeWidth={1.8} />显示更多（{hiddenCount}）</>}
+                  </button>
+                )}
+                {!collapsed && matchedThreads.length === 0 && !keyword && (
+                  <div className="px-2 py-1 pl-[30px] text-[12px] leading-5 text-label-3">还没有会话</div>
+                )}
+              </section>
+            );
+          })}
+
+        {sharedThreads.length > 0 && (
+          <section className="mt-1 border-t border-line-2 pt-2">
+            <div className="flex h-9 items-center gap-1.5 px-2 text-[12px] font-medium leading-5 text-label-3">
+              <MessagesSquare className="size-3.5" strokeWidth={1.8} />
+              共享会话
+            </div>
+            {sharedThreads.map((thread) => renderThread(thread, { manage: false }))}
+          </section>
+        )}
+
+        {projects.length === 0 && sharedThreads.length === 0 && (
+          <div className="flex flex-col items-center gap-2 px-4 pt-16 text-center">
+            <FolderPlus className="size-5 text-label-caption" strokeWidth={1.6} />
+            <p className="text-[13px] leading-5 text-label-3">还没有工作区</p>
+            <button
+              type="button"
+              className="text-[13px] leading-5 text-[var(--ds-link)] hover:underline"
+              onClick={() => setAddOpen(true)}
+            >
+              创建工作区
+            </button>
           </div>
-          <HeaderIconButton label="创建工作区" onClick={() => setAddOpen(true)}>
-            <FolderPlus className="size-4" strokeWidth={1.8} />
-          </HeaderIconButton>
-          <HeaderIconButton
-            label="新聊天"
+        )}
+
+        {keyword && visibleProjectCount === 0 && sharedThreads.length === 0 && (
+          <div className="px-2 py-6 text-center text-[12px] leading-5 text-label-3">
+            没有匹配的会话
+          </div>
+        )}
+      </div>
+
+      <div className="shrink-0 pb-0.5 pt-1">
+        <div className="flex h-9 items-center gap-2 rounded-[12px] px-2 text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover">
+          <User className="size-4 shrink-0 text-label-3" strokeWidth={1.8} />
+          <span className="min-w-0 flex-1 truncate">{user?.username}</span>
+          {user?.role === "admin" && (
+            <span title="管理员" className="flex size-4 shrink-0 items-center justify-center">
+              <ShieldCheck className="size-3.5 text-[var(--ds-link)]" strokeWidth={1.8} />
+            </span>
+          )}
+          <button
+            type="button"
+            aria-label="退出登录"
+            title="退出登录"
+            className="flex size-7 shrink-0 items-center justify-center rounded-[8px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
             onClick={() => {
+              logout();
               navigate("/");
               onNavigate?.();
             }}
           >
-            <SquarePen className="size-4" strokeWidth={1.8} />
-          </HeaderIconButton>
+            <LogOut className="size-4" strokeWidth={1.8} />
+          </button>
         </div>
+      </div>
 
-        {actionError && (
-          <div
-            role="alert"
-            className="mx-1 mb-1.5 rounded-md bg-red-50 px-2 py-1.5 text-[12px] leading-4 text-red-700 dark:bg-red-950/40 dark:text-red-300"
-          >
-            {actionError}
-          </div>
-        )}
-
-        <div className="min-h-0 flex-1 overflow-y-auto pb-2">
-          {orderedProjects
-            .filter((project) => !keyword || threadsByProject(project.id).some(matches))
-            .map((project) => {
-              const matchedThreads = threadsByProject(project.id).filter(matches);
-              const collapsed = !keyword && collapsedProjects.has(project.id);
-              const expanded = keyword !== "" || expandedProjects.has(project.id);
-              const { visible: projectThreads, hiddenCount } = visibleSidebarThreads(
-                matchedThreads,
-                expanded,
-              );
-              return (
-                <section
-                  key={project.id}
-                  className={cn("relative pb-1", draggedProjectId === project.id && "opacity-40")}
-                  onDragOver={(event) => {
-                    if (!draggedProjectId || draggedProjectId === project.id) return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                    const placement = workspaceDropPlacement(event);
-                    setDropTarget((current) =>
-                      current?.id === project.id && current.placement === placement
-                        ? current
-                        : { id: project.id, placement },
-                    );
-                  }}
-                  onDragLeave={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                      setDropTarget((current) => (current?.id === project.id ? null : current));
-                    }
-                  }}
-                  onDrop={(event) => {
-                    if (!draggedProjectId) return;
-                    event.preventDefault();
-                    reorderWorkspaces(draggedProjectId, project.id, workspaceDropPlacement(event));
-                    setDraggedProjectId(null);
-                    setDropTarget(null);
-                  }}
-                >
-                  {dropTarget?.id === project.id && (
-                    <div
-                      aria-hidden="true"
-                      className={cn(
-                        "pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-[var(--ds-link)]",
-                        dropTarget.placement === "before" ? "top-0" : "bottom-0",
-                      )}
-                    />
-                  )}
-                  <div className="group/workspace relative">
-                    <button
-                      type="button"
-                      aria-expanded={!collapsed}
-                      aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
-                      title={`${project.name}（拖动排序，或按 Alt + ↑ / ↓ 移动）`}
-                      draggable={projects.length > 1}
-                      className="flex h-8 w-full cursor-grab items-center gap-2 rounded-md py-0 pl-2.5 pr-8 text-left text-[13px] leading-5 text-label-1 transition-colors hover:bg-hover active:cursor-grabbing"
-                      onClick={() => toggleProject(project.id)}
-                      onDragStart={(event) => {
-                        event.dataTransfer.effectAllowed = "move";
-                        event.dataTransfer.setData("application/x-cca-workspace", project.id);
-                        setDraggedProjectId(project.id);
-                        setDropTarget(null);
-                      }}
-                      onDragEnd={() => {
-                        setDraggedProjectId(null);
-                        setDropTarget(null);
-                      }}
-                      onKeyDown={(event) => {
-                        if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown"))
-                          return;
-                        event.preventDefault();
-                        const index = orderedProjects.findIndex(
-                          (workspace) => workspace.id === project.id,
-                        );
-                        const movingUp = event.key === "ArrowUp";
-                        const target = orderedProjects[index + (movingUp ? -1 : 1)];
-                        if (target)
-                          reorderWorkspaces(project.id, target.id, movingUp ? "before" : "after");
-                      }}
-                    >
-                      <span className="relative flex size-4 shrink-0 items-center justify-center text-label-3">
-                        <Folder
-                          className="size-4 transition-opacity group-hover/workspace:opacity-0"
-                          strokeWidth={1.6}
-                        />
-                        {collapsed ? (
-                          <ChevronRight className="absolute size-3.5 opacity-0 transition-opacity group-hover/workspace:opacity-100" />
-                        ) : (
-                          <ChevronDown className="absolute size-3.5 opacity-0 transition-opacity group-hover/workspace:opacity-100" />
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate font-medium">{project.name}</span>
-                      {projects.length > 1 && (
-                        <GripVertical
-                          aria-hidden="true"
-                          className="size-3.5 shrink-0 text-label-3 opacity-0 transition-opacity group-hover/workspace:opacity-100 group-focus-within/workspace:opacity-100"
-                          strokeWidth={1.8}
-                        />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`移除工作区 ${project.name}`}
-                      title="移除工作区"
-                      className="absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-label-3 opacity-0 transition-colors hover:bg-hover hover:text-label-1 group-hover/workspace:opacity-100"
-                      onClick={() =>
-                        setConfirmTarget({ kind: "project", id: project.id, name: project.name })
-                      }
-                    >
-                      <Trash2 className="size-3.5" strokeWidth={1.8} />
-                    </button>
-                  </div>
-                  {!collapsed &&
-                    projectThreads.map((thread) =>
-                      renderThread(thread, { manage: thread.access === "owner" }),
-                    )}
-                  {!collapsed && !keyword && matchedThreads.length > SIDEBAR_THREAD_LIMIT && (
-                    <button
-                      type="button"
-                      aria-expanded={expanded}
-                      className="flex h-7 w-full items-center gap-1 rounded-md py-1 pl-[34px] pr-2 text-left text-[12px] leading-5 text-label-3 transition-colors hover:bg-hover hover:text-label-1"
-                      onClick={() => toggleExpanded(project.id)}
-                    >
-                      {expanded ? (
-                        <>
-                          <ChevronUp className="size-3.5" strokeWidth={1.8} />
-                          收起
-                        </>
-                      ) : (
-                        <>
-                          <ChevronDown className="size-3.5" strokeWidth={1.8} />
-                          显示更多（{hiddenCount}）
-                        </>
-                      )}
-                    </button>
-                  )}
-                  {!collapsed && matchedThreads.length === 0 && !keyword && (
-                    <div className="px-2 py-1 pl-[34px] text-[12px] leading-5 text-label-3">
-                      还没有会话
-                    </div>
-                  )}
-                </section>
-              );
-            })}
-
-          {sharedThreads.length > 0 && (
-            <section className="mt-1 border-t border-line-2 pt-2">
-              <div className="flex h-8 items-center gap-1.5 px-2.5 text-[12px] font-medium leading-5 text-label-3">
-                <MessagesSquare className="size-3.5" strokeWidth={1.8} />
-                共享会话
-              </div>
-              {sharedThreads.map((thread) => renderThread(thread, { manage: false }))}
-            </section>
-          )}
-
-          {projects.length === 0 && sharedThreads.length === 0 && (
-            <div className="flex flex-col items-center gap-2 px-4 pt-16 text-center">
-              <FolderPlus className="size-5 text-label-caption" strokeWidth={1.6} />
-              <p className="text-[13px] leading-5 text-label-3">还没有工作区</p>
-              <button
-                type="button"
-                className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-line-3 px-2.5 py-1 text-[12px] font-medium text-label-3 transition-colors hover:bg-hover hover:text-label-1"
-                onClick={() => setAddOpen(true)}
-              >
-                <FolderPlus className="-mx-0.5 size-3" strokeWidth={1.8} />
-                创建工作区
-              </button>
-            </div>
-          )}
-
-          {keyword && visibleProjectCount === 0 && sharedThreads.length === 0 && (
-            <div className="px-2 py-6 text-center text-[12px] leading-5 text-label-3">
-              没有匹配的会话
-            </div>
-          )}
-        </div>
-
-        {/* Footer utilities — mirrors t3 SidebarChromeFooter */}
-        <div className="shrink-0 border-t border-line-2 px-0.5 pt-1.5 pb-0.5">
-          <div className="flex items-center gap-0.5">
-            <HeaderIconButton
-              label="设置"
-              pressed={location.pathname.startsWith("/settings")}
-              onClick={() => go("/settings/general")}
-            >
-              <Settings className="size-4" strokeWidth={1.8} />
-            </HeaderIconButton>
-            {user?.role === "admin" && (
-              <>
-                <HeaderIconButton
-                  label="技能"
-                  pressed={location.pathname === "/skills"}
-                  onClick={() => go("/skills")}
-                >
-                  <Sparkles className="size-4" strokeWidth={1.8} />
-                </HeaderIconButton>
-                <HeaderIconButton
-                  label="插件"
-                  pressed={location.pathname === "/plugins"}
-                  onClick={() => go("/plugins")}
-                >
-                  <Package className="size-4" strokeWidth={1.8} />
-                </HeaderIconButton>
-              </>
-            )}
-            <div className="min-w-0 flex-1" />
-            <div className="flex min-w-0 max-w-[55%] items-center gap-1 rounded-md px-1.5 py-1 text-[12px] leading-4 text-label-2">
-              <User className="size-3.5 shrink-0 text-label-3" strokeWidth={1.8} />
-              <span className="min-w-0 truncate">{user?.username}</span>
-              {user?.role === "admin" && (
-                <ShieldCheck
-                  className="size-3 shrink-0 text-[var(--ds-link)]"
-                  strokeWidth={1.8}
-                  aria-label="管理员"
-                />
-              )}
-            </div>
-            <HeaderIconButton
-              label="退出登录"
-              onClick={() => {
-                logout();
-                navigate("/");
-                onNavigate?.();
-              }}
-            >
-              <LogOut className="size-4" strokeWidth={1.8} />
-            </HeaderIconButton>
-          </div>
-        </div>
-
-        <Dialog
-          open={addOpen}
-          onOpenChange={(open) => {
-            if (creatingWorkspace) return;
-            setAddOpen(open);
-            if (!open) {
-              setWorkspaceName("");
-              setWorkspaceError("");
-            }
-          }}
-        >
-          <DialogContent>
-            <form
-              className="contents"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void createNamedWorkspace();
-              }}
-            >
-              <DialogHeader>
-                <DialogTitle>创建工作区</DialogTitle>
-                <DialogDescription>
-                  输入显示名称，服务器会创建独立且不透明的工作区目录。
-                </DialogDescription>
-              </DialogHeader>
-              <Input
-                value={workspaceName}
-                onChange={(event) => setWorkspaceName(event.target.value)}
-                placeholder="工作区名称"
-                aria-label="工作区名称"
-                maxLength={80}
-                autoFocus
-                disabled={creatingWorkspace}
-              />
-              {workspaceError && (
-                <p className="text-xs text-red-600 dark:text-red-400">{workspaceError}</p>
-              )}
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={creatingWorkspace}
-                  onClick={() => setAddOpen(false)}
-                >
-                  取消
-                </Button>
-                <Button type="submit" disabled={creatingWorkspace || !workspaceName.trim()}>
-                  {creatingWorkspace && <Loader2 className="animate-spin" />}
-                  创建
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
-
-        <ConfirmDialog
-          open={confirmTarget !== null}
-          onOpenChange={(open) => !open && setConfirmTarget(null)}
-          title="移除工作区？"
-          description={
-            confirmTarget
-              ? `将移除“${confirmTarget.name}”，其中的归档会话也会被删除；磁盘文件不会删除。`
-              : ""
+      <Dialog
+        open={addOpen}
+        onOpenChange={(open) => {
+          if (creatingWorkspace) return;
+          setAddOpen(open);
+          if (!open) {
+            setWorkspaceName("");
+            setWorkspaceError("");
           }
-          confirmLabel="移除"
-          destructive
-          onConfirm={() => {
-            if (confirmTarget) void removeWorkspace(confirmTarget.id);
-            setConfirmTarget(null);
-          }}
-        />
-      </aside>
-    </TooltipProvider>
+        }}
+      >
+        <DialogContent>
+          <form
+            className="contents"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createNamedWorkspace();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>创建工作区</DialogTitle>
+              <DialogDescription>输入显示名称，服务器会创建独立且不透明的工作区目录。</DialogDescription>
+            </DialogHeader>
+            <Input
+              value={workspaceName}
+              onChange={(event) => setWorkspaceName(event.target.value)}
+              placeholder="工作区名称"
+              aria-label="工作区名称"
+              maxLength={80}
+              autoFocus
+              disabled={creatingWorkspace}
+            />
+            {workspaceError && <p className="text-xs text-red-600 dark:text-red-400">{workspaceError}</p>}
+            <DialogFooter>
+              <Button type="button" variant="outline" disabled={creatingWorkspace} onClick={() => setAddOpen(false)}>
+                取消
+              </Button>
+              <Button type="submit" disabled={creatingWorkspace || !workspaceName.trim()}>
+                {creatingWorkspace && <Loader2 className="animate-spin" />}
+                创建
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        open={confirmTarget !== null}
+        onOpenChange={(open) => !open && setConfirmTarget(null)}
+        title="移除工作区？"
+        description={confirmTarget ? `将移除“${confirmTarget.name}”，其中的归档会话也会被删除；磁盘文件不会删除。` : ""}
+        confirmLabel="移除"
+        destructive
+        onConfirm={() => {
+          if (confirmTarget) void removeWorkspace(confirmTarget.id);
+          setConfirmTarget(null);
+        }}
+      />
+    </aside>
   );
 }
