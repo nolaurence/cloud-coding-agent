@@ -1,17 +1,12 @@
 import { useEffect, useState } from "react";
-import { ArrowLeftRight, Menu, PanelLeft, PanelRightOpen, Share2, WifiOff } from "lucide-react";
+import { ArrowLeftRight, Menu, PanelRightOpen, Share2, WifiOff } from "lucide-react";
 import { Outlet, useLocation } from "react-router-dom";
+import { NavRail } from "./NavRail";
 import { Sidebar } from "./Sidebar";
 import { useApp } from "../lib/store";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { BrandLogo } from "./BrandLogo";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "cloud-coding-agent:sidebar-collapsed";
 
@@ -54,20 +49,13 @@ export function AppLayout() {
   const mobileTitle = routeThread?.title ?? appName;
   const canManageThread = routeThread?.access === "owner";
   const onNewChat = location.pathname === "/";
-  const canOpenWorkspacePanel =
-    Boolean(routeThreadId && canManageThread) || (onNewChat && projects.length > 0);
+  const canOpenWorkspacePanel = Boolean(routeThreadId && canManageThread) || (onNewChat && projects.length > 0);
 
   useEffect(() => {
     setSidebarOpen(false);
     setShareDialogOpen(false);
     if (!routeThreadId || !canManageThread) setWorkspacePanelOpen(false);
-  }, [
-    canManageThread,
-    location.pathname,
-    routeThreadId,
-    setShareDialogOpen,
-    setWorkspacePanelOpen,
-  ]);
+  }, [canManageThread, location.pathname, routeThreadId, setShareDialogOpen, setWorkspacePanelOpen]);
 
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 768px)");
@@ -91,136 +79,112 @@ export function AppLayout() {
   }, []);
 
   return (
-    <TooltipProvider delayDuration={300}>
-      <div className="relative flex h-dvh overflow-hidden bg-panel">
-        {/* Desktop sidebar sits outside the main content card (t3-style left rail). */}
+    <div className="relative flex h-dvh overflow-hidden bg-panel">
+      <div className="hidden h-full min-h-0 shrink-0 md:flex">
+        <NavRail
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={toggleSidebarCollapsed}
+        />
+      </div>
+
+      <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          className="w-[min(92vw,23rem)] max-w-none gap-0 p-0 md:hidden sm:max-w-none"
+        >
+          <SheetTitle className="sr-only">导航</SheetTitle>
+          <div className="flex h-full min-h-0">
+            <NavRail onNavigate={() => setSidebarOpen(false)} />
+            <div className="min-w-0 flex-1">
+              <Sidebar
+                onNavigate={() => setSidebarOpen(false)}
+                onClose={() => setSidebarOpen(false)}
+              />
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:my-0 md:mr-0 md:rounded-[12px] md:border md:border-line-2 md:shadow-[0_2px_12px_rgba(15,23,42,0.08)] md:dark:shadow-[0_2px_12px_rgba(0,0,0,0.32)]">
         {!sidebarCollapsed && (
           <div className="hidden h-full min-h-0 shrink-0 md:flex">
-            <Sidebar onCollapse={toggleSidebarCollapsed} />
+            <Sidebar />
           </div>
         )}
-
-        {/* Floating reopen control when sidebar is collapsed */}
-        {sidebarCollapsed && (
-          <div className="pointer-events-none absolute left-2 top-2 z-40 hidden md:flex">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="显示侧栏"
-                  aria-expanded={false}
-                  title="显示侧栏 (⌘B)"
-                  className="pointer-events-auto flex size-8 items-center justify-center rounded-md text-label-2 transition-colors hover:bg-hover hover:text-label-1"
-                  onClick={toggleSidebarCollapsed}
-                >
-                  <PanelLeft className="size-4" strokeWidth={1.8} />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" showArrow={false}>
-                显示侧栏 (⌘B)
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        )}
-
-        {/* Mobile drawer */}
-        <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-          <SheetContent
-            side="left"
-            showCloseButton={false}
-            className="w-[min(92vw,20rem)] max-w-none gap-0 p-0 md:hidden sm:max-w-none"
-          >
-            <SheetTitle className="sr-only">导航</SheetTitle>
-            <div className="flex h-full min-h-0">
-              <div className="min-w-0 flex-1">
-                <Sidebar
-                  onNavigate={() => setSidebarOpen(false)}
-                  onClose={() => setSidebarOpen(false)}
-                />
-              </div>
+        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <header className="flex h-12 shrink-0 items-center gap-3 border-b-[0.5px] border-line-3 bg-background px-3 md:hidden">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="打开侧栏"
+              title="打开侧栏"
+              className="text-muted-foreground"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <BrandLogo className="h-5 w-5" />
+              <span className="truncate text-sm font-medium">{mobileTitle}</span>
             </div>
-          </SheetContent>
-        </Sheet>
-
-        <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:my-2 md:mr-2 md:rounded-[12px] md:border md:border-line-2 md:shadow-[0_2px_12px_rgba(15,23,42,0.08)] md:dark:shadow-[0_2px_12px_rgba(0,0,0,0.32)]">
-          <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            <header className="flex h-12 shrink-0 items-center gap-3 border-b-[0.5px] border-line-3 bg-background px-3 md:hidden">
+            {routeThreadId && canManageThread && (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label="打开侧栏"
-                title="打开侧栏"
+                aria-label="分享会话"
+                title="分享会话"
                 className="text-muted-foreground"
-                onClick={() => setSidebarOpen(true)}
+                onClick={() => setShareDialogOpen(true)}
               >
-                <Menu className="h-5 w-5" />
+                <Share2 className="h-4 w-4" />
               </Button>
-              <div className="flex min-w-0 flex-1 items-center gap-2">
-                <BrandLogo className="h-5 w-5" />
-                <span className="truncate text-sm font-medium">{mobileTitle}</span>
-              </div>
-              {routeThreadId && canManageThread && (
+            )}
+            {canOpenWorkspacePanel && (
+              <>
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
-                  aria-label="分享会话"
-                  title="分享会话"
+                  aria-label="打开工作区面板"
+                  title="打开工作区面板"
+                  aria-controls="thread-workspace-panel"
+                  aria-expanded={workspacePanelOpen}
                   className="text-muted-foreground"
-                  onClick={() => setShareDialogOpen(true)}
+                  onClick={() => setWorkspacePanelOpen(true)}
                 >
-                  <Share2 className="h-4 w-4" />
+                  <PanelRightOpen className="h-4 w-4" />
                 </Button>
-              )}
-              {canOpenWorkspacePanel && (
-                <>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label="打开工作区面板"
-                    title="打开工作区面板"
-                    aria-controls="thread-workspace-panel"
-                    aria-expanded={workspacePanelOpen}
-                    className="text-muted-foreground"
-                    onClick={() => setWorkspacePanelOpen(true)}
-                  >
-                    <PanelRightOpen className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label="互换对话区与工作区位置"
-                    title={
-                      panelPlacement === "right" ? "将工作区移到左侧" : "将工作区移到右侧"
-                    }
-                    className="text-muted-foreground"
-                    onClick={() =>
-                      setPanelPlacement(panelPlacement === "right" ? "left" : "right")
-                    }
-                  >
-                    <ArrowLeftRight className="h-4 w-4" />
-                  </Button>
-                </>
-              )}
-              {!connected && (
-                <span
-                  className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
-                  title="正在连接服务器"
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="互换对话区与工作区位置"
+                  title={panelPlacement === "right" ? "将工作区移到左侧" : "将工作区移到右侧"}
+                  className="text-muted-foreground"
+                  onClick={() => setPanelPlacement(panelPlacement === "right" ? "left" : "right")}
                 >
-                  <WifiOff className="h-3.5 w-3.5" />
-                  连接中
-                </span>
-              )}
-            </header>
-            <div className="relative min-h-0 flex-1">
-              <Outlet />
-            </div>
-          </main>
-        </div>
+                  <ArrowLeftRight className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+            {!connected && (
+              <span
+                className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
+                title="正在连接服务器"
+              >
+                <WifiOff className="h-3.5 w-3.5" />
+                连接中
+              </span>
+            )}
+          </header>
+          <div className="relative min-h-0 flex-1">
+            <Outlet />
+          </div>
+        </main>
       </div>
-    </TooltipProvider>
+    </div>
   );
 }

@@ -3,9 +3,12 @@ import test from "node:test";
 import type { ThreadMeta, Workspace } from "@cca/protocol";
 import {
   archivedDaysRemaining,
+  compactSidebarTime,
   groupArchivedThreads,
+  listSidebarThreads,
   SIDEBAR_THREAD_LIMIT,
   sortSidebarThreads,
+  threadGitPresentation,
   visibleSidebarThreads,
 } from "./threadGroups.js";
 
@@ -64,6 +67,49 @@ test("archived groups ignore active and unknown workspaces and sort by archive t
 
   assert.deepEqual(groups.map((group) => group.project.id), ["project-2", "project-1"]);
   assert.deepEqual(groups[1]!.threads.map((item) => item.id), ["one-new", "one-old"]);
+});
+
+test("compact sidebar time uses t3-style short units", () => {
+  const now = 1_000_000_000;
+  assert.equal(compactSidebarTime(now - 10_000, now), "刚刚");
+  assert.equal(compactSidebarTime(now - 5 * 60_000, now), "5m");
+  assert.equal(compactSidebarTime(now - 2 * 60 * 60_000, now), "2h");
+  assert.equal(compactSidebarTime(now - 7 * 24 * 60 * 60_000, now), "7d");
+});
+
+test("flat sidebar list drops archives, matches title or workspace, and keeps pin order", () => {
+  const listed = listSidebarThreads(
+    [
+      thread({ id: "archived", title: "旧会话", archived: true, updatedAt: 900 }),
+      thread({ id: "other", projectId: "project-2", title: "天气", updatedAt: 400 }),
+      thread({ id: "pin", title: "置顶工作", pinnedAt: 50, updatedAt: 100 }),
+      thread({ id: "recent", title: "最近聊天", updatedAt: 800 }),
+    ],
+    [project, otherProject],
+    "",
+  );
+  assert.deepEqual(listed.map((item) => item.id), ["pin", "recent", "other"]);
+
+  const searched = listSidebarThreads(
+    [
+      thread({ id: "title-hit", title: "cloud 改造" }),
+      thread({ id: "name-hit", projectId: "project-2", title: "无关" }),
+      thread({ id: "miss", title: "你好" }),
+    ],
+    [project, otherProject],
+    "项目二",
+  );
+  assert.deepEqual(searched.map((item) => item.id), ["name-hit"]);
+});
+
+test("git presentation stays empty until ThreadMeta carries branch or PR fields", () => {
+  assert.deepEqual(threadGitPresentation(thread({ id: "plain" })), {});
+  assert.deepEqual(
+    threadGitPresentation(
+      Object.assign(thread({ id: "with-git" }), { branch: "feat/a", prNumber: 5177 }),
+    ),
+    { branch: "feat/a", pullRequestNumber: 5177 },
+  );
 });
 
 test("archived retention reports remaining days from the archive timestamp", () => {
