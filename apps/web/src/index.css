@@ -175,6 +175,47 @@ button:disabled,
   background: transparent;
 }
 
+/*
+ * 侧栏会话列表：细滚动条叠在 gutter 里，悬停/滚动才显示。
+ * scrollbar-gutter: both-edges 让左右留白对称，避免挡到时间和图标。
+ */
+.sidebar-thread-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: stable both-edges;
+}
+.sidebar-thread-scroll:hover,
+.sidebar-thread-scroll:focus-within,
+.sidebar-thread-scroll[data-scrolling] {
+  scrollbar-color: rgb(15 17 21 / 28%) transparent;
+}
+.dark .sidebar-thread-scroll:hover,
+.dark .sidebar-thread-scroll:focus-within,
+.dark .sidebar-thread-scroll[data-scrolling] {
+  scrollbar-color: rgb(255 255 255 / 32%) transparent;
+}
+.sidebar-thread-scroll::-webkit-scrollbar {
+  width: var(--app-scrollbar-width);
+  height: var(--app-scrollbar-width);
+}
+.sidebar-thread-scroll::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: transparent;
+}
+.sidebar-thread-scroll:hover::-webkit-scrollbar-thumb,
+.sidebar-thread-scroll:focus-within::-webkit-scrollbar-thumb,
+.sidebar-thread-scroll[data-scrolling]::-webkit-scrollbar-thumb {
+  background-color: rgb(15 17 21 / 28%);
+}
+.dark .sidebar-thread-scroll:hover::-webkit-scrollbar-thumb,
+.dark .sidebar-thread-scroll:focus-within::-webkit-scrollbar-thumb,
+.dark .sidebar-thread-scroll[data-scrolling]::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 32%);
+}
+.sidebar-thread-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* ---- Markdown 排版：对齐 deepseek-harness 的 14/24 正文标尺 ---- */
 .markdown-body {
   min-width: 0;

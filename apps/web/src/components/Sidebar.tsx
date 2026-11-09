@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   FolderPlus,
@@ -54,12 +54,20 @@ export function Sidebar({
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [actionError, setActionError] = useState("");
+  const [threadListScrolling, setThreadListScrolling] = useState(false);
+  const threadListScrollIdle = useRef(0);
   // 每 minute 刷新一次，让「5m / 2h / 7d」这类相对时间保持新鲜
   const [, setClock] = useState(0);
   useEffect(() => {
     const timer = window.setInterval(() => setClock((value) => value + 1), 60_000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => () => window.clearTimeout(threadListScrollIdle.current), []);
+  const onThreadListScroll = () => {
+    setThreadListScrolling(true);
+    window.clearTimeout(threadListScrollIdle.current);
+    threadListScrollIdle.current = window.setTimeout(() => setThreadListScrolling(false), 400);
+  };
 
   const keyword = query.trim();
   const listedThreads = listSidebarThreads(threads, projects, keyword);
@@ -196,7 +204,11 @@ export function Sidebar({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+      <div
+        className="sidebar-thread-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-3"
+        data-scrolling={threadListScrolling ? "" : undefined}
+        onScroll={onThreadListScroll}
+      >
         {listedThreads.map((thread) => (
           <SidebarThreadCard
             key={thread.id}

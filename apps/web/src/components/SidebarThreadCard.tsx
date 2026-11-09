@@ -76,6 +76,7 @@ export function SidebarThreadCard({
       : thread.access === "collaborate"
         ? "（可加入分享）"
         : "";
+  const showActions = manage && active;
 
   return (
     <div className="group/thread relative">
@@ -103,9 +104,9 @@ export function SidebarThreadCard({
           {pinned && (
             <Pin
               className={cn(
-                "size-3 shrink-0 text-label-3 transition-opacity",
-                manage && "group-hover/thread:opacity-0 group-focus-within/thread:opacity-0",
-                active && manage && "opacity-0",
+                "size-3 shrink-0 text-label-3",
+                manage && "group-hover/thread:hidden group-focus-within/thread:hidden",
+                showActions && "hidden",
               )}
               strokeWidth={1.8}
               aria-label="已置顶"
@@ -113,69 +114,79 @@ export function SidebarThreadCard({
           )}
           <span
             className={cn(
-              "shrink-0 text-[12px] leading-4 tabular-nums text-label-3 transition-opacity",
-              manage && "group-hover/thread:opacity-0 group-focus-within/thread:opacity-0",
-              active && manage && "opacity-0",
+              "w-12 shrink-0 text-right text-[12px] leading-4 tabular-nums text-label-3",
+              manage && "group-hover/thread:hidden group-focus-within/thread:hidden",
+              showActions && "hidden",
             )}
           >
             {compactSidebarTime(thread.updatedAt)}
           </span>
+          {manage && (
+            <div
+              className={cn(
+                "w-12 shrink-0 items-center justify-end gap-0.5",
+                showActions
+                  ? "flex"
+                  : "hidden group-hover/thread:flex group-focus-within/thread:flex",
+              )}
+            >
+              <button
+                type="button"
+                aria-label={pinned ? `取消置顶 ${thread.title}` : `置顶 ${thread.title}`}
+                title={pinned ? "取消置顶" : "置顶"}
+                className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onTogglePinned(thread);
+                }}
+              >
+                <Pin
+                  className={cn("size-3.5", pinned && "fill-current text-[var(--ds-link)]")}
+                  strokeWidth={1.8}
+                />
+              </button>
+              <button
+                type="button"
+                aria-label={`归档会话 ${thread.title}`}
+                title="归档"
+                className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onArchive(thread);
+                }}
+              >
+                <Archive className="size-3.5" strokeWidth={1.8} />
+              </button>
+            </div>
+          )}
         </div>
-        <div className="flex min-w-0 items-center gap-1">
-          <span className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-5 text-label-1">
+        <div className="flex min-w-0 items-center">
+          <span className="min-w-0 flex-1 truncate text-[15px] font-normal leading-5 text-label-1">
             {thread.title}
+          </span>
+        </div>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-label-3">
+            {git.branch}
           </span>
           {thread.access === "readonly" ? (
             <Eye className="size-3.5 shrink-0 text-label-3" strokeWidth={1.8} aria-label="只读分享" />
           ) : thread.access === "collaborate" ? (
             <MessagesSquare className="size-3.5 shrink-0 text-label-3" strokeWidth={1.8} aria-label="可加入分享" />
           ) : null}
-        </div>
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-label-3">
-            {git.branch}
-          </span>
           {git.pullRequestNumber !== undefined && (
             <span className="inline-flex shrink-0 items-center gap-0.5 text-[12px] leading-4 text-label-3">
               <GitPullRequest className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
               {git.pullRequestNumber}
             </span>
           )}
-          <RuntimeGlyph runtime={thread.runtime} />
+          <span className="flex w-12 shrink-0 items-center justify-end">
+            <RuntimeGlyph runtime={thread.runtime} />
+          </span>
         </div>
       </Link>
-      {manage && (
-        <div
-          className={cn(
-            "absolute right-1.5 top-2 flex items-center gap-0.5 transition-opacity",
-            active
-              ? "pointer-events-auto opacity-100"
-              : "pointer-events-none opacity-0 group-hover/thread:pointer-events-auto group-hover/thread:opacity-100 group-focus-within/thread:pointer-events-auto group-focus-within/thread:opacity-100",
-          )}
-        >
-          <button
-            type="button"
-            aria-label={pinned ? `取消置顶 ${thread.title}` : `置顶 ${thread.title}`}
-            title={pinned ? "取消置顶" : "置顶"}
-            className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
-            onClick={() => onTogglePinned(thread)}
-          >
-            <Pin
-              className={cn("size-3.5", pinned && "fill-current text-[var(--ds-link)]")}
-              strokeWidth={1.8}
-            />
-          </button>
-          <button
-            type="button"
-            aria-label={`归档会话 ${thread.title}`}
-            title="归档"
-            className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
-            onClick={() => onArchive(thread)}
-          >
-            <Archive className="size-3.5" strokeWidth={1.8} />
-          </button>
-        </div>
-      )}
     </div>
   );
 }
