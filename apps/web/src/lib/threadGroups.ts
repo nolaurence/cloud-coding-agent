@@ -32,6 +32,59 @@ export function visibleSidebarThreads(
   return { visible, hiddenCount: Math.max(0, threads.length - visible.length) };
 }
 
+/** 侧栏卡片时间：与 t3code compact label 一致（刚刚 / 5m / 2h / 7d）。 */
+export function compactSidebarTime(at: number, now = Date.now()): string {
+  const diff = Math.max(0, now - at);
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diff < minute) return "刚刚";
+  if (diff < hour) return `${Math.floor(diff / minute)}m`;
+  if (diff < day) return `${Math.floor(diff / hour)}h`;
+  return `${Math.floor(diff / day)}d`;
+}
+
+/**
+ * ThreadMeta 目前没有会话绑定的 branch / PR。
+ * 若后端之后挂上同名字段，侧栏卡片会自动展示。
+ */
+export function threadGitPresentation(thread: ThreadMeta): {
+  branch?: string;
+  pullRequestNumber?: number;
+} {
+  const record = thread as ThreadMeta & {
+    branch?: unknown;
+    pullRequestNumber?: unknown;
+    prNumber?: unknown;
+  };
+  const branch = typeof record.branch === "string" ? record.branch.trim() : "";
+  const raw = record.pullRequestNumber ?? record.prNumber;
+  const pullRequestNumber =
+    typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0 ? raw : undefined;
+  return {
+    ...(branch ? { branch } : {}),
+    ...(pullRequestNumber !== undefined ? { pullRequestNumber } : {}),
+  };
+}
+
+/** 活跃会话按时间倒序平铺；搜索同时匹配标题和工作区名。 */
+export function listSidebarThreads(
+  threads: readonly ThreadMeta[],
+  projects: readonly Workspace[],
+  query = "",
+): ThreadMeta[] {
+  const keyword = query.trim().toLowerCase();
+  const names = new Map(projects.map((project) => [project.id, project.name]));
+  return sortSidebarThreads(
+    threads.filter((thread) => {
+      if (thread.archived) return false;
+      if (!keyword) return true;
+      if (thread.title.toLowerCase().includes(keyword)) return true;
+      return (names.get(thread.projectId) ?? "").toLowerCase().includes(keyword);
+    }),
+  );
+}
+
 export interface ArchivedThreadGroup {
   project: Workspace;
   threads: ThreadMeta[];
