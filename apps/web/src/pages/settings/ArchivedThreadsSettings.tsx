@@ -56,7 +56,7 @@ export function ArchivedThreadsSettings() {
   return (
     <div className="flex flex-col gap-5">
       <header>
-        <h2 className="text-base font-semibold">归档对话</h2>
+        <h2 className="text-base">归档对话</h2>
         <p className="mt-1 text-sm text-zinc-500">
           归档的会话只读保留，满 30 天后自动删除。可按工作区查看并随时恢复。
         </p>

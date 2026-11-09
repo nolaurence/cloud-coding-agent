@@ -186,7 +186,7 @@ export function UsersSettings() {
       {registration && (
         <section>
           <div className="mb-3">
-            <h2 className="text-base font-semibold">注册设置</h2>
+            <h2 className="text-base">注册设置</h2>
             <p className="text-xs text-zinc-500">控制新用户是否必须使用有效邀请码注册</p>
           </div>
 
@@ -261,7 +261,7 @@ export function UsersSettings() {
       <section>
         <div className="mb-3 flex items-end justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold">注册用户</h2>
+            <h2 className="text-base">注册用户</h2>
             <p className="text-xs text-zinc-500">管理员可以调整其他用户的系统角色</p>
           </div>
           <Badge variant="secondary">{users.length} 位用户</Badge>

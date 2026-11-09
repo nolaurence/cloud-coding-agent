@@ -40,7 +40,7 @@ export function GeneralSettings() {
   return (
     <div className="flex flex-col gap-6">
       <section>
-        <h2 className="mb-3 text-base font-semibold">外观</h2>
+        <h2 className="mb-3 text-base">外观</h2>
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
           <div>
             <div className="text-sm">界面主题</div>
@@ -72,7 +72,7 @@ export function GeneralSettings() {
 
       {user?.role === "admin" && (
         <section>
-          <h2 className="mb-3 text-base font-semibold">默认模型</h2>
+          <h2 className="mb-3 text-base">默认模型</h2>
           <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 px-4 py-3 xl:flex-row xl:items-center xl:justify-between dark:border-zinc-800">
             <div>
               <div className="text-sm">新会话默认使用的模型</div>
@@ -105,7 +105,7 @@ export function GeneralSettings() {
 
       {user?.role === "admin" && (
         <section>
-          <h2 className="mb-3 text-base font-semibold">图片生成</h2>
+          <h2 className="mb-3 text-base">图片生成</h2>
           <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
             <div>
               <label htmlFor="image-generation-enabled" className="text-sm">启用生图功能</label>
@@ -128,7 +128,7 @@ export function GeneralSettings() {
       )}
 
       <section>
-        <h2 className="mb-3 text-base font-semibold">运行环境</h2>
+        <h2 className="mb-3 text-base">运行环境</h2>
         <div className="rounded-lg border border-zinc-200 px-4 py-3 text-sm text-zinc-500 dark:border-zinc-800">
           Agent 工具调用(读写文件、执行命令)由服务端自动批准并在服务器工作目录内执行,适合云端部署场景。
         </div>

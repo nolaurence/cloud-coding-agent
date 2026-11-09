@@ -154,7 +154,7 @@ export function ConnectorsSettings() {
     <div>
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold">消息连接器</h2>
+          <h2 className="text-base">消息连接器</h2>
           <p className="text-xs text-zinc-500">接入 QQ 或飞书，每个外部聊天使用独立 Agent 会话</p>
         </div>
         <div className="flex shrink-0 gap-2">

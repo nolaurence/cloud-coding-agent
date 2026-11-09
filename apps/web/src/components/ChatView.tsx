@@ -781,7 +781,7 @@ function SubagentDetail({
             <div className="text-[12px] text-label-3">
               {subagent.agentDisplayName || "子代理"}
             </div>
-            <h2 className="mt-0.5 break-words text-[16px] font-semibold leading-6 text-label-1">
+            <h2 className="mt-0.5 break-words text-[16px] leading-6 text-label-1">
               {taskTitle}
             </h2>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-label-3">

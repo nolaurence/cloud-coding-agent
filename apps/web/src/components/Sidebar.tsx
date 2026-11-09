@@ -115,7 +115,7 @@ export function Sidebar({
     <aside className="flex h-full w-full min-w-0 shrink-0 flex-col border-r-[0.5px] border-line-3 bg-panel px-3 py-1.5 md:w-[280px]">
       <div className="window-drag-region -mx-1 flex h-[60px] shrink-0 items-center gap-2 pl-1 pr-0">
         <BrandLogo className="size-6 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-[17px] font-semibold leading-6 tracking-[0.02em] text-label-1">{appName}</span>
+        <span className="min-w-0 flex-1 truncate text-[17px] leading-6 tracking-[0.02em] text-label-1">{appName}</span>
         {!connected && (
           <WifiOff className="size-3.5 shrink-0 text-[var(--ds-label-caption)]" aria-label="正在连接服务器" />
         )}

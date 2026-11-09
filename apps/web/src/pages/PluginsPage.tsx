@@ -318,7 +318,7 @@ export function PluginsPage() {
     <div className="space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-[16px] font-semibold leading-6 text-label-1">插件</h2>
+          <h2 className="text-[16px] leading-6 text-label-1">插件</h2>
           <p className="mt-1 text-[13px] leading-5 text-label-3">
             兼容{" "}
             <a

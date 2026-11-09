@@ -101,7 +101,7 @@ export function McpSettings() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold">MCP 服务器</h2>
+          <h2 className="text-base">MCP 服务器</h2>
           <p className="text-xs text-zinc-500">为 Agent 接入外部工具(数据库、浏览器、第三方 API 等)</p>
         </div>
         <Button size="sm" onClick={() => openEdit()}>

@@ -86,7 +86,7 @@ export function GitBindingsSettings() {
   return (
     <section aria-labelledby="git-bindings-title" className="space-y-3">
       <div>
-        <h2 id="git-bindings-title" className="text-base font-semibold">
+        <h2 id="git-bindings-title" className="text-base">
           代码托管账户
         </h2>
         <p className="mt-1 text-sm text-zinc-500">

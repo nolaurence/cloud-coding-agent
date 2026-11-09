@@ -114,7 +114,7 @@ export function ShareThreadPage() {
             <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
               <Link2Off className="h-5 w-5" />
             </div>
-            <h1 className="text-base font-semibold">无法打开分享会话</h1>
+            <h1 className="text-base">无法打开分享会话</h1>
             <p className="mt-2 text-sm text-muted-foreground" role="alert">{error}</p>
             <div className="mt-5 flex gap-2">
               <Button type="button" variant="outline" onClick={() => navigate("/", { replace: true })}>
@@ -130,7 +130,7 @@ export function ShareThreadPage() {
         ) : (
           <>
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            <h1 className="mt-4 text-base font-semibold">
+            <h1 className="mt-4 text-base">
               {connected ? "正在加载分享会话" : "正在连接服务器"}
             </h1>
             <p className="mt-2 text-sm text-muted-foreground">打开后可先只读查看消息</p>

@@ -290,7 +290,7 @@ function PanelEmptyState({ options, onSelect }: { options: typeof panelOptions; 
     <div className="flex h-full min-h-0 items-center justify-center overflow-y-auto p-5 sm:p-8">
       <div className="w-full max-w-2xl">
         <div className="mb-6 text-center">
-          <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">打开面板</h2>
+          <h2 className="text-base text-zinc-900 dark:text-zinc-100">打开面板</h2>
           <p className="mt-1 text-xs text-zinc-500">选择要在右侧显示的内容</p>
         </div>
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(13rem,100%),1fr))] gap-2.5">
@@ -302,7 +302,7 @@ function PanelEmptyState({ options, onSelect }: { options: typeof panelOptions; 
               onClick={() => onSelect(item.id)}
             >
               <item.icon className="mb-3 h-5 w-5 text-zinc-500 transition-colors group-hover:text-zinc-800 dark:group-hover:text-zinc-200" />
-              <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{item.label}</div>
+              <div className="text-sm text-zinc-900 dark:text-zinc-100">{item.label}</div>
               <div className="mt-1 text-xs leading-5 text-zinc-500">{item.description}</div>
             </button>
           ))}
@@ -377,5 +377,5 @@ function browserUrl(ticket: string) {
 function ContextPanel({ threadId }: { threadId: string }) {
   const state = useThreadState(threadId);
   const characters = state.messages.reduce((sum, message) => sum + message.text.length + (message.reasoning?.length ?? 0), 0);
-  return <div className="space-y-3 overflow-auto p-4 text-sm"><h3 className="font-semibold">会话上下文</h3><div className="grid grid-cols-2 gap-2">{[["消息", state.messages.length], ["工具调用", state.activities.length], ["字符数", characters], ["状态", state.running ? "运行中" : "空闲"]].map(([label, value]) => <div key={label} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"><div className="text-xs text-zinc-500">{label}</div><div className="mt-1 font-medium">{value}</div></div>)}</div><div className="text-xs leading-5 text-zinc-500">字符数是当前可见历史的近似统计，不代表模型精确 token 用量。</div></div>;
+  return <div className="space-y-3 overflow-auto p-4 text-sm"><h3>会话上下文</h3><div className="grid grid-cols-2 gap-2">{[["消息", state.messages.length], ["工具调用", state.activities.length], ["字符数", characters], ["状态", state.running ? "运行中" : "空闲"]].map(([label, value]) => <div key={label} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"><div className="text-xs text-zinc-500">{label}</div><div className="mt-1 font-medium">{value}</div></div>)}</div><div className="text-xs leading-5 text-zinc-500">字符数是当前可见历史的近似统计，不代表模型精确 token 用量。</div></div>;
 }

@@ -245,7 +245,7 @@ export function ProvidersSettings() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold">模型服务</h2>
+          <h2 className="text-base">模型服务</h2>
           <p className="text-xs text-muted-foreground">Codex 支持原生 Responses；Chat Completions 由内置网关转换。上游需支持流式工具调用。Anthropic 请使用 OpenAI 兼容接口。</p>
           <p className="text-xs text-zinc-500">
             支持 OpenAI 兼容协议(Chat Completions)和 OpenAI Responses 协议,以及 Azure / Anthropic

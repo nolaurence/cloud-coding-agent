@@ -43,7 +43,7 @@ export function SkillsSettings() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold">技能 (Skills)</h2>
+          <h2 className="text-base">技能 (Skills)</h2>
           <p className="text-xs text-zinc-500">
             可复用的提示词模块,在会话中通过输入框的 <span className="mono">/技能名</span> 调用
           </p>
@@ -113,7 +113,7 @@ export function SkillsSettings() {
       </div>
 
       <section>
-        <h3 className="mb-2 text-sm font-semibold">额外技能目录</h3>
+        <h3 className="mb-2 text-sm">额外技能目录</h3>
         <p className="mb-2 text-xs text-zinc-500">服务器上的目录,扫描其下一级子目录中的 SKILL.md</p>
         <div className="flex flex-col gap-2">
           {settings.skillDirectories.map((dir) => (

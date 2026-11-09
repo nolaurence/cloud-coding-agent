@@ -222,7 +222,7 @@ export function NewChatPage() {
           <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center py-10">
             <div className="mb-6 text-center">
               <BrandLogo className="mx-auto mb-3 h-10 w-10" />
-              <h1 className="text-xl font-semibold">
+              <h1 className="text-xl">
                 {projects.length > 0 && effectiveProjectName
                   ? `我们应该在${effectiveProjectName}中做些什么？`
                   : "今天要处理什么？"}
