@@ -89,7 +89,7 @@ export function SidebarThreadCard({
           active && "bg-hover",
         )}
       >
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="relative flex min-w-0 items-center gap-1.5">
           <ProjectBadge name={projectName} />
           <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-label-3">
             {projectName}
@@ -105,8 +105,8 @@ export function SidebarThreadCard({
             <Pin
               className={cn(
                 "size-3 shrink-0 text-label-3",
-                manage && "group-hover/thread:hidden group-focus-within/thread:hidden",
-                showActions && "hidden",
+                manage && "group-hover/thread:invisible group-focus-within/thread:invisible",
+                showActions && "invisible",
               )}
               strokeWidth={1.8}
               aria-label="已置顶"
@@ -115,8 +115,8 @@ export function SidebarThreadCard({
           <span
             className={cn(
               "w-12 shrink-0 text-right text-[12px] leading-4 tabular-nums text-label-3",
-              manage && "group-hover/thread:hidden group-focus-within/thread:hidden",
-              showActions && "hidden",
+              manage && "group-hover/thread:invisible group-focus-within/thread:invisible",
+              showActions && "invisible",
             )}
           >
             {compactSidebarTime(thread.updatedAt)}
@@ -124,10 +124,10 @@ export function SidebarThreadCard({
           {manage && (
             <div
               className={cn(
-                "w-12 shrink-0 items-center justify-end gap-0.5",
+                "absolute right-0 top-1/2 flex w-12 -translate-y-1/2 items-center justify-end gap-0.5",
                 showActions
-                  ? "flex"
-                  : "hidden group-hover/thread:flex group-focus-within/thread:flex",
+                  ? "visible"
+                  : "invisible group-hover/thread:visible group-focus-within/thread:visible",
               )}
             >
               <button
