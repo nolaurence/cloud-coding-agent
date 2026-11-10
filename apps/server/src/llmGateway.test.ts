@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { object, responsesToChat, chatToResponses, sseData, startLlmGateway, normalizeCodexImageResponse, type JsonObject } from "./llmGateway.js";
+import { object, responsesToChat, chatToResponses, sseData, startLlmGateway, normalizeCodexImageResponse, sanitizeCodexImageRequest, unsupportedImageRequestParam, type JsonObject } from "./llmGateway.js";
 
 function stream(chunks: unknown[]): ReadableStream<Uint8Array> {
   const bytes = new TextEncoder().encode(chunks.map((chunk) => "data: " + (typeof chunk === "string" ? chunk : JSON.stringify(chunk)) + "\r\n\r\n").join(""));
@@ -138,6 +138,33 @@ test("image generation tool and image history translate through Chat Completions
   assert.equal(events.at(-1)?.type, "response.completed");
 });
 
+test("sanitizeCodexImageRequest drops complexity unless the model is GPT Image 2.6", () => {
+  const request = {
+    prompt: "A cat", model: "gpt-image-2", quality: "medium", size: "auto", background: "auto",
+    complexity: "medium", style: "vivid", response_format: "b64_json",
+  };
+  assert.deepEqual(sanitizeCodexImageRequest("gpt-image-1.5", request), {
+    prompt: "A cat", model: "gpt-image-1.5", quality: "medium", size: "auto", background: "auto",
+  });
+  assert.equal(sanitizeCodexImageRequest("gpt-image-2", request).complexity, undefined);
+  assert.equal(sanitizeCodexImageRequest("gpt-image-2.5-sunburst", { ...request, quality: "xhigh" }).quality, "xhigh");
+  assert.equal(sanitizeCodexImageRequest("gpt-image-1.5", { ...request, quality: "xhigh" }).quality, undefined);
+  assert.deepEqual(sanitizeCodexImageRequest("gpt-image-2.6-sunburst", request), {
+    prompt: "A cat", model: "gpt-image-2.6-sunburst", quality: "medium", size: "auto", background: "auto", complexity: "medium",
+  });
+});
+
+test("unsupportedImageRequestParam reads OpenAI image model rejection fields", () => {
+  const body = Buffer.from(JSON.stringify({
+    error: { message: "Complexity 'medium' is not supported for this image model.", type: "image_generation_user_error", param: "complexity", code: "invalid_value" },
+  }));
+  assert.equal(unsupportedImageRequestParam(400, body), "complexity");
+  assert.equal(unsupportedImageRequestParam(400, Buffer.from(JSON.stringify({
+    error: { message: "Quality 'xhigh' is not supported for this image model." },
+  }))), "quality");
+  assert.equal(unsupportedImageRequestParam(200, body), undefined);
+});
+
 test("Codex image responses always include created", () => {
   const normalized = object(JSON.parse(normalizeCodexImageResponse(
     200, "application/json", Buffer.from(JSON.stringify({ data: [{ b64_json: "QQ==" }] })),
@@ -198,7 +225,7 @@ test("gateway strips hosted image tools and proxies Codex native /images/generat
       assert.equal(forwardedTools.some((tool) => tool.type === "image_generation"), false);
       const generated = await fetch(gateway.url + "/images/generations", {
         method: "POST", headers: { authorization: "Bearer " + gateway.token, "content-type": "application/json" },
-        body: JSON.stringify({ model: "gpt-image-2", prompt: "A cat", quality: "auto" }),
+        body: JSON.stringify({ model: "gpt-image-2", prompt: "A cat", quality: "auto", complexity: "medium", style: "vivid" }),
       });
       assert.equal(generated.status, 200);
       const generatedPayload = object(await generated.json());
@@ -207,10 +234,50 @@ test("gateway strips hosted image tools and proxies Codex native /images/generat
       assert.equal(requests.length, before + 2);
       assert.equal(requests.at(-1)?.url, "/v1/images/generations");
       assert.equal(requests.at(-1)?.authorization, "Bearer image-test-key");
-      assert.equal(requests.at(-1)?.body.model, "gpt-image-1.5");
-      assert.equal(requests.at(-1)?.body.prompt, "A cat");
+      assert.deepEqual(requests.at(-1)?.body, { model: "gpt-image-1.5", prompt: "A cat", quality: "auto" });
     } finally { await gateway.close(); }
   }
+});
+
+test("gateway retries image generation after an unsupported param rejection", async (t) => {
+  const requests: JsonObject[] = [];
+  const upstream = createServer((req, res) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = object(JSON.parse(Buffer.concat(chunks).toString()));
+      requests.push(body);
+      res.setHeader("content-type", "application/json");
+      if (body.size) {
+        res.writeHead(400);
+        res.end(JSON.stringify({
+          error: { message: "Size 'auto' is not supported for this image model.", param: "size", type: "image_generation_user_error" },
+        }));
+        return;
+      }
+      res.end(JSON.stringify({ created: 1, data: [{ b64_json: "aW1hZ2U=" }] }));
+    })().catch(() => res.destroy());
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => { upstream.closeAllConnections(); upstream.close(() => resolve()); }));
+  const address = upstream.address();
+  assert.ok(address && typeof address !== "string");
+  const imageBase = "http://127.0.0.1:" + address.port + "/v1";
+  const gateway = await startLlmGateway({
+    type: "openai", baseUrl: imageBase, apiKey: "chat-key",
+    imageGenerationModel: "gpt-image-1.5", imageGenerationBaseUrl: imageBase, imageGenerationApiKey: "image-test-key",
+  });
+  try {
+    const generated = await fetch(gateway.url + "/images/generations", {
+      method: "POST", headers: { authorization: "Bearer " + gateway.token, "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "A cat", quality: "medium", size: "auto", complexity: "medium" }),
+    });
+    assert.equal(generated.status, 200, await generated.text());
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.complexity, undefined);
+    assert.equal(requests[0]?.size, "auto");
+    assert.deepEqual(requests[1], { model: "gpt-image-1.5", prompt: "A cat", quality: "medium" });
+  } finally { await gateway.close(); }
 });
 
 

@@ -50,6 +50,53 @@ function configuredImageModel(provider: GatewayProvider): string | undefined {
   return model && /^gpt-image(?:-|$)/i.test(model) ? model : undefined;
 }
 
+const IMAGE_REQUEST_FIELDS = new Set([
+  "prompt", "model", "n", "size", "quality", "background",
+  "output_format", "output_compression", "moderation", "user",
+  "partial_images", "stream", "image", "images", "mask", "input_fidelity",
+]);
+const COMPLEXITY_IMAGE_MODEL = /gpt-image-2\.6(?:-|$)/i;
+const EXTENDED_QUALITY_IMAGE_MODEL = /gpt-image-2\.[5-9]/i;
+const BASE_IMAGE_QUALITY = new Set(["low", "medium", "high", "auto"]);
+const EXTENDED_IMAGE_QUALITY = new Set(["low", "medium", "high", "auto", "xhigh", "max"]);
+
+/** Drop Codex/OpenAI fields the configured GPT Image model cannot accept (e.g. complexity on 1.x/2). */
+export function sanitizeCodexImageRequest(model: string, payload: JsonObject): JsonObject {
+  const next: JsonObject = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (value == null || !IMAGE_REQUEST_FIELDS.has(key)) continue;
+    next[key] = value;
+  }
+  next.model = model;
+  if (COMPLEXITY_IMAGE_MODEL.test(model)) {
+    if (payload.complexity === "low" || payload.complexity === "medium" || payload.complexity === "high") {
+      next.complexity = payload.complexity;
+    }
+    for (const key of ["frame_count", "frame_duration_ms", "markup"] as const) {
+      if (payload[key] != null) next[key] = payload[key];
+    }
+  }
+  if (typeof next.quality === "string") {
+    const allowed = EXTENDED_QUALITY_IMAGE_MODEL.test(model) ? EXTENDED_IMAGE_QUALITY : BASE_IMAGE_QUALITY;
+    if (!allowed.has(next.quality)) delete next.quality;
+  }
+  return next;
+}
+
+export function unsupportedImageRequestParam(status: number, body: Buffer): string | undefined {
+  if (status < 400) return;
+  try {
+    const parsed = object(JSON.parse(body.toString("utf8")));
+    const error = parsed.error && typeof parsed.error === "object" && !Array.isArray(parsed.error) ? object(parsed.error) : parsed;
+    if (typeof error.param === "string" && error.param && error.param !== "model" && error.param !== "prompt") return error.param;
+    const match = String(error.message ?? "").match(/^([A-Za-z_][A-Za-z0-9_]*) '/);
+    if (!match?.[1] || match[1] === "Model" || match[1] === "Prompt") return;
+    return match[1].charAt(0).toLowerCase() + match[1].slice(1).replaceAll(/[A-Z]/g, (letter) => "_" + letter.toLowerCase());
+  } catch {
+    return;
+  }
+}
+
 /** Codex 0.156 ImagesClient requires ImageResponse.created; some GPT Image proxies omit it. */
 export function normalizeCodexImageResponse(status: number, contentType: string, body: Buffer): Buffer {
   if (status >= 400 || !contentType.includes("json")) return body;
@@ -381,28 +428,33 @@ export async function startLlmGateway(provider: GatewayProvider): Promise<{ url:
       return;
     }
     const contentType = String(req.headers["content-type"] ?? "application/json");
+    let payload: JsonObject | undefined;
     let upstreamBody = body;
-    if (route === "images/generations" && contentType.includes("application/json")) {
-      const payload = object(JSON.parse(body.toString("utf8")));
-      payload.model = model;
+    if (contentType.includes("application/json")) {
+      payload = sanitizeCodexImageRequest(model, object(JSON.parse(body.toString("utf8"))));
       upstreamBody = Buffer.from(JSON.stringify(payload));
     }
     const url = new URL(route, imageApiBase(provider));
-    const upstream = await fetch(url, {
+    const forward = (requestBody: Buffer) => fetch(url, {
       method: "POST",
       headers: imageApiHeaders(provider, "application/json", contentType),
-      body: new Uint8Array(upstreamBody),
+      body: new Uint8Array(requestBody),
       signal,
       redirect: "error",
     });
+    let upstream = await forward(upstreamBody);
+    let responseBody = Buffer.from(await upstream.arrayBuffer());
+    if (payload) {
+      const param = unsupportedImageRequestParam(upstream.status, responseBody);
+      if (param && param in payload && param !== "model" && param !== "prompt") {
+        delete payload[param];
+        upstream = await forward(Buffer.from(JSON.stringify(payload)));
+        responseBody = Buffer.from(await upstream.arrayBuffer());
+      }
+    }
     const contentTypeHeader = upstream.headers.get("content-type") ?? "application/json";
-    const responseBody = normalizeCodexImageResponse(
-      upstream.status,
-      contentTypeHeader,
-      Buffer.from(await upstream.arrayBuffer()),
-    );
     res.writeHead(upstream.status, { "content-type": contentTypeHeader });
-    res.end(responseBody);
+    res.end(normalizeCodexImageResponse(upstream.status, contentTypeHeader, responseBody));
   }
   async function handle(req: IncomingMessage, res: ServerResponse) {
     if (req.headers.authorization !== "Bearer " + token) { res.writeHead(401); res.end(); return; }
