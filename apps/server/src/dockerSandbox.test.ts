@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import fixtures from "./dockerSandboxFixtures.json" with { type: "json" };
-import { applySandboxChanges, DockerSandbox, readDockerSandboxConfig, snapshotWorkspace, validateWorkspaceName, type SandboxResult } from "./dockerSandbox.js";
+import { spawnSync } from "node:child_process";
+import { applySandboxChanges, DockerSandbox, gitSnapshotNames, readDockerSandboxConfig, sandboxSyncLimits, snapshotWorkspace, validateWorkspaceName, type SandboxResult } from "./dockerSandbox.js";
 
 const result = (files: Record<string, { data: string; executable: boolean }>, deleted: string[] = []): SandboxResult => ({
   stdout: "", stderr: "", exitCode: 0, timedOut: false, truncated: false, files, deleted,
@@ -56,6 +57,60 @@ test("sync refuses traversal, reserved names, links and concurrent editor change
   await fs.symlink(outside, path.join(root, "link"), "junction");
   await assert.rejects(applySandboxChanges(root, before, result({ "link/escape": entry("escape") })), /符号链接/);
   assert.deepEqual(await fs.readdir(outside), []);
+});
+
+test("gitignored files, extra editor dirs and oversized blobs are skipped instead of failing the snapshot", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-sync-git-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const git = (args: string[]) => {
+    const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  git(["init"]);
+  git(["config", "user.email", "sandbox@example.test"]);
+  git(["config", "user.name", "Sandbox"]);
+  await fs.writeFile(path.join(root, ".gitignore"), "secret-cache/\ndata\n*.bin\n");
+  await fs.mkdir(path.join(root, "secret-cache"));
+  await fs.writeFile(path.join(root, "secret-cache", "token"), "ignored");
+  await fs.mkdir(path.join(root, "data", "codex-home"), { recursive: true });
+  await fs.writeFile(path.join(root, "data", "codex-home", "session.json"), "x".repeat(2 * 1024 * 1024));
+  await fs.mkdir(path.join(root, ".cursor"));
+  await fs.writeFile(path.join(root, ".cursor", "state.json"), "{}");
+  await fs.mkdir(path.join(root, ".codex-test-abc"));
+  await fs.writeFile(path.join(root, ".codex-test-abc", "tmp.json"), "{}");
+  await fs.writeFile(path.join(root, "keep.ts"), "export {}\n");
+  const huge = await fs.open(path.join(root, "payload.bin"), "w");
+  try { await huge.truncate(9 * 1024 * 1024); } finally { await huge.close(); }
+  const names = gitSnapshotNames(root);
+  assert.ok(names?.includes("keep.ts"));
+  assert.equal(names?.some((name) => name.startsWith("secret-cache/") || name.startsWith("data/")), false);
+  const before = await snapshotWorkspace(root);
+  assert.deepEqual(Object.keys(before).sort(), [".gitignore", "keep.ts"]);
+});
+
+test("non-git workspaces skip policy caches and honor a lowered sync budget", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-sync-limit-"));
+  const previous = {
+    bytes: process.env.CCA_SANDBOX_MAX_BYTES,
+    files: process.env.CCA_SANDBOX_MAX_FILES,
+  };
+  t.after(async () => {
+    if (previous.bytes === undefined) delete process.env.CCA_SANDBOX_MAX_BYTES;
+    else process.env.CCA_SANDBOX_MAX_BYTES = previous.bytes;
+    if (previous.files === undefined) delete process.env.CCA_SANDBOX_MAX_FILES;
+    else process.env.CCA_SANDBOX_MAX_FILES = previous.files;
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(root, "node_modules"));
+  await fs.writeFile(path.join(root, "node_modules", "pkg.js"), "ignored");
+  await fs.writeFile(path.join(root, "a.txt"), "aaaa");
+  await fs.writeFile(path.join(root, "b.txt"), "bbbb");
+  process.env.CCA_SANDBOX_MAX_BYTES = "6";
+  assert.equal(sandboxSyncLimits().maxBytes, 6);
+  await assert.rejects(snapshotWorkspace(root), /合计 0.0 MiB|合计 .* MiB|请缩小工作区/);
+  delete process.env.CCA_SANDBOX_MAX_BYTES;
+  process.env.CCA_SANDBOX_MAX_FILES = "1";
+  await assert.rejects(snapshotWorkspace(root), /1 个文件/);
 });
 
 test("nested Python, Node, Go and Java projects synchronize source but never generated files", async t => {

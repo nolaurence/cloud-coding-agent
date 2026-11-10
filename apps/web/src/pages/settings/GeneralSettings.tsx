@@ -110,7 +110,7 @@ export function GeneralSettings() {
             <div>
               <label htmlFor="image-generation-enabled" className="text-sm">启用生图功能</label>
               <div id="image-generation-description" className="text-xs text-zinc-500">
-                使用「模型」页配置的 GPT Image 模型生成图片，对所有会话生效。修改前请先停止正在运行的任务。
+                使用 Codex 原生生图工具。自定义模型服务会把图片请求转到「模型」页配置的 GPT Image 模型；原生 Codex 账号使用 ChatGPT 生图能力。修改前请先停止正在运行的任务。
               </div>
             </div>
             <Switch

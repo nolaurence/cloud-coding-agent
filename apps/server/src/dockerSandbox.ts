@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { DATA_DIR } from "./env.js";
@@ -24,14 +24,76 @@ export interface SandboxResult {
   files: Snapshot;
   deleted: string[];
 }
-const MAX_BYTES = 64 * 1024 * 1024;
-const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_FILE_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_FILES = 10_000;
+const SNAPSHOT_EXTRA_DIRECTORIES = new Set([".cursor", ".codex-tmp", ".dsh-acl-recovery", ".acl-recovery"]);
+
+function envLimit(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+export function sandboxSyncLimits() {
+  return {
+    maxFileBytes: envLimit("CCA_SANDBOX_MAX_FILE_BYTES", DEFAULT_MAX_FILE_BYTES),
+    maxBytes: envLimit("CCA_SANDBOX_MAX_BYTES", DEFAULT_MAX_BYTES),
+    maxFiles: envLimit("CCA_SANDBOX_MAX_FILES", DEFAULT_MAX_FILES),
+  };
+}
+
+function formatMib(bytes: number): string {
+  const mib = bytes / (1024 * 1024);
+  return Number.isInteger(mib) ? String(mib) : mib.toFixed(1);
+}
+
+function syncLimitError(limits = sandboxSyncLimits()): Error {
+  return new Error(`沙箱同步上限：单文件 ${formatMib(limits.maxFileBytes)} MiB、合计 ${formatMib(limits.maxBytes)} MiB、${limits.maxFiles} 个文件；请缩小工作区`);
+}
+
+function isTemporarySnapshotDir(part: string): boolean {
+  return SNAPSHOT_EXTRA_DIRECTORIES.has(part) || part.startsWith(".codex-test-");
+}
+
+function isSnapshotSkipped(name: string, directory = false): boolean {
+  if (isSandboxPathIgnored(name, directory)) return true;
+  return name.split("/").some((part) => isTemporarySnapshotDir(part));
+}
+
+/** Workspace-relative git paths, or undefined when this is not a git work tree. */
+export function gitSnapshotNames(root: string): string[] | undefined {
+  const toplevel = spawnSync("git", ["-C", root, "rev-parse", "--show-toplevel"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (toplevel.status !== 0) return undefined;
+  const gitRoot = path.resolve(toplevel.stdout.trim());
+  const resolvedRoot = path.resolve(root);
+  const relative = path.relative(gitRoot, resolvedRoot).split(path.sep).join("/");
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return undefined;
+  const spec = relative || ".";
+  const listed = spawnSync("git", ["-C", gitRoot, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", spec], {
+    encoding: "buffer",
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (listed.status !== 0) return undefined;
+  const prefix = relative ? relative + "/" : "";
+  return listed.stdout.toString("utf8").split("\0").filter(Boolean).flatMap((name) => {
+    const posix = name.replaceAll("\\", "/");
+    if (!prefix) return [posix];
+    return posix.startsWith(prefix) ? [posix.slice(prefix.length)] : [];
+  }).filter((name) => name && !name.endsWith("/"));
+}
+
 export const SANDBOX_INSTRUCTIONS = `本会话使用远端 Docker 工作区 /workspace。所有代码、命令和项目文件操作必须使用 cca_sandbox 的 run_code 工具。
 run_code 接收 JavaScript async 函数体，可在同一代码块内使用 for/while、条件和 Promise.all 调用 tools.exec(command, {cwd?, timeout_ms?})、tools.read_file(path)、tools.write_file(path, content)、tools.list_files(path?)。
 用 print(value) 输出需要反馈给模型的结果，或 return JSON 值；不要每次循环都请求模型。示例：for (const file of await tools.list_files('.')) { print(file); }
 每次执行使用独立 Linux Docker 容器和全新工作目录，源码及普通文件自动同步回工作区；依赖、构建缓存、JS 内存、/tmp 和后台进程均不跨代码块保留。安装依赖、构建和测试必须放在同一个 run_code 中完成，先检查 tools.exec 的 exitCode 再执行后续步骤。
 工作区可能包含多层嵌套或多个工程，先定位 package.json、pyproject.toml/requirements.txt、go.mod/go.work、pom.xml/build.gradle(.kts) 等清单，再用 tools.exec 的 cwd 指定实际工程目录，不要假设工程在 /workspace 根目录。
-所有层级的 node_modules、Python 虚拟环境/字节码、Go 模块/编译缓存、Maven/Gradle 构建目录及通用 dist/build/coverage 等生成物均不参与同步。保留源码、清单、锁文件、Yarn/Maven/Gradle wrapper 和 Go vendor 源码。需要交付的构建产物请在同一代码块内复制到未排除的目录。Git 元数据不在沙箱中，认证 Git 操作使用平台入口。禁止尝试回退到服务端本地命令执行。`;
+所有层级的 node_modules、Python 虚拟环境/字节码、Go 模块/编译缓存、Maven/Gradle 构建目录及通用 dist/build/coverage 等生成物均不参与同步。Git 仓库还会遵循 .gitignore，超过单文件上限的大文件会被跳过而不是让整个工作区失败。保留源码、清单、锁文件、Yarn/Maven/Gradle wrapper 和 Go vendor 源码。需要交付的构建产物请在同一代码块内复制到未排除的目录。Git 元数据不在沙箱中，认证 Git 操作使用平台入口。禁止尝试回退到服务端本地命令执行。`;
 
 export async function readDockerSandboxConfig(): Promise<DockerSandboxConfig | undefined> {
   const file = process.env.CCA_DOCKER_SANDBOX_CONFIG || path.join(DATA_DIR, "docker-sandbox.json");
@@ -70,27 +132,42 @@ async function safeLocalPath(root: string, name: string): Promise<string> {
   return current;
 }
 
+async function addSnapshotFile(
+  files: Snapshot,
+  root: string,
+  name: string,
+  state: { total: number; count: number; limits: ReturnType<typeof sandboxSyncLimits> },
+): Promise<void> {
+  if (!name || name.includes("\\") || isSnapshotSkipped(name) || name.split("/").some((part) => !part || part === "." || part === "..")) return;
+  const file = path.join(root, ...name.split("/"));
+  let stat;
+  try { stat = await fs.lstat(file); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  if (stat.isSymbolicLink() || !stat.isFile()) return;
+  if (stat.size > state.limits.maxFileBytes) return;
+  if (state.total + stat.size > state.limits.maxBytes || state.count >= state.limits.maxFiles) throw syncLimitError(state.limits);
+  const data = await fs.readFile(file);
+  if (data.length !== stat.size) throw new Error("同步期间文件发生变化，请重试");
+  files[name] = { data: data.toString("base64"), executable: process.platform !== "win32" && Boolean(stat.mode & 0o111) };
+  state.total += stat.size;
+  state.count += 1;
+}
+
 export async function snapshotWorkspace(root: string): Promise<Snapshot> {
   const files: Snapshot = Object.create(null);
-  let total = 0;
-  let count = 0;
+  const state = { total: 0, count: 0, limits: sandboxSyncLimits() };
+  const gitNames = gitSnapshotNames(root);
+  if (gitNames) {
+    for (const name of gitNames) await addSnapshotFile(files, root, name, state);
+    return files;
+  }
   async function walk(directory: string, prefix: string) {
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       const name = prefix + entry.name;
-      if (entry.isSymbolicLink() || isSandboxPathIgnored(name, entry.isDirectory())) continue;
-      validateWorkspaceName(name);
-      const file = path.join(directory, entry.name);
-      if (entry.isDirectory()) { await walk(file, name + "/"); continue; }
+      if (entry.isSymbolicLink() || isSnapshotSkipped(name, entry.isDirectory())) continue;
+      if (entry.isDirectory()) { await walk(path.join(directory, entry.name), name + "/"); continue; }
       if (!entry.isFile()) continue;
-      const stat = await fs.stat(file);
-      total += stat.size;
-      if (stat.size > MAX_FILE_BYTES || total > MAX_BYTES || count >= 10000) {
-        throw new Error("沙箱同步上限：单文件 8 MiB、合计 64 MiB、10000 个文件；请缩小工作区");
-      }
-      const data = await fs.readFile(file);
-      if (data.length !== stat.size) throw new Error("同步期间文件发生变化，请重试");
-      files[name] = { data: data.toString("base64"), executable: process.platform !== "win32" && Boolean(stat.mode & 0o111) };
-      count++;
+      await addSnapshotFile(files, root, name, state);
     }
   }
   await walk(root, "");
@@ -105,6 +182,7 @@ export async function applySandboxChanges(root: string, before: Snapshot, result
     throw new Error("沙箱文件响应包含重复路径");
   }
   const staged: { file: string; data?: Buffer; executable?: boolean }[] = [];
+  const limits = sandboxSyncLimits();
   let bytes = 0;
   for (const name of names) {
     const file = await safeLocalPath(root, name);
@@ -118,7 +196,7 @@ export async function applySandboxChanges(root: string, before: Snapshot, result
     }
     const data = entry ? Buffer.from(entry.data, "base64") : undefined;
     bytes += data?.length ?? 0;
-    if ((data?.length ?? 0) > MAX_FILE_BYTES || bytes > MAX_BYTES) throw new Error("沙箱结果超过文件同步上限");
+    if ((data?.length ?? 0) > limits.maxFileBytes || bytes > limits.maxBytes) throw new Error("沙箱结果超过文件同步上限");
     staged.push({ file, data, executable: entry?.executable });
   }
   for (const entry of staged) {
@@ -148,7 +226,7 @@ export function invokeSandbox<T>(config: DockerSandboxConfig, request: object, t
     child.stderr.resume();
     child.stdout.on("data", (data: Buffer) => {
       size += data.length;
-      if (size > MAX_BYTES * 2) { failure = new Error("Docker 沙箱响应过大"); child.kill(); }
+      if (size > sandboxSyncLimits().maxBytes * 2) { failure = new Error("Docker 沙箱响应过大"); child.kill(); }
       else chunks.push(data);
     });
     child.once("close", code => {

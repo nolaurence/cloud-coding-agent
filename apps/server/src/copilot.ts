@@ -827,6 +827,9 @@ export class CopilotManager {
       config.imageGenerationProvider = imageProvider;
       config.imageGenerationModel = imageProvider.model;
       config.imageGenerationOwnerId = ownerId;
+    } else if (settings.imageGenerationEnabled !== false && !providerConfig) {
+      // Native Codex login uses ChatGPT image generation; still persist images to CCA storage.
+      config.imageGenerationOwnerId = ownerId;
     }
     return config;
   }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { object, responsesToChat, chatToResponses, sseData, startLlmGateway, type JsonObject } from "./llmGateway.js";
+import { object, responsesToChat, chatToResponses, sseData, startLlmGateway, normalizeCodexImageResponse, type JsonObject } from "./llmGateway.js";
 
 function stream(chunks: unknown[]): ReadableStream<Uint8Array> {
   const bytes = new TextEncoder().encode(chunks.map((chunk) => "data: " + (typeof chunk === "string" ? chunk : JSON.stringify(chunk)) + "\r\n\r\n").join(""));
@@ -138,7 +138,16 @@ test("image generation tool and image history translate through Chat Completions
   assert.equal(events.at(-1)?.type, "response.completed");
 });
 
-test("gateway gates native image tools and routes Chat image calls to the configured GPT Image model", async (t) => {
+test("Codex image responses always include created", () => {
+  const normalized = object(JSON.parse(normalizeCodexImageResponse(
+    200, "application/json", Buffer.from(JSON.stringify({ data: [{ b64_json: "QQ==" }] })),
+  ).toString("utf8")));
+  assert.equal(typeof normalized.created, "number");
+  assert.deepEqual(normalized.data, [{ b64_json: "QQ==" }]);
+  assert.equal(normalizeCodexImageResponse(400, "application/json", Buffer.from("nope")).toString("utf8"), "nope");
+});
+
+test("gateway strips hosted image tools and proxies Codex native /images/generations", async (t) => {
   const requests: Array<{ url?: string; body: JsonObject; authorization?: string }> = [];
   const upstream = createServer((req, res) => {
     void (async () => {
@@ -146,46 +155,61 @@ test("gateway gates native image tools and routes Chat image calls to the config
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const body = object(JSON.parse(Buffer.concat(chunks).toString()));
       requests.push({ url: req.url, body, authorization: req.headers.authorization });
-      if (req.url === "/v1/responses") {
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ id: "native_image" }));
-      } else if (req.url === "/v1/images/generations") {
+      if (req.url === "/v1/images/generations") {
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ data: [{ b64_json: "aW1hZ2U=" }] }));
-      } else {
-        res.setHeader("content-type", "text/event-stream");
-        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_image", function: { name: "image_generation", arguments: JSON.stringify({ prompt: "A cat" }) } }] }, finish_reason: "tool_calls" }] };
-        res.end("data: " + JSON.stringify(chunk) + "\n\ndata: [DONE]\n\n");
+        return;
       }
+      if (req.url === "/v1/responses") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ id: "native_image", output: [] }));
+        return;
+      }
+      res.setHeader("content-type", "text/event-stream");
+      res.end('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
     })().catch(() => res.destroy());
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => { upstream.closeAllConnections(); upstream.close(() => resolve()); }));
   const address = upstream.address();
   assert.ok(address && typeof address !== "string");
+  const imageBase = "http://127.0.0.1:" + address.port + "/v1";
   for (const wireApi of ["responses", "completions"] as const) {
-    for (const configured of [false, true]) {
-      const gateway = await startLlmGateway({ type: "openai", baseUrl: "http://127.0.0.1:" + address.port + "/v1", apiKey: "image-test-key", wireApi, ...(configured ? { imageGenerationModel: "gpt-image-1.5" } : {}) });
-      try {
-        const before = requests.length;
-        const response = await fetch(gateway.url + "/responses", {
-          method: "POST", headers: { authorization: "Bearer " + gateway.token, "content-type": "application/json" },
-          body: JSON.stringify({ model: "chat", input: "A cat", stream: false, tools: [{ type: "image_generation", model: "unconfigured-model" }] }),
-        });
-        assert.equal(response.status, configured ? 200 : 400);
-        if (!configured) { assert.equal(requests.length, before); continue; }
-        const result = object(await response.json());
-        assert.equal(requests.at(-1)?.authorization, "Bearer image-test-key");
-        if (wireApi === "responses") {
-          assert.equal((requests.at(-1)?.body.tools as JsonObject[])[0]?.model, "gpt-image-1.5");
-        } else {
-          assert.equal(requests.at(-1)?.url, "/v1/images/generations");
-          assert.equal(requests.at(-1)?.body.model, "gpt-image-1.5");
-          assert.equal(requests.at(-1)?.body.prompt, "A cat");
-          assert.equal((result.output as JsonObject[])[0]?.type, "image_generation_call");
-        }
-      } finally { await gateway.close(); }
-    }
+    const unconfigured = await startLlmGateway({ type: "openai", baseUrl: imageBase, apiKey: "image-test-key", wireApi });
+    try {
+      const denied = await fetch(unconfigured.url + "/images/generations", {
+        method: "POST", headers: { authorization: "Bearer " + unconfigured.token, "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-image-2", prompt: "A cat" }),
+      });
+      assert.equal(denied.status, 400);
+    } finally { await unconfigured.close(); }
+    const gateway = await startLlmGateway({
+      type: "openai", baseUrl: imageBase, apiKey: "chat-key", wireApi,
+      imageGenerationModel: "gpt-image-1.5", imageGenerationBaseUrl: imageBase, imageGenerationApiKey: "image-test-key",
+    });
+    try {
+      const before = requests.length;
+      const chat = await fetch(gateway.url + "/responses", {
+        method: "POST", headers: { authorization: "Bearer " + gateway.token, "content-type": "application/json" },
+        body: JSON.stringify({ model: "chat", input: "A cat", stream: false, tools: [{ type: "image_generation", model: "unconfigured-model" }] }),
+      });
+      assert.equal(chat.status, 200, await chat.text());
+      const forwardedTools = (requests.at(-1)?.body.tools as JsonObject[] | undefined) ?? [];
+      assert.equal(forwardedTools.some((tool) => tool.type === "image_generation"), false);
+      const generated = await fetch(gateway.url + "/images/generations", {
+        method: "POST", headers: { authorization: "Bearer " + gateway.token, "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-image-2", prompt: "A cat", quality: "auto" }),
+      });
+      assert.equal(generated.status, 200);
+      const generatedPayload = object(await generated.json());
+      assert.equal(typeof generatedPayload.created, "number");
+      assert.deepEqual(generatedPayload.data, [{ b64_json: "aW1hZ2U=" }]);
+      assert.equal(requests.length, before + 2);
+      assert.equal(requests.at(-1)?.url, "/v1/images/generations");
+      assert.equal(requests.at(-1)?.authorization, "Bearer image-test-key");
+      assert.equal(requests.at(-1)?.body.model, "gpt-image-1.5");
+      assert.equal(requests.at(-1)?.body.prompt, "A cat");
+    } finally { await gateway.close(); }
   }
 });
 
@@ -194,25 +218,25 @@ test("client tool search loads namespaced tools and preserves their native call 
   const searchTool = { type: "tool_search", execution: "client", parameters: { type: "object", properties: { query: { type: "string" } } } };
   const first = responsesToChat({ model: "chat", input: "Generate a puppy", tools: [searchTool] });
   const search = await chatToResponses(stream([
-    { choices: [{ delta: { tool_calls: [{ index: 0, id: "search_1", function: { name: "tool_search", arguments: '{"query":"+cca_imagegen"}' } }] }, finish_reason: "tool_calls" }] }, "[DONE]",
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "search_1", function: { name: "tool_search", arguments: '{"query":"+mcp_docs"}' } }] }, finish_reason: "tool_calls" }] }, "[DONE]",
   ]), "chat", first.customTools, () => {}, undefined, first);
   const searchCall = (search.output as JsonObject[])[0]!;
   assert.equal(searchCall.type, "tool_search_call");
   assert.equal(searchCall.execution, "client");
-  assert.deepEqual(searchCall.arguments, { query: "+cca_imagegen" });
-  const loaded = { type: "namespace", name: "mcp__cca_imagegen", tools: [{ type: "function", name: "image_gen", parameters: { type: "object", properties: { prompt: { type: "string" } } } }] };
+  assert.deepEqual(searchCall.arguments, { query: "+mcp_docs" });
+  const loaded = { type: "namespace", name: "mcp__docs", tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: { q: { type: "string" } } } }] };
   const second = responsesToChat({ model: "chat", tools: [searchTool], input: [
     searchCall, { type: "tool_search_output", execution: "client", call_id: "search_1", tools: [loaded] },
   ] });
-  const imageTool = (second.body.tools as JsonObject[]).find((entry) => object(entry.function).name === "mcp__cca_imagegen__image_gen");
-  assert.ok(imageTool);
+  const docsTool = (second.body.tools as JsonObject[]).find((entry) => object(entry.function).name === "mcp__docs__lookup");
+  assert.ok(docsTool);
   assert.deepEqual((second.body.messages as JsonObject[]).map((message) => message.role), ["assistant", "tool"]);
   const generated = await chatToResponses(stream([
-    { choices: [{ delta: { tool_calls: [{ index: 0, id: "image_1", function: { name: "mcp__cca_imagegen__image_gen", arguments: '{"prompt":"A puppy"}' } }] }, finish_reason: "tool_calls" }] }, "[DONE]",
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "docs_1", function: { name: "mcp__docs__lookup", arguments: '{"q":"auth"}' } }] }, finish_reason: "tool_calls" }] }, "[DONE]",
   ]), "chat", second.customTools, () => {}, undefined, second);
-  const imageCall = (generated.output as JsonObject[])[0]!;
-  assert.equal(imageCall.name, "image_gen");
-  assert.equal(imageCall.namespace, "mcp__cca_imagegen");
-  const replay = responsesToChat({ model: "chat", tools: [loaded], input: [imageCall] });
-  assert.equal(object((object((replay.body.messages as JsonObject[])[0]).tool_calls as JsonObject[])[0]!.function).name, "mcp__cca_imagegen__image_gen");
+  const docsCall = (generated.output as JsonObject[])[0]!;
+  assert.equal(docsCall.name, "lookup");
+  assert.equal(docsCall.namespace, "mcp__docs");
+  const replay = responsesToChat({ model: "chat", tools: [loaded], input: [docsCall] });
+  assert.equal(object((object((replay.body.messages as JsonObject[])[0]).tool_calls as JsonObject[])[0]!.function).name, "mcp__docs__lookup");
 });

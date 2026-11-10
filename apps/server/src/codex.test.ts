@@ -29,33 +29,40 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   let notifyStalled: (() => void) | undefined;
   const patch = "*** Begin Patch\n*** Add File: native-patch.txt\n+written by Codex\n*** End Patch";
   const received: JsonObject[] = [];
+  const seenUrls: string[] = [];
   const upstream = createServer((req, res) => {
     void (async () => {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      seenUrls.push(String(req.method) + " " + String(req.url));
       const request = object(JSON.parse(Buffer.concat(chunks).toString()));
       received.push(request);
       if (req.url === "/images-provider/v1/images/generations") {
         assert.equal(req.headers.authorization, "Bearer image-provider-key");
         assert.equal(request.model, "gpt-image-1.5");
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ data: [{ b64_json: imageBase64 }] }));
+        res.end(JSON.stringify({ created: 1, data: [{ b64_json: imageBase64 }] }));
         return;
       }
       if (generateImageMode) {
         const nativeResponses = req.url === "/v1/responses";
         const history = array(nativeResponses ? request.input : request.messages).map(object);
         const alreadyGenerated = nativeResponses
-          ? history.some((item) => item.type === "function_call_output" && item.call_id === "call_image")
+          ? history.some((item) =>
+            (item.type === "function_call_output" && item.call_id === "call_image") ||
+            (item.type === "custom_tool_call_output" && item.call_id === "call_image") ||
+            item.type === "image_generation_call")
           : history.some((item) => item.role === "tool" && item.tool_call_id === "call_image");
         const translated = nativeResponses ? responsesToChat(request) : undefined;
         const tools = array(translated ? translated.body.tools : request.tools).map(object);
-        const imageTool = tools.find((tool) => String(object(tool.function).name).includes("cca_imagegen") && String(object(tool.function).name).endsWith("image_gen"));
-        const searchTool = tools.find((tool) => object(tool.function).name === "tool_search");
+        const toolName = (tool: JsonObject) => String(object(tool.function ?? tool).name ?? "");
+        assert.equal(tools.some((tool) => toolName(tool).includes("cca_imagegen")), false, JSON.stringify(tools));
+        const imageTool = tools.find((tool) => /imagegen|image_gen/i.test(toolName(tool) + String(tool.namespace ?? "")));
+        const searchTool = tools.find((tool) => toolName(tool) === "tool_search");
         assert.ok(imageTool || searchTool, JSON.stringify(tools));
         if (!alreadyGenerated) {
-          const name = imageTool ? object(imageTool.function).name : "tool_search";
-          const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: imageTool ? "call_image" : "call_search", function: { name, arguments: imageTool ? '{"prompt":"A cat"}' : '{"query":"+cca_imagegen","limit":1}' } }] }, finish_reason: "tool_calls" }] };
+          const name = imageTool ? toolName(imageTool) : "tool_search";
+          const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: imageTool ? "call_image" : "call_search", function: { name, arguments: imageTool ? '{"prompt":"A cat"}' : '{"query":"image_gen","limit":1}' } }] }, finish_reason: "tool_calls" }] };
           res.setHeader("content-type", "text/event-stream");
           if (nativeResponses) {
             const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode("data: " + JSON.stringify(chunk) + "\n\ndata: [DONE]\n\n")); controller.close(); } });
@@ -295,6 +302,38 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
       await client.deleteSession(reasoningConfig.sessionId);
     }
   });
+  await t.test("maps native imageGeneration items to chat attachments", async () => {
+    const { readStoredImage, removeUploadedImages } = await import("./uploads.js");
+    const imageSessionId = randomUUID();
+    fs.mkdirSync(path.join(root, "data", "codex-home", imageSessionId), { recursive: true });
+    const imageSession = new CodexSession(
+      imageSessionId,
+      { ...config, sessionId: imageSessionId, imageGenerationOwnerId: "image-test-user" },
+      () => {},
+    );
+    const emitted: SessionEvent[] = [];
+    imageSession.on((event) => emitted.push(event));
+    const internals = imageSession as unknown as {
+      threadId: string;
+      notification(method: string, params: JsonObject): void;
+    };
+    internals.threadId = "image-thread";
+    internals.notification("item/started", {
+      threadId: "image-thread",
+      item: { id: "ig_native", type: "imageGeneration", status: "in_progress", result: "" },
+    });
+    internals.notification("item/completed", {
+      threadId: "image-thread",
+      item: { id: "ig_native", type: "imageGeneration", status: "completed", result: imageBase64 },
+    });
+    const start = emitted.find((event) => event.type === "tool.execution_start" && event.data.toolCallId === "ig_native");
+    assert.equal(start?.data.toolName, "image_generation");
+    const message = emitted.find((event) => event.type === "assistant.message" && (event.data as { attachments?: unknown[] }).attachments?.length);
+    assert.ok(message);
+    const attachments = (message.data as { attachments: Array<{ id: string; ownerId: string }> }).attachments;
+    assert.deepEqual(readStoredImage("image-test-user", attachments[0]!.id), Buffer.from(imageBase64, "base64"));
+    removeUploadedImages("image-test-user", attachments.map((attachment) => ({ path: "", imageId: attachment.id })));
+  });
   await t.test("native Codex accepts ordinary file mentions and exposes the path to the model", async () => {
     const filePath = path.join(root, "data", "report with spaces.txt");
     fs.writeFileSync(filePath, "uploaded report");
@@ -389,7 +428,7 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
       generateImageMode = false;
       const imageEvents = await imageSession.getEvents();
       const message = imageEvents.filter((event) => event.type === "assistant.message").find((event) => (event.data as { attachments?: unknown[] }).attachments?.length);
-      assert.ok(message, JSON.stringify(imageEvents));
+      assert.ok(message, JSON.stringify({ imageEvents, seenUrls }));
       assert.equal(imageEvents.filter((event) => event.type === "assistant.message" && (event.data as { attachments?: unknown[] }).attachments?.length).length, 1);
       const attachments = (message.data as { attachments: Array<{ id: string; displayName: string; ownerId: string }> }).attachments;
       assert.deepEqual(readStoredImage("image-test-user", attachments[0]!.id), Buffer.from(imageBase64, "base64"));

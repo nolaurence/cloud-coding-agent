@@ -18,7 +18,7 @@ import { retryCodexReconnect } from "./codexReconnect.js";
 import { array, object, startLlmGateway, text, type GatewayProvider, type JsonObject } from "./llmGateway.js";
 import { sanitizedCopilotRuntimeEnv } from "./runtimeEnv.js";
 import { IMAGE_EXTENSIONS, MAX_IMAGE_SIZE, hasImageSignature, storeUploadedImage } from "./uploads.js";
-import { startImageGenerationServer, type ImageGenerationProvider } from "./imageGeneration.js";
+import { CODEX_IMAGE_ACTOR_HEADER, CODEX_IMAGE_ACTOR_VALUE, type ImageGenerationProvider } from "./imageGeneration.js";
 import { attachmentReferenceText } from "./attachmentPrompt.js";
 import { startDockerSandboxServer, SANDBOX_INSTRUCTIONS } from "./dockerSandbox.js";
 
@@ -154,7 +154,6 @@ export class CodexSession implements AgentSession {
   private startingTurn: Promise<JsonObject> | undefined;
   private closed = false;
   private gateway: Awaited<ReturnType<typeof startLlmGateway>> | undefined;
-  private imageServer: Awaited<ReturnType<typeof startImageGenerationServer>> | undefined;
   private model: string | undefined;
   private effort: string | undefined;
   private permissionMode: PermissionMode;
@@ -332,9 +331,7 @@ export class CodexSession implements AgentSession {
       sandbox_mode: permission.sandbox,
       approvals_reviewer: permission.approvalsReviewer,
       web_search: "disabled",
-      // Custom providers use the registered image_gen MCP tool; the native
-      // image extension is not exposed reliably for the cca model provider.
-      features: { multi_agent: false, image_generation: false },
+      features: { multi_agent: false, image_generation: Boolean(this.config.imageGenerationOwnerId) },
       projects: { [this.cwd]: { trust_level: "untrusted" } },
       shell_environment_policy: { inherit: "none", set: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: this.cwd, LANG: "C.UTF-8" } },
       mcp_servers: {},
@@ -372,29 +369,33 @@ export class CodexSession implements AgentSession {
         (provider?.type === "openai" && this.config.imageGenerationModel
           ? { baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: this.config.imageGenerationModel }
           : undefined);
-      if (imageProvider && this.config.imageGenerationOwnerId) {
-        this.imageServer = await startImageGenerationServer(imageProvider, (image) => {
-          if (this.closed || !this.turnId) throw new Error("当前没有正在运行的生图任务");
-          const attachment = this.saveGeneratedImage(image);
-          const directory = path.join(this.home, "generated_images");
-          fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-          const imagePath = path.join(directory, attachment.id);
-          fs.writeFileSync(imagePath, Buffer.from(text(image.result), "base64"), { mode: 0o600 });
-          this.emit({ type: "assistant.message", data: { messageId: "image-" + randomUUID(), content: "", attachments: [attachment] } });
-          const mimeType = Object.entries(IMAGE_EXTENSIONS).find(([, extension]) => attachment.id.endsWith(extension))![0];
-          return { path: imagePath, mimeType };
-        });
-        mcp.cca_imagegen = { url: this.imageServer.url, http_headers: { Authorization: "Bearer " + this.imageServer.token }, tool_timeout_sec: 600 };
-      }
+      const nativeImageGeneration = Boolean(this.config.imageGenerationOwnerId);
       if (provider) {
-        const gatewayProvider: GatewayProvider = { type: provider.type ?? "openai", baseUrl: provider.baseUrl, apiKey: provider.apiKey, wireApi: provider.wireApi, azure: provider.azure, reasoningEffort: String(this.config.reasoningEffort) === "max" ? "max" : undefined };
-        this.gateway = await startLlmGateway(gatewayProvider, this.config.imageGenerationModel ? (item) => {
-          const generated = { ...item, type: "imageGeneration" };
-          this.item(generated, false);
-          this.item(generated, true);
-        } : undefined);
+        const gatewayProvider: GatewayProvider = {
+          type: provider.type ?? "openai",
+          baseUrl: provider.baseUrl,
+          apiKey: provider.apiKey,
+          wireApi: provider.wireApi,
+          azure: provider.azure,
+          reasoningEffort: String(this.config.reasoningEffort) === "max" ? "max" : undefined,
+          ...(imageProvider ? {
+            imageGenerationModel: imageProvider.model,
+            imageGenerationBaseUrl: imageProvider.baseUrl,
+            imageGenerationApiKey: imageProvider.apiKey,
+          } : {}),
+        };
+        this.gateway = await startLlmGateway(gatewayProvider);
         overrides.model_provider = "cca";
-        overrides.model_providers = { cca: { name: "CCA", base_url: this.gateway.url, wire_api: "responses", experimental_bearer_token: this.gateway.token, supports_websockets: false, request_max_retries: 0, stream_max_retries: 0 } };
+        overrides.model_providers = { cca: {
+          name: "CCA",
+          base_url: this.gateway.url,
+          wire_api: "responses",
+          experimental_bearer_token: this.gateway.token,
+          supports_websockets: false,
+          request_max_retries: 0,
+          stream_max_retries: 0,
+          ...(nativeImageGeneration && imageProvider ? { http_headers: { [CODEX_IMAGE_ACTOR_HEADER]: CODEX_IMAGE_ACTOR_VALUE } } : {}),
+        } };
       }
       const contextWindow = configuredContextWindow(this.config);
       if (contextWindow) {
@@ -408,9 +409,7 @@ export class CodexSession implements AgentSession {
       overrides.show_raw_agent_reasoning = true;
       await this.connection.start(this.cwd, runtimeEnv(this.home));
       const common: JsonObject = { cwd: this.cwd, model: this.model, approvalPolicy: permission.approvalPolicy, sandbox: permission.sandbox, approvalsReviewer: permission.approvalsReviewer, config: overrides,
-        developerInstructions: [this.config.systemMessage?.content, ...(this.sandboxServer ? [SANDBOX_INSTRUCTIONS] : []), ...(this.imageServer ? [
-          "本会话已启用生图工具 mcp__cca_imagegen__image_gen（imagegen 技能所说的 image_gen 在此环境中的入口）。用户请求生成新图片时使用此工具;如果工具尚未出现在列表中,先用 tool_search 搜索 +cca_imagegen 加载工具,再调用。工具使用服务端配置的 GPT Image 提供商,凭据已配置,无需额外 OPENAI_API_KEY 或 CLI 回退确认。生成图片会自动作为助手附件显示,工具同时返回本地文件路径。此入口只支持生成新图片,不支持编辑参考图片。",
-        ] : [])].filter(Boolean).join("\n"), persistExtendedHistory: true };
+        developerInstructions: [this.config.systemMessage?.content, ...(this.sandboxServer ? [SANDBOX_INSTRUCTIONS] : [])].filter(Boolean).join("\n"), persistExtendedHistory: true };
       if (provider) common.modelProvider = "cca";
       this.commonConfig = common;
       const start = () => this.connection.request("thread/start", { ...common, experimentalRawEvents: false, dynamicTools: this.tools.map((tool) => ({
@@ -583,7 +582,10 @@ export class CodexSession implements AgentSession {
         this.emit({ type: "tool.execution_start", data: { toolCallId: id, toolName: "image_generation", arguments: {} } });
       } else {
         try {
-          if (item.status !== "completed") throw new Error("图片生成未完成");
+          if (item.status !== "completed") {
+            const failure = item.failure && typeof item.failure === "object" ? JSON.stringify(item.failure) : optionalText(item.failure);
+            throw new Error(failure || optionalText(item.error) || `图片生成未完成 (${String(item.status || "unknown")})`);
+          }
           const attachment = this.saveGeneratedImage(item);
           this.emit({ type: "tool.execution_complete", data: { toolCallId: id, success: true, result: { content: attachment.displayName } } });
           this.emit({ type: "assistant.message", data: { messageId: "image-" + id, content: "", attachments: [attachment] } });
@@ -609,11 +611,24 @@ export class CodexSession implements AgentSession {
     }
   }
   private saveGeneratedImage(item: JsonObject): MessageAttachment {
-    if ((!this.config.imageGenerationProvider && !this.config.imageGenerationModel) || !this.config.imageGenerationOwnerId) throw new Error("未配置可用的 GPT Image 提供商");
-    const result = text(item.result);
-    if (result.length > Math.ceil(MAX_IMAGE_SIZE / 3) * 4) throw new Error("单张图片不能超过 10 MB");
-    if (!result || !/^[A-Za-z0-9+/]+={0,2}$/.test(result)) throw new Error("图片内容不是有效的 Base64");
-    const buffer = Buffer.from(result, "base64");
+    if (!this.config.imageGenerationOwnerId) throw new Error("未配置生图存储");
+    const result = optionalText(item.result);
+    const savedPath = optionalText(item.savedPath) ?? optionalText(item.saved_path);
+    let buffer: Buffer;
+    if (result) {
+      if (result.length > Math.ceil(MAX_IMAGE_SIZE / 3) * 4) throw new Error("单张图片不能超过 10 MB");
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(result)) throw new Error("图片内容不是有效的 Base64");
+      buffer = Buffer.from(result, "base64");
+    } else if (savedPath) {
+      const resolved = fs.realpathSync(savedPath);
+      const home = fs.realpathSync(this.home);
+      const cwd = this.cwd;
+      if (resolved !== home && !resolved.startsWith(home + path.sep) && resolved !== cwd && !resolved.startsWith(cwd + path.sep)) {
+        throw new Error("生成图片路径超出会话目录");
+      }
+      buffer = fs.readFileSync(resolved);
+      if (buffer.length > MAX_IMAGE_SIZE) throw new Error("单张图片不能超过 10 MB");
+    } else throw new Error("图片内容为空");
     const mimeType = (Object.keys(IMAGE_EXTENSIONS) as Array<keyof typeof IMAGE_EXTENSIONS>)
       .find((candidate) => hasImageSignature(buffer, candidate));
     if (!mimeType) throw new Error("图片格式不受支持");
@@ -681,7 +696,6 @@ export class CodexSession implements AgentSession {
     finally { waiting.cancel(); }
   }
   async abort() {
-    this.imageServer?.abort();
     try { await this.sandboxServer?.abort(); }
     finally {
       if (!this.reconnectTask) {
@@ -721,7 +735,7 @@ export class CodexSession implements AgentSession {
     for (const waiter of this.waiters) waiter.reject(new Error("Codex session disconnected"));
     this.waiters.clear();
     try { await this.connection.close(); }
-    finally { try { await this.sandboxServer?.close(); } finally { try { await this.imageServer?.close(); } finally { try { await this.gateway?.close(); } finally { try { await this.eventStore.flush(); } finally { this.release(); } } } } }
+    finally { try { await this.sandboxServer?.close(); } finally { try { await this.gateway?.close(); } finally { try { await this.eventStore.flush(); } finally { this.release(); } } } }
   }
 }
 

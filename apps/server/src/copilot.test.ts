@@ -1902,6 +1902,19 @@ test("rejects a thread whose owner does not own its workspace", async (t) => {
 });
 
 
+test("native Codex sessions store generated images without a GPT Image provider", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  const client = new FakeClient();
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+  await manager.subscribe(threadId, "admin");
+  const config = client.createdConfigs[0] as { imageGenerationOwnerId?: string; imageGenerationModel?: string; imageGenerationProvider?: unknown };
+  assert.equal(config.imageGenerationOwnerId, "admin");
+  assert.equal(config.imageGenerationModel, undefined);
+  assert.equal(config.imageGenerationProvider, undefined);
+});
+
 test("configured GPT Image providers enable image generation independently of the chat provider", async (t) => {
   for (const configuration of ["none", "other-provider", "selected-provider", "anthropic", "similar-name"] as const) {
     await t.test(configuration, async (t) => {

@@ -23,6 +23,43 @@ export interface GatewayProvider {
   azure?: { apiVersion?: string };
   reasoningEffort?: "max";
   imageGenerationModel?: string;
+  imageGenerationBaseUrl?: string;
+  imageGenerationApiKey?: string;
+}
+
+function requestPath(url: string | undefined): string {
+  return (url ?? "").split("?")[0] ?? "";
+}
+
+function imageApiBase(provider: GatewayProvider): URL {
+  const base = new URL((provider.imageGenerationBaseUrl ?? provider.baseUrl).replace(/\/+$/, "") + "/");
+  if (!["http:", "https:"].includes(base.protocol) || base.username || base.password) throw new Error("生图提供商地址无效");
+  return base;
+}
+
+function imageApiHeaders(provider: GatewayProvider, accept: string, contentType?: string): Record<string, string> {
+  const headers: Record<string, string> = { accept };
+  if (contentType) headers["content-type"] = contentType;
+  const apiKey = provider.imageGenerationApiKey ?? provider.apiKey;
+  if (apiKey) headers[provider.type === "azure" ? "api-key" : "authorization"] = provider.type === "azure" ? apiKey : "Bearer " + apiKey;
+  return headers;
+}
+
+function configuredImageModel(provider: GatewayProvider): string | undefined {
+  const model = provider.imageGenerationModel?.trim();
+  return model && /^gpt-image(?:-|$)/i.test(model) ? model : undefined;
+}
+
+/** Codex 0.156 ImagesClient requires ImageResponse.created; some GPT Image proxies omit it. */
+export function normalizeCodexImageResponse(status: number, contentType: string, body: Buffer): Buffer {
+  if (status >= 400 || !contentType.includes("json")) return body;
+  try {
+    const payload = object(JSON.parse(body.toString("utf8")));
+    if (typeof payload.created !== "number") payload.created = Math.floor(Date.now() / 1000);
+    return Buffer.from(JSON.stringify(payload));
+  } catch {
+    return body;
+  }
 }
 
 function contentParts(value: unknown): JsonObject[] {
@@ -326,7 +363,7 @@ export async function chatToResponses(
   return result;
 }
 
-export async function startLlmGateway(provider: GatewayProvider, onImageGeneration?: (item: JsonObject) => void): Promise<{ url: string; token: string; close(): Promise<void> }> {
+export async function startLlmGateway(provider: GatewayProvider): Promise<{ url: string; token: string; close(): Promise<void> }> {
   if (provider.type === "anthropic") throw new Error("Codex requires an OpenAI-compatible Responses or Chat Completions endpoint; native Anthropic is not supported");
   const base = new URL(provider.baseUrl.replace(/\/$/, "") + "/");
   if (!["http:", "https:"].includes(base.protocol) || base.username || base.password) throw new Error("Invalid provider URL");
@@ -336,9 +373,43 @@ export async function startLlmGateway(provider: GatewayProvider, onImageGenerati
     if (res.headersSent) res.destroy();
     else { res.writeHead(502, { "content-type": "application/json" }); res.end(JSON.stringify({ error: { message: "LLM gateway request failed", type: "gateway_error" } })); }
   }); });
+  async function proxyImages(req: IncomingMessage, res: ServerResponse, route: "images/generations" | "images/edits", body: Buffer, signal: AbortSignal) {
+    const model = configuredImageModel(provider);
+    if (provider.type !== "openai" || !model) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "当前提供商未配置 GPT Image 模型", type: "invalid_request_error" } }));
+      return;
+    }
+    const contentType = String(req.headers["content-type"] ?? "application/json");
+    let upstreamBody = body;
+    if (route === "images/generations" && contentType.includes("application/json")) {
+      const payload = object(JSON.parse(body.toString("utf8")));
+      payload.model = model;
+      upstreamBody = Buffer.from(JSON.stringify(payload));
+    }
+    const url = new URL(route, imageApiBase(provider));
+    const upstream = await fetch(url, {
+      method: "POST",
+      headers: imageApiHeaders(provider, "application/json", contentType),
+      body: new Uint8Array(upstreamBody),
+      signal,
+      redirect: "error",
+    });
+    const contentTypeHeader = upstream.headers.get("content-type") ?? "application/json";
+    const responseBody = normalizeCodexImageResponse(
+      upstream.status,
+      contentTypeHeader,
+      Buffer.from(await upstream.arrayBuffer()),
+    );
+    res.writeHead(upstream.status, { "content-type": contentTypeHeader });
+    res.end(responseBody);
+  }
   async function handle(req: IncomingMessage, res: ServerResponse) {
     if (req.headers.authorization !== "Bearer " + token) { res.writeHead(401); res.end(); return; }
-    if (req.method !== "POST" || !["/responses", "/responses/compact"].includes(req.url ?? "")) { res.writeHead(404); res.end(); return; }
+    const pathName = requestPath(req.url);
+    if (req.method !== "POST" || !["/responses", "/responses/compact", "/images/generations", "/images/edits", "/v1/images/generations", "/v1/images/edits"].includes(pathName)) {
+      res.writeHead(404); res.end(); return;
+    }
     const controller = new AbortController();
     controllers.add(controller);
     res.on("close", () => controller.abort());
@@ -352,18 +423,20 @@ export async function startLlmGateway(provider: GatewayProvider, onImageGenerati
         if (length > 32 * 1024 * 1024) { res.writeHead(413); res.end(); return; }
         chunks.push(buffer);
       }
+      const rawBody = Buffer.concat(chunks);
+      if (pathName.endsWith("/images/generations") || pathName.endsWith("/images/edits")) {
+        await proxyImages(req, res, pathName.endsWith("/images/edits") ? "images/edits" : "images/generations", rawBody, controller.signal);
+        return;
+      }
       let request: JsonObject;
       let translated: ReturnType<typeof responsesToChat> | undefined;
       try {
-        request = object(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-        if (Array.isArray(request.tools)) request.tools = request.tools.map((raw) => {
-          const tool = object(raw);
-          if (tool.type !== "image_generation") return tool;
-          if (provider.type !== "openai" || !provider.imageGenerationModel || !/^gpt-image(?:-|$)/i.test(provider.imageGenerationModel)) {
-            throw new Error("当前提供商未配置 GPT Image 模型");
-          }
-          return { ...tool, model: provider.imageGenerationModel };
-        });
+        request = object(JSON.parse(rawBody.toString("utf8")));
+        if (Array.isArray(request.tools)) {
+          // Codex's standalone image_gen calls /images/generations on this gateway.
+          // Do not forward hosted Responses image_generation to custom chat providers.
+          request.tools = request.tools.filter((raw) => object(raw).type !== "image_generation");
+        }
         // Codex accepts xhigh internally; preserve a configured upstream max effort.
         if (provider.reasoningEffort) request.reasoning = { ...object(request.reasoning ?? {}), effort: provider.reasoningEffort };
         if ((provider.wireApi ?? "completions") === "completions") {
@@ -384,25 +457,9 @@ export async function startLlmGateway(provider: GatewayProvider, onImageGenerati
         res.writeHead(upstream.ok ? 502 : upstream.status, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: "Upstream LLM returned HTTP " + upstream.status, type: "upstream_error" } })); return;
       }
-      const notifyImageGeneration = (event: JsonObject) => {
-        if (onImageGeneration && event.type === "response.output_item.done") {
-          const item = object(event.item);
-          if (item.type === "image_generation_call") onImageGeneration(item);
-        }
-      };
       if (!translated) {
         res.writeHead(200, { "content-type": upstream.headers.get("content-type") ?? "text/event-stream", "cache-control": "no-cache" });
-        const output = onImageGeneration && upstream.headers.get("content-type")?.includes("text/event-stream")
-          ? (async function* () {
-              for await (const data of sseData(upstream.body!)) {
-                if (data === "[DONE]") { yield "data: [DONE]\n\n"; continue; }
-                const event = object(JSON.parse(data));
-                notifyImageGeneration(event);
-                yield "event: " + text(event.type) + "\ndata: " + data + "\n\n";
-              }
-            })()
-          : upstream.body;
-        for await (const chunk of output) {
+        for await (const chunk of upstream.body) {
           if (!res.write(chunk)) await new Promise<void>((resolve, reject) => {
             const close = () => { res.off("drain", drain); reject(new Error("Client disconnected")); };
             const drain = () => { res.off("close", close); resolve(); };
@@ -415,7 +472,6 @@ export async function startLlmGateway(provider: GatewayProvider, onImageGenerati
       if (streaming) res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       try {
         const result = await chatToResponses(upstream.body, text(request.model), translated.customTools, async (event) => {
-          notifyImageGeneration(event);
           if (streaming && !res.write("event: " + event.type + "\ndata: " + JSON.stringify(event) + "\n\n")) {
             await new Promise<void>((resolve, reject) => {
               const cleanup = () => { res.off("drain", drain); res.off("close", close); controller.signal.removeEventListener("abort", close); };
@@ -429,9 +485,11 @@ export async function startLlmGateway(provider: GatewayProvider, onImageGenerati
         }, translated.imageGeneration ? async (argumentsValue) => {
           const prompt = text(argumentsValue.prompt).trim();
           if (!prompt) throw new Error("图片提示词不能为空");
-          const imageResponse = await fetch(new URL("images/generations", base), {
-            method: "POST", headers: { ...headers, accept: "application/json" },
-            body: JSON.stringify({ model: provider.imageGenerationModel, prompt, n: 1, output_format: "png" }),
+          const imageModel = configuredImageModel(provider);
+          if (!imageModel) throw new Error("当前提供商未配置 GPT Image 模型");
+          const imageResponse = await fetch(new URL("images/generations", imageApiBase(provider)), {
+            method: "POST", headers: imageApiHeaders(provider, "application/json", "application/json"),
+            body: JSON.stringify({ model: imageModel, prompt, n: 1, output_format: "png" }),
             signal: controller.signal, redirect: "error",
           });
           if (!imageResponse.ok || !imageResponse.body) {
