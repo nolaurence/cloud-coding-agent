@@ -6,7 +6,7 @@ export interface ImageGenerationProvider {
   model: string;
 }
 
-/** Codex 0.156 exposes the built-in image_gen tool when this header is present on a custom provider. */
+/** Codex 0.167 exposes the built-in image_gen tool when this header is present on a custom provider. */
 export const CODEX_IMAGE_ACTOR_HEADER = "x-openai-actor-authorization";
 export const CODEX_IMAGE_ACTOR_VALUE = "cca-image-extension";
 

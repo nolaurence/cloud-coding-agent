@@ -27,7 +27,7 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   let rawReasoningMode = false;
   const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ6sAAAAASUVORK5CYII=";
   let notifyStalled: (() => void) | undefined;
-  const patch = "*** Begin Patch\n*** Add File: native-patch.txt\n+written by Codex\n*** End Patch";
+  const patchCommand = "printf 'written by Codex\\n' > native-patch.txt";
   const received: JsonObject[] = [];
   const seenUrls: string[] = [];
   const upstream = createServer((req, res) => {
@@ -167,7 +167,7 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
       const compacting = !request.tools && request.tool_choice !== "none";
       const textOnly = request.tool_choice === "none" && !injectTools;
       res.setHeader("content-type", "text/event-stream");
-      const delta = textOnly ? { content: "fix: generate commit message without tools" } : compacting ? { content: "Summary: created native-patch.txt and ran platform_echo." } : !hasPatch ? { tool_calls: [{ index: 0, id: "call_patch", type: "function", function: { name: "apply_patch", arguments: JSON.stringify({ input: patch }) } }] } : !hasResult ? { tool_calls: [{ index: 0, id: "call_platform", type: "function", function: { name: "platform_echo", arguments: '{"text":"working"}' } }] } : { content: "Codex integration works" };
+      const delta = textOnly ? { content: "fix: generate commit message without tools" } : compacting ? { content: "Summary: created native-patch.txt and ran platform_echo." } : !hasPatch ? { tool_calls: [{ index: 0, id: "call_patch", type: "function", function: { name: "exec_command", arguments: JSON.stringify({ cmd: patchCommand }) } }] } : !hasResult ? { tool_calls: [{ index: 0, id: "call_platform", type: "function", function: { name: "platform_echo", arguments: '{"text":"working"}' } }] } : { content: "Codex integration works" };
       res.end("data: " + JSON.stringify({ choices: [{ index: 0, delta, finish_reason: hasResult || compacting || textOnly ? "stop" : "tool_calls" }] }) + "\n\ndata: [DONE]\n\n");
     })().catch((error: unknown) => { console.error(error); res.destroy(); });
   });
@@ -192,13 +192,20 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   };
   await assert.rejects(client.createSession({ ...config, workingDirectory: root }), /受保护工作区/);
   const session = await client.createSession(config);
+  assert.match(
+    fs.readFileSync(path.join(root, "data", "codex-home", id, "config.toml"), "utf8"),
+    /^model_provider = "cca"$/m,
+  );
   const events: SessionEvent[] = [];
   session.on((event) => { events.push(event); if (event.type === "assistant.message") calls++; });
   const response = await session.sendAndWait("Run platform_echo then respond", 20_000);
   assert.equal(response?.data.content, "Codex integration works");
   assert.equal(toolCalls, 1);
   const patchResult = array(received.at(-1)?.messages).map(object).find((m) => m.role === "tool" && m.tool_call_id === "call_patch");
-  await t.test("native patch writes within the workspace", () => {
+  await t.test("native exec_command writes within the workspace", () => {
+    const toolNames = array(received[0]?.tools).map((tool) => String(object(object(tool).function ?? tool).name ?? ""));
+    assert.ok(toolNames.includes("exec_command"), JSON.stringify(toolNames));
+    assert.equal(toolNames.includes("apply_patch"), false);
     assert.ok(fs.existsSync(path.join(process.env.WORKSPACE_ROOT!, "native-patch.txt")), JSON.stringify(patchResult));
     assert.equal(fs.readFileSync(path.join(process.env.WORKSPACE_ROOT!, "native-patch.txt"), "utf8"), "written by Codex\n");
   });
@@ -483,6 +490,25 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
   await client.deleteSession(id);
   assert.equal(fs.existsSync(path.join(root, "data", "codex-home", id)), false);
   assert.deepEqual((await query("SELECT * FROM thread_events WHERE thread_id = ?", [id])).rows, []);
+});
+
+test("writes Codex 0.167 session config.toml so the process provider matches cca", async () => {
+  const { codexProviderConfigToml } = await import("./codex.js");
+  const toml = codexProviderConfigToml({
+    name: "CCA",
+    base_url: "http://127.0.0.1:9/v1",
+    wire_api: "responses",
+    experimental_bearer_token: "token",
+    supports_websockets: false,
+    request_max_retries: 0,
+    stream_max_retries: 0,
+    http_headers: { "x-openai-actor-authorization": "cca-image-extension" },
+  });
+  assert.match(toml, /^model_provider = "cca"$/m);
+  assert.match(toml, /^\[model_providers\.cca\]$/m);
+  assert.match(toml, /^base_url = "http:\/\/127\.0\.0\.1:9\/v1"$/m);
+  assert.match(toml, /^\[model_providers\.cca\.http_headers\]$/m);
+  assert.match(toml, /^"x-openai-actor-authorization" = "cca-image-extension"$/m);
 });
 
 test("maps permission modes to Codex app-server settings", async () => {

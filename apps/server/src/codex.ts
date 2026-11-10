@@ -114,6 +114,42 @@ function prepareHome(home: string) {
     fs.chmodSync(path.join(home, "auth.json"), 0o600);
   } else fs.rmSync(path.join(home, "auth.json"), { force: true });
 }
+
+function tomlKey(key: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ? key : JSON.stringify(key);
+}
+
+function tomlValue(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) return String(value);
+  throw new Error("Unsupported Codex config value");
+}
+
+/** Codex 0.167 compares a thread's saved provider with the process config, not thread/start overrides. */
+export function codexProviderConfigToml(provider: JsonObject): string {
+  const lines = ['model_provider = "cca"', "", "[model_providers.cca]"];
+  const nested: Array<[string, JsonObject]> = [];
+  for (const [key, value] of Object.entries(provider)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) nested.push([key, object(value)]);
+    else lines.push(`${tomlKey(key)} = ${tomlValue(value)}`);
+  }
+  for (const [key, value] of nested) {
+    lines.push("", `[model_providers.cca.${key}]`);
+    for (const [nestedKey, nestedValue] of Object.entries(value)) {
+      lines.push(`${tomlKey(nestedKey)} = ${tomlValue(nestedValue)}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+function writeProviderConfig(home: string, provider: JsonObject | undefined) {
+  const file = path.join(home, "config.toml");
+  if (!provider) {
+    fs.rmSync(file, { force: true });
+    return;
+  }
+  fs.writeFileSync(file, codexProviderConfigToml(provider), { mode: 0o600 });
+}
 function readEvents(file: string): SessionEvent[] {
   if (!fs.existsSync(file)) return [];
   const events: SessionEvent[] = [];
@@ -396,7 +432,8 @@ export class CodexSession implements AgentSession {
           stream_max_retries: 0,
           ...(nativeImageGeneration && imageProvider ? { http_headers: { [CODEX_IMAGE_ACTOR_HEADER]: CODEX_IMAGE_ACTOR_VALUE } } : {}),
         } };
-      }
+        writeProviderConfig(this.home, object(object(overrides.model_providers).cca));
+      } else writeProviderConfig(this.home, undefined);
       const contextWindow = configuredContextWindow(this.config);
       if (contextWindow) {
         overrides.model_context_window = contextWindow;
@@ -409,7 +446,7 @@ export class CodexSession implements AgentSession {
       overrides.show_raw_agent_reasoning = true;
       await this.connection.start(this.cwd, runtimeEnv(this.home));
       const common: JsonObject = { cwd: this.cwd, model: this.model, approvalPolicy: permission.approvalPolicy, sandbox: permission.sandbox, approvalsReviewer: permission.approvalsReviewer, config: overrides,
-        developerInstructions: [this.config.systemMessage?.content, ...(this.sandboxServer ? [SANDBOX_INSTRUCTIONS] : [])].filter(Boolean).join("\n"), persistExtendedHistory: true };
+        developerInstructions: [this.config.systemMessage?.content, ...(this.sandboxServer ? [SANDBOX_INSTRUCTIONS] : [])].filter(Boolean).join("\n") };
       if (provider) common.modelProvider = "cca";
       this.commonConfig = common;
       const start = () => this.connection.request("thread/start", { ...common, experimentalRawEvents: false, dynamicTools: this.tools.map((tool) => ({
