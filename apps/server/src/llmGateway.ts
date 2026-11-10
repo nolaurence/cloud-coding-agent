@@ -85,7 +85,7 @@ export function sanitizeCodexImageRequest(model: string, payload: JsonObject): J
     const allowed = EXTENDED_QUALITY_IMAGE_MODEL.test(model) ? EXTENDED_IMAGE_QUALITY : BASE_IMAGE_QUALITY;
     if (!allowed.has(next.quality)) delete next.quality;
   }
-  // Codex 0.156 always sends quality/size/background "auto" and never sends complexity.
+  // Codex 0.167 still sends quality/size/background "auto" and never sends complexity.
   // Compatible 1.x/2 proxies treat those extras as a 2.6 request and inject complexity:"medium".
   if (!supportsComplexity) {
     for (const key of IMAGE_AUTO_FIELDS) if (next[key] === "auto") delete next[key];
@@ -119,7 +119,7 @@ export function unsupportedImageRequestParam(status: number, body: Buffer): stri
   }
 }
 
-/** Codex 0.156 ImagesClient requires ImageResponse.created; some GPT Image proxies omit it. */
+/** Codex 0.167 ImagesClient requires ImageResponse.created; some GPT Image proxies omit it. */
 export function normalizeCodexImageResponse(status: number, contentType: string, body: Buffer): Buffer {
   if (status >= 400 || !contentType.includes("json")) return body;
   try {

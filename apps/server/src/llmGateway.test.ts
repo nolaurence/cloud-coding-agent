@@ -154,7 +154,7 @@ test("sanitizeCodexImageRequest drops complexity unless the model is GPT Image 2
   });
 });
 
-test("sanitizeCodexImageRequest omits Codex 0.156 auto extras that make 1.x/2 proxies inject complexity", () => {
+test("sanitizeCodexImageRequest omits Codex 0.167 auto extras that make 1.x/2 proxies inject complexity", () => {
   const codexBody = {
     prompt: "帮我生成一张原神的logo图",
     background: "auto",
@@ -309,7 +309,7 @@ test("gateway retries image generation after an unsupported param rejection", as
   } finally { await gateway.close(); }
 });
 
-test("gateway forwards Codex 0.156 imagegen without auto extras so proxies cannot inject complexity", async (t) => {
+test("gateway forwards Codex 0.167 imagegen without auto extras so proxies cannot inject complexity", async (t) => {
   const requests: JsonObject[] = [];
   const upstream = createServer((req, res) => {
     void (async () => {

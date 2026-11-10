@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CodexRpc } from "./codexRpc.js";
+import { CodexRpc, codexCommand } from "./codexRpc.js";
+
+test("pinned Codex app-server is the latest stable 0.167.0 binary", () => {
+  const require = createRequire(import.meta.url);
+  const pkg = JSON.parse(fs.readFileSync(require.resolve("@openai/codex/package.json"), "utf8")) as { version: string };
+  assert.equal(pkg.version, "0.167.0");
+  const binary = codexCommand();
+  const result = spawnSync(binary.command, [...binary.prefix, "--version"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /codex-cli 0\.167\.0\b/);
+});
 
 test("Codex startup failures classify storage errors without exposing stderr", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cca-rpc-failure-"));

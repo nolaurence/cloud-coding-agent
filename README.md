@@ -173,7 +173,7 @@ docker compose -f docker-compose-prod.yml up -d --build
 
 推荐在「设置 → 模型服务」添加 OpenAI 兼容服务,Base URL 填 API 根路径(例如含 `/v1`),选择 `completions` 或 `responses`,再设置默认模型。Chat 上游必须支持 `stream: true` 和 function tool calling;网关转换文字、图片输入、推理增量、并行工具调用和工具结果,并把 Codex 的 free-form `apply_patch` 包装成带 `input` 字符串的 JSON 函数参数。兼容 Codex 的客户端 `tool_search`、搜索返回的 MCP 工具和命名空间调用。工具参数截断或流异常会报错,不会伪装成成功。手动压缩使用 Codex 的本地摘要流程,不伪造远程加密压缩结果。
 
-图片生成使用 Codex 0.156 自带的 `image_gen` 工具(`features.image_generation`,默认随设置开关启用),不再注册自定义 `cca_imagegen` MCP。自定义模型服务会给 Codex 的 `cca` provider 加上 `x-openai-actor-authorization` 头,让原生生图工具出现在会话里,并由 LLM 网关把 `/images/generations`(及编辑接口)转到已配置的 GPT Image 提供商;`gpt-image` / `gpt-image-*` 模型的选择规则不变:优先当前聊天提供商,否则按配置顺序取第一个匹配项。原生 Codex 账号则走 ChatGPT 生图,不需要额外 `OPENAI_API_KEY`。生成结果仍作为助手图片附件保存,支持聊天内预览、刷新恢复和 QQ 私聊/群聊/频道原生图片回传;单张图片限制 10 MB,计入现有图片存储额度。DSH 运行时没有对等的原生生图工具,该开关对 DSH 会话无效果。
+图片生成使用 Codex 0.167 自带的 `image_gen` 工具(`features.image_generation`,默认随设置开关启用),不再注册自定义 `cca_imagegen` MCP。自定义模型服务会给 Codex 的 `cca` provider 加上 `x-openai-actor-authorization` 头,让原生生图工具出现在会话里,并由 LLM 网关把 `/images/generations`(及编辑接口)转到已配置的 GPT Image 提供商;`gpt-image` / `gpt-image-*` 模型的选择规则不变:优先当前聊天提供商,否则按配置顺序取第一个匹配项。原生 Codex 账号则走 ChatGPT 生图,不需要额外 `OPENAI_API_KEY`。生成结果仍作为助手图片附件保存,支持聊天内预览、刷新恢复和 QQ 私聊/群聊/频道原生图片回传;单张图片限制 10 MB,计入现有图片存储额度。DSH 运行时没有对等的原生生图工具,该开关对 DSH 会话无效果。
 
 不保证所有 OpenAI 兼容服务的扩展字段兼容;暂不支持依赖 `previous_response_id` 的服务端状态、原生 Anthropic、跨协议加密推理历史、Copilot CLI 插件市场和 Ultra 子代理模式。扩展请使用插件(Agent Plugins)、Skill 或 MCP 管理。自动提交信息通过自定义模型服务执行纯文本请求,不开放工具;原生 Codex 账号暂需手动填写提交信息。上游 API key 保留在服务端网关,子进程仅持有会话级随机网关凭证;本地网关不对外发布端口。
 
