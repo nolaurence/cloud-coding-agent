@@ -60,6 +60,10 @@ const EXTENDED_QUALITY_IMAGE_MODEL = /gpt-image-2\.[5-9]/i;
 const BASE_IMAGE_QUALITY = new Set(["low", "medium", "high", "auto"]);
 const EXTENDED_IMAGE_QUALITY = new Set(["low", "medium", "high", "auto", "xhigh", "max"]);
 
+const IMAGE_COMPAT_FIELDS = ["prompt", "model", "n", "image", "images", "mask"] as const;
+const IMAGE_AUTO_FIELDS = ["quality", "size", "background"] as const;
+const IMAGE_PARAM_IN_MESSAGE = /\b(complexity|quality|size|background|output_format|output_compression|moderation|style)\b/i;
+
 /** Drop Codex/OpenAI fields the configured GPT Image model cannot accept (e.g. complexity on 1.x/2). */
 export function sanitizeCodexImageRequest(model: string, payload: JsonObject): JsonObject {
   const next: JsonObject = {};
@@ -68,7 +72,8 @@ export function sanitizeCodexImageRequest(model: string, payload: JsonObject): J
     next[key] = value;
   }
   next.model = model;
-  if (COMPLEXITY_IMAGE_MODEL.test(model)) {
+  const supportsComplexity = COMPLEXITY_IMAGE_MODEL.test(model);
+  if (supportsComplexity) {
     if (payload.complexity === "low" || payload.complexity === "medium" || payload.complexity === "high") {
       next.complexity = payload.complexity;
     }
@@ -80,7 +85,20 @@ export function sanitizeCodexImageRequest(model: string, payload: JsonObject): J
     const allowed = EXTENDED_QUALITY_IMAGE_MODEL.test(model) ? EXTENDED_IMAGE_QUALITY : BASE_IMAGE_QUALITY;
     if (!allowed.has(next.quality)) delete next.quality;
   }
+  // Codex 0.156 always sends quality/size/background "auto" and never sends complexity.
+  // Compatible 1.x/2 proxies treat those extras as a 2.6 request and inject complexity:"medium".
+  if (!supportsComplexity) {
+    for (const key of IMAGE_AUTO_FIELDS) if (next[key] === "auto") delete next[key];
+  }
   return next;
+}
+
+/** Keep only fields the original custom image MCP used, for a last-resort retry. */
+export function compactCodexImageRequest(payload: JsonObject): JsonObject | undefined {
+  const next: JsonObject = {};
+  for (const key of IMAGE_COMPAT_FIELDS) if (payload[key] != null) next[key] = payload[key];
+  if (next.prompt == null && next.image == null && next.images == null) return;
+  return Object.keys(payload).some((key) => !(key in next)) ? next : undefined;
 }
 
 export function unsupportedImageRequestParam(status: number, body: Buffer): string | undefined {
@@ -89,9 +107,13 @@ export function unsupportedImageRequestParam(status: number, body: Buffer): stri
     const parsed = object(JSON.parse(body.toString("utf8")));
     const error = parsed.error && typeof parsed.error === "object" && !Array.isArray(parsed.error) ? object(parsed.error) : parsed;
     if (typeof error.param === "string" && error.param && error.param !== "model" && error.param !== "prompt") return error.param;
-    const match = String(error.message ?? "").match(/^([A-Za-z_][A-Za-z0-9_]*) '/);
-    if (!match?.[1] || match[1] === "Model" || match[1] === "Prompt") return;
-    return match[1].charAt(0).toLowerCase() + match[1].slice(1).replaceAll(/[A-Z]/g, (letter) => "_" + letter.toLowerCase());
+    const message = String(error.message ?? error.msg ?? "");
+    const quoted = message.match(/^([A-Za-z_][A-Za-z0-9_]*) '/);
+    if (quoted?.[1] && quoted[1] !== "Model" && quoted[1] !== "Prompt") {
+      return quoted[1].charAt(0).toLowerCase() + quoted[1].slice(1).replaceAll(/[A-Z]/g, (letter) => "_" + letter.toLowerCase());
+    }
+    const named = message.match(IMAGE_PARAM_IN_MESSAGE)?.[1];
+    if (named) return named.toLowerCase();
   } catch {
     return;
   }
@@ -444,12 +466,23 @@ export async function startLlmGateway(provider: GatewayProvider): Promise<{ url:
     });
     let upstream = await forward(upstreamBody);
     let responseBody = Buffer.from(await upstream.arrayBuffer());
-    if (payload) {
+    if (payload && upstream.status >= 400) {
       const param = unsupportedImageRequestParam(upstream.status, responseBody);
       if (param && param in payload && param !== "model" && param !== "prompt") {
         delete payload[param];
         upstream = await forward(Buffer.from(JSON.stringify(payload)));
         responseBody = Buffer.from(await upstream.arrayBuffer());
+      }
+      // Production proxies inject complexity after our rewrite. The inbound Codex body
+      // never contains that field, so deleting error.param is a no-op — fall back to the
+      // pre-native MCP shape ({model, prompt, n, ...}).
+      if (upstream.status >= 400) {
+        const compact = compactCodexImageRequest(payload);
+        if (compact) {
+          payload = compact;
+          upstream = await forward(Buffer.from(JSON.stringify(payload)));
+          responseBody = Buffer.from(await upstream.arrayBuffer());
+        }
       }
     }
     const contentTypeHeader = upstream.headers.get("content-type") ?? "application/json";
