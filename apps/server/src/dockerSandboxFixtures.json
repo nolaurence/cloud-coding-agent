@@ -18,6 +18,7 @@
     "services/python/project.egg-info/PKG-INFO", "services/python/project.dist-info/METADATA", "services/python/.coverage", "services/python/.coverage.machine", "services/python/htmlcov/index.html",
     "services/go/.gocache/object", "services/go/.gomodcache/example/mod.go", "services/go/pkg/mod/example/mod.go", "services/go/pkg/sumdb/sum.golang.org/state", "services/go/api.test", "services/go/api.test.exe",
     "services/java/target/classes/Main.class", "services/java/submodule/build/classes/Main.class", "services/java/out/classes/Main.class", "services/java/src/Main.class",
-    "services/java/.gradle/caches/state", "services/java/.m2/repository/example.jar", "nested/project/dist/bundle.js", "nested/project/coverage/report.html", "nested/project/.cache/file", "nested/project/.git/config"
+    "services/java/.gradle/caches/state", "services/java/.m2/repository/example.jar", "nested/project/dist/bundle.js", "nested/project/coverage/report.html", "nested/project/.cache/file", "nested/project/.git/config",
+    ".codex-tmp/image-validation/package.json", ".codex-tmp/tailwind-check3.mjs", ".acl-recovery/acl-backup-test.json", ".cursor/state.json"
   ]
 }

@@ -59,7 +59,7 @@ CCA_DOCKER_SANDBOX_CONFIG=/data/docker-sandbox.json
 
 由流水线发布包含本次代码的镜像，并保留同一数据卷及上述运行时环境变量后，新建或重新打开会话即可启用。单独重启旧镜像不会增加沙箱功能。SSH 密码不需要传入流水线。
 
-**工作区策略 v2 升级：**应用发布之外，还需要将本仓库的 `apps/server/src/dockerSandboxPolicy.json` 和 `deploy/docker-sandbox/gateway.py` 更新到 `.130` 的 `~/cca-code-sandbox/` 同一目录。先上传策略文件，再更新网关脚本，建议上传到临时文件后原子替换，保留网关所有者及 `0700` 权限。安装器也会同时复制这两个文件；已有部署仅更新文件即可，保留原有 SSH 授权和密钥。网关每次 SSH 调用时加载，无需操作或重启容器。新旧应用/网关混用会明确报版本不匹配，不能继续使用旧的缓存保留行为。
+**工作区策略 v3 升级：**应用发布之外，还需要将本仓库的 `apps/server/src/dockerSandboxPolicy.json` 和 `deploy/docker-sandbox/gateway.py` 更新到 `.130` 的 `~/cca-code-sandbox/` 同一目录。先上传策略文件，再更新网关脚本，建议上传到临时文件后原子替换，保留网关所有者及 `0700` 权限。安装器也会同时复制这两个文件；已有部署仅更新文件即可，保留原有 SSH 授权和密钥。网关每次 SSH 调用时加载，无需操作或重启容器。新旧应用/网关混用会明确报版本不匹配。v3 将 `.codex-tmp`、`.cursor`、`.acl-recovery` 等临时目录排除出同步，导出时跳过超大单文件，并在上次导出失败后允许恢复源码后继续执行（含清理），不再用 sticky dirty 标记堵死后续 `run_code`。
 
 ## 执行与文件
 
@@ -68,8 +68,8 @@ CCA_DOCKER_SANDBOX_CONFIG=/data/docker-sandbox.json
 - `full` 权限允许容器通过 bridge 网络访问外部服务；其他权限使用 `--network none`。容器资源限制不随权限提升而取消。
 - Codex 禁用本地 shell、unified exec、JS REPL/code mode；DSH 禁用本地 shell、文件、工作流和子代理执行工具。已有其他 MCP/平台工具继续按其自身权限运行。
 - 每次执行前同步项目普通文件，执行后同步新增、修改、删除及可执行位；二进制文件使用 base64。上传和回写使用同一份 `dockerSandboxPolicy.json`，规则作用于**任意目录层级**，支持工作区下多个嵌套工程；跳过符号链接与下表生成物。现有本地依赖和缓存不会被删除或覆盖。Git 元数据不同步，Git 操作使用平台已有入口。
-- 同步上限默认为单文件 8 MiB、总计 64 MiB、10000 文件，可用 `CCA_SANDBOX_MAX_FILE_BYTES`、`CCA_SANDBOX_MAX_BYTES`、`CCA_SANDBOX_MAX_FILES` 覆盖。超过单文件上限的文件会被跳过，不再让整个工作区失败。Git 仓库额外遵循 `.gitignore`（不上传被忽略的 `data/`、日志、本地缓存等）。输出总计最多 256 KiB，超过后终止容器。单次代码最多 256 KiB。构建产物不会自动回传，可复制需要交付的文件到未排除目录。
-- 检测到本地编辑冲突时不覆盖变化的文件，完整结果保存在 `<CCA_DATA_DIR>/sandbox-recovery/<run>.json`，错误消息包含位置。远端导出失败时清理已知缓存，保留尚未同步的文件和 `<hash>.dirty`，阻止下次执行覆盖恢复现场；执行目录清理失败时，完整导出结果另存为 `<hash>.recovery.json`。先恢复所需文件，再清理恢复现场和标记。正常执行不保留远端工作目录。
+- 同步上限默认为单文件 8 MiB、总计 64 MiB、10000 文件，可用 `CCA_SANDBOX_MAX_FILE_BYTES`、`CCA_SANDBOX_MAX_BYTES`、`CCA_SANDBOX_MAX_FILES` 覆盖。上传和回写都会跳过超过单文件上限的文件，以及 `.codex-tmp`、`.acl-recovery`、`.cursor` 等临时/恢复目录，不再让整个工作区失败。Git 仓库额外遵循 `.gitignore`（不上传被忽略的 `data/`、日志、本地缓存等）。输出总计最多 256 KiB，超过后终止容器。单次代码最多 256 KiB。构建产物不会自动回传，可复制需要交付的文件到未排除目录。
+- 检测到本地编辑冲突时不覆盖变化的文件，完整结果保存在 `<CCA_DATA_DIR>/sandbox-recovery/<run>.json`，错误消息包含位置。远端导出失败时清理已知缓存，保留尚未同步的源码和 `<hash>.dirty`；下次 `run` 会先收回这些源码再执行（因此清理命令不会被同一闸门堵死），也可单独调用 `recover` 把远端源码拉回 CCA。执行目录清理失败时，完整导出结果另存为 `<hash>.recovery.json`。正常执行不保留远端工作目录。
 - 升级前遗留的无 `.dirty` 工作目录，在该会话下一次执行时清空重建；有 `.dirty` 的恢复现场不自动删除。已不使用的旧会话目录由管理员清理。
 
 | 范围 | 不参与上传/回写的典型内容 | 保留内容 |

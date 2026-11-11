@@ -12,9 +12,13 @@ import {
 } from "./mcpServers.js";
 import {
   deleteScopedSkill,
+  engineSystemSkillsDirectory,
+  getScopedSkill,
   listScopedSkills,
+  missingSkillError,
   saveScopedSkill,
 } from "./skills.js";
+import { prepareCodexSkillHome } from "./codex.js";
 import { store } from "./store.js";
 
 function fixture(t: TestContext): string {
@@ -184,4 +188,47 @@ test("agent tools allow workspace CRUD but deny platform writes for non-admins",
   const listed = await skillTool.handler!({ action: "list", scope: "workspace" }, {} as never);
   assert.match(String(listed), /allowed/);
   assert.deepEqual(changed, ["workspace"]);
+});
+
+test("manage_skills can read Codex bundled system skills that are not in the git workspace", async (t) => {
+  const root = fixture(t);
+  const system = path.join(root, "codex-home", "thread-1", "skills", ".system", "imagegen");
+  fs.mkdirSync(system, { recursive: true });
+  fs.writeFileSync(path.join(system, "SKILL.md"), "---\nname: imagegen\ndescription: Generate images\n---\n\n# Imagegen\n");
+  const [skillTool] = createAgentResourceTools({
+    workspacePath: root,
+    canManagePlatform: () => false,
+    engineSkillsDirectory: path.join(root, "codex-home", "thread-1", "skills", ".system"),
+    onChanged: () => {},
+  });
+  const listed = String(await skillTool.handler!({ action: "list", scope: "platform" }, {} as never));
+  assert.match(listed, /imagegen/);
+  const got = String(await skillTool.handler!({ action: "get", scope: "platform", name: "imagegen" }, {} as never));
+  assert.match(got, /Generate images/);
+  assert.match(got, /engine-system/);
+  await assert.rejects(
+    async () => skillTool.handler!({ action: "get", scope: "platform", name: "openai-docs" }, {} as never),
+    /\$CODEX_HOME\/skills\/\.system/,
+  );
+  assert.match(missingSkillError("openai-docs", [path.join(root, "skills", ".system")]).message, /不在 git 工作区/);
+  assert.equal(engineSystemSkillsDirectory("codex", "thread-1")?.endsWith(path.join("codex-home", "thread-1", "skills", ".system")), true);
+  assert.equal(getScopedSkill("workspace", "imagegen", root, [path.join(root, "codex-home", "thread-1", "skills", ".system")])?.name, "imagegen");
+});
+
+test("prepareCodexSkillHome preserves Codex .system skills", (t) => {
+  const root = fixture(t);
+  const home = path.join(root, "session");
+  const systemSkill = path.join(home, "skills", ".system", "openai-docs", "SKILL.md");
+  fs.mkdirSync(path.dirname(systemSkill), { recursive: true });
+  fs.writeFileSync(systemSkill, "# openai-docs\n");
+  const stale = path.join(home, "skills", "stale-skill", "SKILL.md");
+  fs.mkdirSync(path.dirname(stale), { recursive: true });
+  fs.writeFileSync(stale, "# stale\n");
+  const platform = path.join(root, "platform-skills", "review");
+  fs.mkdirSync(platform, { recursive: true });
+  fs.writeFileSync(path.join(platform, "SKILL.md"), "# review\n");
+  prepareCodexSkillHome(home, [path.join(root, "platform-skills")], []);
+  assert.equal(fs.existsSync(systemSkill), true);
+  assert.equal(fs.existsSync(stale), false);
+  assert.equal(fs.existsSync(path.join(home, "skills", "review", "SKILL.md")), true);
 });

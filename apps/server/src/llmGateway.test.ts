@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { object, responsesToChat, chatToResponses, sseData, startLlmGateway, normalizeCodexImageResponse, sanitizeCodexImageRequest, compactCodexImageRequest, unsupportedImageRequestParam, type JsonObject } from "./llmGateway.js";
+import { object, responsesToChat, chatToResponses, sseData, startLlmGateway, normalizeCodexImageResponse, sanitizeCodexImageRequest, compactCodexImageRequest, complexityModelFallback, codexImagegenHttpBody, unsupportedImageRequestParam, type JsonObject } from "./llmGateway.js";
 
 function stream(chunks: unknown[]): ReadableStream<Uint8Array> {
   const bytes = new TextEncoder().encode(chunks.map((chunk) => "data: " + (typeof chunk === "string" ? chunk : JSON.stringify(chunk)) + "\r\n\r\n").join(""));
@@ -180,6 +180,34 @@ test("sanitizeCodexImageRequest omits Codex 0.167 auto extras that make 1.x/2 pr
   assert.equal(compactCodexImageRequest({ model: "gpt-image-1.5", prompt: "A cat" }), undefined);
 });
 
+test("sanitizeCodexImageRequest strips Codex 0.167 opaque-background imagegen bodies", () => {
+  const liveCall = { prompt: "帮我生成一张原神的logo图", transparent_background: false };
+  const body = codexImagegenHttpBody(liveCall.prompt, liveCall.transparent_background);
+  assert.deepEqual(body, {
+    prompt: liveCall.prompt, background: "opaque", model: "gpt-image-2", quality: "auto", size: "auto",
+  });
+  assert.deepEqual(sanitizeCodexImageRequest("gpt-image-1.5", body), {
+    prompt: liveCall.prompt, model: "gpt-image-1.5",
+  });
+  assert.deepEqual(sanitizeCodexImageRequest("gpt-image-2", body), {
+    prompt: liveCall.prompt, model: "gpt-image-2",
+  });
+  assert.equal("complexity" in sanitizeCodexImageRequest("gpt-image-2", body), false);
+  assert.deepEqual(sanitizeCodexImageRequest("gpt-image-1.5", { prompt: "A cat", transparent_background: false, model: "gpt-image-2" }), {
+    prompt: "A cat", model: "gpt-image-1.5",
+  });
+  assert.deepEqual(sanitizeCodexImageRequest("gpt-image-1.5", { prompt: "A cat", transparent_background: true }), {
+    prompt: "A cat", model: "gpt-image-1.5", background: "transparent",
+  });
+  const complexityError = Buffer.from(JSON.stringify({
+    error: { message: "Complexity 'medium' is not supported for this image model.", param: "complexity", type: "image_generation_user_error" },
+  }));
+  assert.deepEqual(complexityModelFallback("gpt-image-2", { model: "gpt-image-2", prompt: "A cat" }, 400, complexityError), {
+    model: "gpt-image-1.5", prompt: "A cat",
+  });
+  assert.equal(complexityModelFallback("gpt-image-1.5", { model: "gpt-image-1.5", prompt: "A cat" }, 400, complexityError), undefined);
+});
+
 test("unsupportedImageRequestParam reads OpenAI image model rejection fields", () => {
   const body = Buffer.from(JSON.stringify({
     error: { message: "Complexity 'medium' is not supported for this image model.", type: "image_generation_user_error", param: "complexity", code: "invalid_value" },
@@ -351,6 +379,83 @@ test("gateway forwards Codex 0.167 imagegen without auto extras so proxies canno
     assert.equal(generated.status, 200, await generated.text());
     assert.equal(requests.length, 1, JSON.stringify(requests));
     assert.deepEqual(requests[0], { model: "gpt-image-1.5", prompt: "帮我生成一张原神的logo图" });
+  } finally { await gateway.close(); }
+});
+
+test("gateway forwards the live prompt+transparent_background=false Codex 0.167 body without complexity", async (t) => {
+  const requests: JsonObject[] = [];
+  const upstream = createServer((req, res) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = object(JSON.parse(Buffer.concat(chunks).toString()));
+      requests.push(body);
+      res.setHeader("content-type", "application/json");
+      if (body.complexity != null || body.quality != null || body.size != null || body.background != null) {
+        res.writeHead(400);
+        res.end(JSON.stringify({
+          error: { message: "Complexity 'medium' is not supported for this image model.", param: "complexity", type: "image_generation_user_error", code: "invalid_value" },
+        }));
+        return;
+      }
+      res.end(JSON.stringify({ created: 1, data: [{ b64_json: "aW1hZ2U=" }] }));
+    })().catch(() => res.destroy());
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => { upstream.closeAllConnections(); upstream.close(() => resolve()); }));
+  const address = upstream.address();
+  assert.ok(address && typeof address !== "string");
+  const imageBase = "http://127.0.0.1:" + address.port + "/v1";
+  const gateway = await startLlmGateway({
+    type: "openai", baseUrl: imageBase, apiKey: "chat-key",
+    imageGenerationModel: "gpt-image-2", imageGenerationBaseUrl: imageBase, imageGenerationApiKey: "image-test-key",
+  });
+  try {
+    const generated = await fetch(gateway.url + "/images/generations", {
+      method: "POST", headers: { authorization: "Bearer " + gateway.token, "content-type": "application/json" },
+      body: JSON.stringify(codexImagegenHttpBody("帮我生成一张原神的logo图", false)),
+    });
+    assert.equal(generated.status, 200, await generated.text());
+    assert.equal(requests.length, 1, JSON.stringify(requests));
+    assert.deepEqual(requests[0], { model: "gpt-image-2", prompt: "帮我生成一张原神的logo图" });
+  } finally { await gateway.close(); }
+});
+
+test("gateway falls back from gpt-image-2 to gpt-image-1.5 when a proxy still injects complexity", async (t) => {
+  const requests: JsonObject[] = [];
+  const upstream = createServer((req, res) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = object(JSON.parse(Buffer.concat(chunks).toString()));
+      requests.push(body);
+      res.setHeader("content-type", "application/json");
+      if (body.model !== "gpt-image-1.5") {
+        res.writeHead(400);
+        res.end(JSON.stringify({
+          error: { message: "Complexity 'medium' is not supported for this image model.", param: "complexity", type: "image_generation_user_error" },
+        }));
+        return;
+      }
+      res.end(JSON.stringify({ created: 1, data: [{ b64_json: "aW1hZ2U=" }] }));
+    })().catch(() => res.destroy());
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => { upstream.closeAllConnections(); upstream.close(() => resolve()); }));
+  const address = upstream.address();
+  assert.ok(address && typeof address !== "string");
+  const imageBase = "http://127.0.0.1:" + address.port + "/v1";
+  const gateway = await startLlmGateway({
+    type: "openai", baseUrl: imageBase, apiKey: "chat-key",
+    imageGenerationModel: "gpt-image-2", imageGenerationBaseUrl: imageBase, imageGenerationApiKey: "image-test-key",
+  });
+  try {
+    const generated = await fetch(gateway.url + "/images/generations", {
+      method: "POST", headers: { authorization: "Bearer " + gateway.token, "content-type": "application/json" },
+      body: JSON.stringify(codexImagegenHttpBody("A cat", false)),
+    });
+    assert.equal(generated.status, 200, await generated.text());
+    assert.deepEqual(requests.at(-1), { model: "gpt-image-1.5", prompt: "A cat" });
   } finally { await gateway.close(); }
 });
 

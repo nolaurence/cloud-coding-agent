@@ -40,7 +40,7 @@ test("native Codex uses Chat gateway, executes a platform tool, persists and res
       if (req.url === "/images-provider/v1/images/generations") {
         assert.equal(req.headers.authorization, "Bearer image-provider-key");
         assert.equal(request.model, "gpt-image-1.5");
-        if (request.complexity != null || request.quality === "auto" || request.size === "auto" || request.background === "auto") {
+        if (request.complexity != null || request.quality === "auto" || request.size === "auto" || request.background === "auto" || request.background === "opaque") {
           res.writeHead(400, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: { message: '当前生图模型不支持 complexity: "medium"。' } }));
           return;

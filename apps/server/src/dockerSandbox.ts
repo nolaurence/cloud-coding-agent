@@ -27,7 +27,6 @@ export interface SandboxResult {
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_FILE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 10_000;
-const SNAPSHOT_EXTRA_DIRECTORIES = new Set([".cursor", ".codex-tmp", ".dsh-acl-recovery", ".acl-recovery"]);
 
 function envLimit(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -53,13 +52,12 @@ function syncLimitError(limits = sandboxSyncLimits()): Error {
   return new Error(`沙箱同步上限：单文件 ${formatMib(limits.maxFileBytes)} MiB、合计 ${formatMib(limits.maxBytes)} MiB、${limits.maxFiles} 个文件；请缩小工作区`);
 }
 
-function isTemporarySnapshotDir(part: string): boolean {
-  return SNAPSHOT_EXTRA_DIRECTORIES.has(part) || part.startsWith(".codex-test-");
+export function isSnapshotSkipped(name: string, directory = false): boolean {
+  return isSandboxPathIgnored(name, directory);
 }
 
-function isSnapshotSkipped(name: string, directory = false): boolean {
-  if (isSandboxPathIgnored(name, directory)) return true;
-  return name.split("/").some((part) => isTemporarySnapshotDir(part));
+export function isPreviousExportFailed(error: unknown): boolean {
+  return error instanceof Error && /Previous workspace export failed|recover remote files/i.test(error.message);
 }
 
 /** Workspace-relative git paths, or undefined when this is not a git work tree. */
@@ -85,7 +83,7 @@ export function gitSnapshotNames(root: string): string[] | undefined {
     const posix = name.replaceAll("\\", "/");
     if (!prefix) return [posix];
     return posix.startsWith(prefix) ? [posix.slice(prefix.length)] : [];
-  }).filter((name) => name && !name.endsWith("/"));
+  }).filter((name) => name && !name.endsWith("/") && !isSnapshotSkipped(name));
 }
 
 export const SANDBOX_INSTRUCTIONS = `本会话使用远端 Docker 工作区 /workspace。所有代码、命令和项目文件操作必须使用 cca_sandbox 的 run_code 工具。
@@ -93,7 +91,7 @@ run_code 接收 JavaScript async 函数体，可在同一代码块内使用 for/
 用 print(value) 输出需要反馈给模型的结果，或 return JSON 值；不要每次循环都请求模型。示例：for (const file of await tools.list_files('.')) { print(file); }
 每次执行使用独立 Linux Docker 容器和全新工作目录，源码及普通文件自动同步回工作区；依赖、构建缓存、JS 内存、/tmp 和后台进程均不跨代码块保留。安装依赖、构建和测试必须放在同一个 run_code 中完成，先检查 tools.exec 的 exitCode 再执行后续步骤。
 工作区可能包含多层嵌套或多个工程，先定位 package.json、pyproject.toml/requirements.txt、go.mod/go.work、pom.xml/build.gradle(.kts) 等清单，再用 tools.exec 的 cwd 指定实际工程目录，不要假设工程在 /workspace 根目录。
-所有层级的 node_modules、Python 虚拟环境/字节码、Go 模块/编译缓存、Maven/Gradle 构建目录及通用 dist/build/coverage 等生成物均不参与同步。Git 仓库还会遵循 .gitignore，超过单文件上限的大文件会被跳过而不是让整个工作区失败。保留源码、清单、锁文件、Yarn/Maven/Gradle wrapper 和 Go vendor 源码。需要交付的构建产物请在同一代码块内复制到未排除的目录。Git 元数据不在沙箱中，认证 Git 操作使用平台入口。禁止尝试回退到服务端本地命令执行。`;
+所有层级的 node_modules、Python 虚拟环境/字节码、Go 模块/编译缓存、Maven/Gradle 构建目录、.codex-tmp / .acl-recovery 等临时目录及通用 dist/build/coverage 等生成物均不参与同步。Git 仓库还会遵循 .gitignore，超过单文件上限的大文件会被跳过而不是让整个工作区失败。导出失败后可继续执行清理或后续代码块，已修改源码会先收回再继续。保留源码、清单、锁文件、Yarn/Maven/Gradle wrapper 和 Go vendor 源码。需要交付的构建产物请在同一代码块内复制到未排除的目录。Git 元数据不在沙箱中，认证 Git 操作使用平台入口。禁止尝试回退到服务端本地命令执行。`;
 
 export async function readDockerSandboxConfig(): Promise<DockerSandboxConfig | undefined> {
   const file = process.env.CCA_DOCKER_SANDBOX_CONFIG || path.join(DATA_DIR, "docker-sandbox.json");
@@ -185,6 +183,7 @@ export async function applySandboxChanges(root: string, before: Snapshot, result
   const limits = sandboxSyncLimits();
   let bytes = 0;
   for (const name of names) {
+    if (isSnapshotSkipped(name)) continue;
     const file = await safeLocalPath(root, name);
     let current: Buffer | undefined;
     try { current = await fs.readFile(file); }
@@ -208,6 +207,27 @@ export async function applySandboxChanges(root: string, before: Snapshot, result
       await fs.rename(temporary, entry.file);
     } finally { await fs.rm(temporary, { force: true }); }
   }
+}
+
+/** Overlay recovered remote source onto the local workspace without dropping files the editor already has. */
+export async function applyRecoveredWorkspace(root: string, files: Snapshot): Promise<string[]> {
+  const applied: string[] = [];
+  const limits = sandboxSyncLimits();
+  for (const [name, entry] of Object.entries(files ?? {})) {
+    if (!entry || isSnapshotSkipped(name) || typeof entry.data !== "string" || typeof entry.executable !== "boolean") continue;
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(entry.data)) continue;
+    const file = await safeLocalPath(root, name);
+    const data = Buffer.from(entry.data, "base64");
+    if (data.length > limits.maxFileBytes) continue;
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const temporary = file + ".cca-" + randomBytes(8).toString("hex");
+    try {
+      await fs.writeFile(temporary, data, { flag: "wx", mode: entry.executable ? 0o755 : 0o644 });
+      await fs.rename(temporary, file);
+      applied.push(name);
+    } finally { await fs.rm(temporary, { force: true }); }
+  }
+  return applied;
 }
 
 export function invokeSandbox<T>(config: DockerSandboxConfig, request: object, timeoutMs = 330000): Promise<T> {
@@ -262,12 +282,26 @@ export class DockerSandbox {
     const controller = new AbortController();
     let dispatched = false;
     const done = (async () => {
-      const before = await snapshotWorkspace(this.cwd);
+      let before = await snapshotWorkspace(this.cwd);
       // abort() may arrive while the local snapshot is still being collected.
       if (this.closed) throw new Error("Docker 沙箱已关闭");
       controller.signal.throwIfAborted();
       dispatched = true;
-      const result = await invokeSandbox<SandboxResult>(this.config, { action: "run", workspace_policy_version: SANDBOX_WORKSPACE_POLICY_VERSION, workspace: this.workspace, run: id, code, timeout_ms: timeoutMs, files: before, network: this.network });
+      const request = { action: "run", workspace_policy_version: SANDBOX_WORKSPACE_POLICY_VERSION, workspace: this.workspace, run: id, code, timeout_ms: timeoutMs, files: before, network: this.network };
+      let result: SandboxResult;
+      try {
+        result = await invokeSandbox<SandboxResult>(this.config, request);
+      } catch (error) {
+        if (!isPreviousExportFailed(error)) throw error;
+        const recovered = await invokeSandbox<{ files?: Snapshot }>(this.config, {
+          action: "recover", workspace_policy_version: SANDBOX_WORKSPACE_POLICY_VERSION, workspace: this.workspace,
+        }, 45000);
+        await applyRecoveredWorkspace(this.cwd, recovered.files ?? {});
+        before = await snapshotWorkspace(this.cwd);
+        if (this.closed) throw new Error("Docker 沙箱已关闭");
+        controller.signal.throwIfAborted();
+        result = await invokeSandbox<SandboxResult>(this.config, { ...request, files: before });
+      }
       try { await applySandboxChanges(this.cwd, before, result); }
       catch (error) {
         const recovery = path.join(DATA_DIR, "sandbox-recovery", id + ".json");

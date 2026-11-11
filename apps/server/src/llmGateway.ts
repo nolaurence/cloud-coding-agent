@@ -63,6 +63,18 @@ const EXTENDED_IMAGE_QUALITY = new Set(["low", "medium", "high", "auto", "xhigh"
 const IMAGE_COMPAT_FIELDS = ["prompt", "model", "n", "image", "images", "mask"] as const;
 const IMAGE_AUTO_FIELDS = ["quality", "size", "background"] as const;
 const IMAGE_PARAM_IN_MESSAGE = /\b(complexity|quality|size|background|output_format|output_compression|moderation|style)\b/i;
+const GPT_IMAGE_2_BASE = /^gpt-image-2(?![.\d])/i;
+
+/** Codex 0.167 image_gen.imagegen always posts this JSON, even when the tool caller only sent prompt + transparent_background. */
+export function codexImagegenHttpBody(prompt: string, transparentBackground = false): JsonObject {
+  return {
+    prompt,
+    background: transparentBackground ? "transparent" : "opaque",
+    model: "gpt-image-2",
+    quality: "auto",
+    size: "auto",
+  };
+}
 
 /** Drop Codex/OpenAI fields the configured GPT Image model cannot accept (e.g. complexity on 1.x/2). */
 export function sanitizeCodexImageRequest(model: string, payload: JsonObject): JsonObject {
@@ -72,6 +84,8 @@ export function sanitizeCodexImageRequest(model: string, payload: JsonObject): J
     next[key] = value;
   }
   next.model = model;
+  if (payload.transparent_background === true) next.background = "transparent";
+  else if (payload.transparent_background === false) delete next.background;
   const supportsComplexity = COMPLEXITY_IMAGE_MODEL.test(model);
   if (supportsComplexity) {
     if (payload.complexity === "low" || payload.complexity === "medium" || payload.complexity === "high") {
@@ -85,10 +99,12 @@ export function sanitizeCodexImageRequest(model: string, payload: JsonObject): J
     const allowed = EXTENDED_QUALITY_IMAGE_MODEL.test(model) ? EXTENDED_IMAGE_QUALITY : BASE_IMAGE_QUALITY;
     if (!allowed.has(next.quality)) delete next.quality;
   }
-  // Codex 0.167 still sends quality/size/background "auto" and never sends complexity.
-  // Compatible 1.x/2 proxies treat those extras as a 2.6 request and inject complexity:"medium".
+  // Codex 0.167 imagegen maps transparent_background:false to background:"opaque" and
+  // always sends quality/size "auto". It never sends complexity. Compatible 1.x/2
+  // proxies treat those extras as a GPT Image 2.6 request and inject complexity:"medium".
   if (!supportsComplexity) {
     for (const key of IMAGE_AUTO_FIELDS) if (next[key] === "auto") delete next[key];
+    if (next.background === "opaque") delete next.background;
   }
   return next;
 }
@@ -97,8 +113,20 @@ export function sanitizeCodexImageRequest(model: string, payload: JsonObject): J
 export function compactCodexImageRequest(payload: JsonObject): JsonObject | undefined {
   const next: JsonObject = {};
   for (const key of IMAGE_COMPAT_FIELDS) if (payload[key] != null) next[key] = payload[key];
+  if (payload.background === "transparent") next.background = "transparent";
   if (next.prompt == null && next.image == null && next.images == null) return;
   return Object.keys(payload).some((key) => !(key in next)) ? next : undefined;
+}
+
+/** Some proxies still inject complexity for model id gpt-image-2 even after extras are stripped. */
+export function complexityModelFallback(model: string, payload: JsonObject, status: number, body: Buffer): JsonObject | undefined {
+  if (unsupportedImageRequestParam(status, body) !== "complexity") return;
+  if ("complexity" in payload) return;
+  if (!GPT_IMAGE_2_BASE.test(model)) return;
+  const next: JsonObject = { model: "gpt-image-1.5" };
+  for (const key of IMAGE_COMPAT_FIELDS) if (key !== "model" && payload[key] != null) next[key] = payload[key];
+  if (payload.background === "transparent") next.background = "transparent";
+  return next;
 }
 
 export function unsupportedImageRequestParam(status: number, body: Buffer): string | undefined {
@@ -480,6 +508,14 @@ export async function startLlmGateway(provider: GatewayProvider): Promise<{ url:
         const compact = compactCodexImageRequest(payload);
         if (compact) {
           payload = compact;
+          upstream = await forward(Buffer.from(JSON.stringify(payload)));
+          responseBody = Buffer.from(await upstream.arrayBuffer());
+        }
+      }
+      if (upstream.status >= 400) {
+        const fallback = complexityModelFallback(model, payload, upstream.status, responseBody);
+        if (fallback) {
+          payload = fallback;
           upstream = await forward(Buffer.from(JSON.stringify(payload)));
           responseBody = Buffer.from(await upstream.arrayBuffer());
         }
