@@ -48,7 +48,7 @@ import { createWorkspacePermissionHandler } from "./permissions.js";
 import { browserPool, createBrowserUseTool } from "./browser.js";
 import { createAgentResourceTools } from "./agentResources.js";
 import { effectiveMcpServers } from "./mcpServers.js";
-import { enabledSkillDirectories } from "./skills.js";
+import { enabledSkillDirectories, engineSystemSkillsDirectory } from "./skills.js";
 import { getUserRole } from "./auth.js";
 import { selectImageGenerationProvider } from "./imageGeneration.js";
 
@@ -777,6 +777,7 @@ export class CopilotManager {
         ...createAgentResourceTools({
           workspacePath: project.path,
           canManagePlatform: () => getUserRole(actorId || ownerId) === "admin",
+          engineSkillsDirectory: engineSystemSkillsDirectory(thread.runtime, thread.id),
           onChanged: async (scope) => {
             await this.reloadResourceConfiguration(scope, thread.projectId);
             this.resourcesChanged(scope);

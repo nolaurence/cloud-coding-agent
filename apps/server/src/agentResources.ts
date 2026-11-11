@@ -10,6 +10,7 @@ import {
   deleteScopedSkill,
   getScopedSkill,
   listScopedSkills,
+  missingSkillError,
   saveScopedSkill,
 } from "./skills.js";
 
@@ -32,6 +33,7 @@ export interface AgentResourceToolOptions {
   workspacePath: string;
   canManagePlatform: () => boolean;
   onChanged: (scope: ResourceScope) => Promise<void> | void;
+  engineSkillsDirectory?: string;
 }
 
 function requirePlatformWrite(scope: ResourceScope, canManagePlatform: () => boolean): void {
@@ -51,7 +53,7 @@ const SCOPE = { type: "string", enum: ["platform", "workspace"] } as const;
 
 export function createAgentResourceTools(options: AgentResourceToolOptions): [Tool<SkillToolArgs>, Tool<McpToolArgs>] {
   const skillTool = defineTool<SkillToolArgs>("manage_skills", {
-    description: "查询、创建、更新或删除平台级和当前 workspace 级 Skill。平台写操作仅管理员可用。",
+    description: "查询、创建、更新或删除平台级和当前 workspace 级 Skill。平台写操作仅管理员可用。Codex 内置技能（imagegen、openai-docs）在会话 $CODEX_HOME/skills/.system 下，不在 git 工作区中，可用 get 读取内容。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -67,14 +69,18 @@ export function createAgentResourceTools(options: AgentResourceToolOptions): [To
     defer: "never",
     handler: async (args) => {
       const workspace = args.scope === "workspace" ? options.workspacePath : undefined;
+      const extra = options.engineSkillsDirectory ? [options.engineSkillsDirectory] : [];
       if (args.action === "list") {
-        return JSON.stringify(listScopedSkills(args.scope, workspace).map(skillResult), null, 2);
+        return JSON.stringify(listScopedSkills(args.scope, workspace, extra).map(skillResult), null, 2);
       }
       if (!args.name) throw new Error("该操作需要技能名称");
       if (args.action === "get") {
-        const skill = getScopedSkill(args.scope, args.name, workspace);
-        if (!skill) throw new Error("技能不存在");
-        return JSON.stringify(skillResult(skill), null, 2);
+        const skill = getScopedSkill(args.scope, args.name, workspace, extra);
+        if (!skill) throw missingSkillError(args.name, extra);
+        const visible = skillResult(skill);
+        return JSON.stringify(visible && extra.some((dir) => skill.directory.startsWith(dir))
+          ? { ...visible, location: "engine-system", note: "该技能是引擎内置技能，路径不在 git 工作区中" }
+          : visible, null, 2);
       }
       requirePlatformWrite(args.scope, options.canManagePlatform);
       if (args.action === "delete") {

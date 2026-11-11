@@ -15,6 +15,8 @@ import time
 ROOT = Path(__file__).resolve().parent / "workspaces"
 IMAGE = "ghcr.io/converge-ai-labs/a13n-sandbox:0.3.0"
 LIMIT = 64 * 1024 * 1024
+MAX_FILE = 8 * 1024 * 1024
+MAX_FILES = 10000
 OUTPUT_LIMIT = 256 * 1024
 POLICY_FILE = Path(__file__).with_name("dockerSandboxPolicy.json")
 if not POLICY_FILE.exists():  # Repository checkout; the installer copies the same file beside the gateway.
@@ -66,7 +68,8 @@ def identifier(value):
 
 def ignored(name, directory=False):
     parts = name.split("/")
-    if any(part in POLICY["directories"] or
+    prefixes = POLICY.get("directoryPrefixes", [])
+    if any(part in POLICY["directories"] or any(part.startswith(prefix) for prefix in prefixes) or
            ((directory or index < len(parts) - 1) and any(part.endswith(s) for s in POLICY["directorySuffixes"]))
            for index, part in enumerate(parts)):
         return True
@@ -109,15 +112,17 @@ def snapshot(root):
                 continue
             safe_path(root, relative)
             size = file.stat().st_size
-            total += size
-            if size > 8 * 1024 * 1024 or total > LIMIT or len(files) >= 10000:
+            if size > MAX_FILE:
+                continue
+            if total + size > LIMIT or len(files) >= MAX_FILES:
                 raise ValueError("Workspace synchronization limit exceeded (8 MiB/file, 64 MiB total, 10000 files)")
             # O_NOFOLLOW closes the symlink race; code containers have already exited on export.
             fd = os.open(file, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
             with os.fdopen(fd, "rb") as stream:
-                data = stream.read(8 * 1024 * 1024 + 1)
-            if len(data) > 8 * 1024 * 1024:
-                raise ValueError("Workspace file grew beyond synchronization limit")
+                data = stream.read(MAX_FILE + 1)
+            if len(data) > MAX_FILE:
+                continue
+            total += size
             files[relative] = {"data": base64.b64encode(data).decode(), "hash": hashlib.sha256(data).hexdigest(), "executable": bool(file.stat().st_mode & 0o111)}
     return files
 
@@ -150,19 +155,21 @@ def run_locked(request, workspace):
     if workspace.parent.resolve() != ROOT.resolve() or workspace.is_symlink():
         raise ValueError("Invalid sandbox workspace directory")
     dirty = ROOT / (workspace.name + ".dirty")
-    if dirty.exists():
-        raise ValueError("Previous workspace export failed; recover remote files before retrying: " + str(workspace))
     incoming = request["files"]
-    if not isinstance(incoming, dict) or len(incoming) > 10000:
+    if not isinstance(incoming, dict) or len(incoming) > MAX_FILES:
         raise ValueError("Invalid workspace files")
     decoded, total = {}, 0
     for name, entry in incoming.items():
         target = safe_path(workspace, name)
         data = base64.b64decode(entry["data"], validate=True)
         total += len(data)
-        if len(data) > 8 * 1024 * 1024 or total > LIMIT:
+        if len(data) > MAX_FILE or total > LIMIT:
             raise ValueError("Workspace synchronization limit exceeded")
         decoded[name] = (target, data, entry.get("executable", False))
+    if dirty.exists():
+        # Keep the dirty marker until this run exports successfully. Recovered
+        # bytes live in `decoded` so discard_tree cannot drop unsynced source.
+        merge_recovered_source(workspace, decoded)
     code = request["code"]
     if not isinstance(code, str) or not code.strip() or len(code.encode()) > 256 * 1024:
         raise ValueError("Invalid code block")
@@ -200,6 +207,40 @@ def run_locked(request, workspace):
         raise RuntimeError("Workspace cleanup failed; recover exported changes from " + str(recovery)) from error
     dirty.unlink()
     return result
+
+
+def merge_recovered_source(workspace, decoded):
+    """Overlay unsynchronized remote source onto the next run without executing user code."""
+    if not workspace.exists():
+        return
+    if workspace.is_symlink() or workspace.parent.resolve() != ROOT.resolve():
+        raise ValueError("Invalid sandbox workspace directory")
+    prune_generated(workspace)
+    for name, entry in snapshot(workspace).items():
+        data = base64.b64decode(entry["data"], validate=True)
+        decoded[name] = (safe_path(workspace, name), data, entry.get("executable", False))
+
+
+def recover(request):
+    import fcntl
+    workspace = ROOT / identifier(request["workspace"])
+    ROOT.mkdir(parents=True, exist_ok=True)
+    with open(ROOT / (workspace.name + ".lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return recover_locked(request, workspace)
+
+
+def recover_locked(request, workspace):
+    if request.get("workspace_policy_version") != POLICY["version"]:
+        raise ValueError("Sandbox workspace policy mismatch; update both the CCA application and sandbox gateway")
+    if workspace.parent.resolve() != ROOT.resolve() or workspace.is_symlink():
+        raise ValueError("Invalid sandbox workspace directory")
+    files = {}
+    if workspace.exists():
+        prune_generated(workspace)
+        files = snapshot(workspace)
+    return {"stdout": "", "stderr": "", "exitCode": 0, "timedOut": False, "truncated": False,
+            "files": files, "deleted": [], "recovered": True}
 
 
 def discard_tree(root):
@@ -315,6 +356,8 @@ def main():
         return {"cancelled": True}
     if action == "run":
         return run(request)
+    if action == "recover":
+        return recover(request)
     raise ValueError("Unknown sandbox action")
 
 

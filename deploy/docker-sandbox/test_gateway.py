@@ -43,7 +43,7 @@ class WorkspaceTests(unittest.TestCase):
         self.addCleanup(docker_patch.stop)
         self.workspace = self.root / ("a" * 32)
         self.dirty = self.root / (self.workspace.name + ".dirty")
-        self.request = {"workspace_policy_version": 2, "run": "b" * 32, "code": "print('ok')",
+        self.request = {"workspace_policy_version": 3, "run": "b" * 32, "code": "print('ok')",
                         "files": {"nested/src/main.py": entry("source")}}
 
     def test_nested_language_filter_matches_upload_policy(self):
@@ -114,26 +114,76 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(self.dirty.exists())
 
     def test_failed_export_preserves_source_for_recovery_but_prunes_caches(self):
+        real_snapshot = gateway.snapshot
+        failed = {"once": False}
+
         def execute(request, workspace, code, timeout):
             for name in FIXTURES["generated"]:
                 write(workspace, name)
-            with write(workspace, "large-source.dat").open("wb") as file:
-                file.truncate(9 * 1024 * 1024)
             write(workspace, "nested/src/main.py", "unsynchronized")
             return output()
 
-        with patch.object(gateway, "execute_code", side_effect=execute):
+        def fail_first_snapshot(root):
+            if not failed["once"]:
+                failed["once"] = True
+                raise ValueError("Workspace synchronization limit exceeded (8 MiB/file, 64 MiB total, 10000 files)")
+            return real_snapshot(root)
+
+        with patch.object(gateway, "execute_code", side_effect=execute), patch.object(gateway, "snapshot", side_effect=fail_first_snapshot):
             with self.assertRaisesRegex(ValueError, "limit exceeded"):
                 gateway.run_locked(self.request, self.workspace)
         self.assertTrue(self.dirty.exists())
         self.assertEqual((self.workspace / "nested/src/main.py").read_text(), "unsynchronized")
-        self.assertTrue((self.workspace / "large-source.dat").exists())
         for name in FIXTURES["generated"]:
             self.assertFalse((self.workspace / name).exists(), name)
-        with patch.object(gateway, "execute_code") as execute:
-            with self.assertRaisesRegex(ValueError, "recover remote files"):
-                gateway.run_locked(self.request, self.workspace)
-            execute.assert_not_called()
+
+        recovered = gateway.recover_locked({"workspace_policy_version": 3, "workspace": self.workspace.name}, self.workspace)
+        self.assertEqual(recovered["files"]["nested/src/main.py"]["data"], entry("unsynchronized")["data"])
+        self.assertTrue(self.dirty.exists(), "recover must not drop the dirty marker before source is rewritten")
+
+        def cleanup(request, workspace, code, timeout):
+            self.assertEqual((workspace / "nested/src/main.py").read_text(), "unsynchronized")
+            write(workspace, "nested/src/main.py", "recovered")
+            return output()
+
+        with patch.object(gateway, "execute_code", side_effect=cleanup):
+            result = gateway.run_locked({**self.request, "code": "print('cleanup')"}, self.workspace)
+        self.assertEqual(result["files"]["nested/src/main.py"]["data"], entry("recovered")["data"])
+        self.assertFalse(self.dirty.exists())
+        self.assertFalse(self.workspace.exists())
+
+    def test_leftover_dirty_workspace_is_not_blocked_for_cleanup(self):
+        write(self.workspace, "nested/src/main.py", "unsynchronized")
+        write(self.workspace, ".codex-tmp/image-validation/pkg.js", "cache")
+        self.dirty.touch()
+
+        def cleanup(request, workspace, code, timeout):
+            self.assertEqual((workspace / "nested/src/main.py").read_text(), "unsynchronized")
+            self.assertFalse((workspace / ".codex-tmp").exists())
+            write(workspace, "nested/src/main.py", "cleaned")
+            return output()
+
+        with patch.object(gateway, "execute_code", side_effect=cleanup):
+            result = gateway.run_locked({**self.request, "code": "print('rm -rf /tmp/.npm')"}, self.workspace)
+        self.assertEqual(result["files"]["nested/src/main.py"]["data"], entry("cleaned")["data"])
+        self.assertFalse(self.dirty.exists())
+
+    def test_temp_caches_and_oversize_files_are_skipped_instead_of_failing_export(self):
+        def execute(request, workspace, code, timeout):
+            write(workspace, ".codex-tmp/image-validation/node_modules/pkg.js", "x" * 100)
+            write(workspace, ".codex-tmp/tailwind-check3.mjs")
+            write(workspace, ".acl-recovery/acl-backup-test.json", "{}")
+            huge = write(workspace, "payload.bin")
+            with huge.open("wb") as file:
+                file.truncate(9 * 1024 * 1024)
+            write(workspace, "nested/src/main.py", "edited")
+            return output()
+
+        with patch.object(gateway, "execute_code", side_effect=execute):
+            result = gateway.run_locked(self.request, self.workspace)
+        self.assertEqual(list(result["files"]), ["nested/src/main.py"])
+        self.assertFalse(self.dirty.exists())
+        self.assertFalse(self.workspace.exists())
 
     def test_cleanup_failure_preserves_complete_export_even_after_partial_removal(self):
         def execute(request, workspace, code, timeout):
@@ -153,7 +203,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_old_clients_and_invalid_requests_cannot_reset_workspace(self):
         source = write(self.workspace, "keep.txt", "keep")
-        for changes in [{"workspace_policy_version": 1}, {"code": ""},
+        for changes in [{"workspace_policy_version": 2}, {"code": ""},
                         {"files": {"apps/web/node_modules/x": entry("invalid")}}]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 gateway.run_locked({**self.request, **changes}, self.workspace)

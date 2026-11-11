@@ -142,6 +142,30 @@ export function codexProviderConfigToml(provider: JsonObject): string {
   return lines.join("\n") + "\n";
 }
 
+/** Link CCA skills into $CODEX_HOME/skills without wiping Codex's bundled `.system` cache. */
+export function prepareCodexSkillHome(home: string, skillDirectories: string[] = [], disabledSkills: string[] = []) {
+  const skillsHome = path.join(home, "skills");
+  fs.mkdirSync(skillsHome, { recursive: true });
+  const linked = new Set<string>();
+  for (const directory of skillDirectories) {
+    if (!fs.existsSync(directory)) continue;
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory() || disabledSkills.includes(entry.name)) continue;
+      const source = fs.realpathSync(path.join(directory, entry.name));
+      if (!fs.existsSync(path.join(source, "SKILL.md"))) continue;
+      const target = path.join(skillsHome, entry.name);
+      if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+      fs.symlinkSync(source, target, "junction");
+      linked.add(entry.name);
+    }
+  }
+  for (const name of disabledSkills) fs.rmSync(path.join(skillsHome, name), { recursive: true, force: true });
+  for (const entry of fs.readdirSync(skillsHome)) {
+    if (entry === ".system" || linked.has(entry)) continue;
+    fs.rmSync(path.join(skillsHome, entry), { recursive: true, force: true });
+  }
+}
+
 function writeProviderConfig(home: string, provider: JsonObject | undefined) {
   const file = path.join(home, "config.toml");
   if (!provider) {
@@ -381,19 +405,7 @@ export class CodexSession implements AgentSession {
         : { ...shared, url: server.url, http_headers: server.headers ?? {} };
     }
     overrides.mcp_servers = mcp;
-    const skillsHome = path.join(this.home, "skills");
-    fs.mkdirSync(skillsHome, { recursive: true });
-    for (const entry of fs.readdirSync(skillsHome)) fs.rmSync(path.join(skillsHome, entry), { recursive: true, force: true });
-    for (const directory of this.config.skillDirectories ?? []) {
-      if (!fs.existsSync(directory)) continue;
-      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-        if (!entry.isDirectory() || this.config.disabledSkills?.includes(entry.name)) continue;
-        const source = fs.realpathSync(path.join(directory, entry.name));
-        if (!fs.existsSync(path.join(source, "SKILL.md"))) continue;
-        const target = path.join(skillsHome, entry.name);
-        if (!fs.existsSync(target)) fs.symlinkSync(source, target, "junction");
-      }
-    }
+    prepareCodexSkillHome(this.home, this.config.skillDirectories ?? [], this.config.disabledSkills ?? []);
     const provider = this.config.provider;
     try {
       this.sandboxServer = await startDockerSandboxServer(this.sessionId, this.cwd, this.permissionMode === "full");

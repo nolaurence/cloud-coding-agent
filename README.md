@@ -12,7 +12,7 @@
 - **会话管理**:侧栏每个工作区默认展示 6 个会话,可展开/收起和置顶;会话删除改为归档,「设置 → 归档对话」按工作区分组、按归档时间倒序展示,归档满 30 天后自动删除
 - **模型配置**:支持 OpenAI(Chat Completions)与 OpenAI Responses 两种 wire 协议,以及 Azure 的 OpenAI 兼容接口;BYOK,会话内可切换同一提供方的模型。暂不支持 Anthropic 原生 Messages 协议
 - **MCP 模块**:本地 stdio / 远程 HTTP MCP 服务器管理,支持平台级配置和 workspace 根目录 `.mcp.json`,按工具白名单启用
-- **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用
+- **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用。Codex 内置技能(`imagegen`、`openai-docs`)在会话 `$CODEX_HOME/skills/.system` 下,不在 git 工作区;可用 `manage_skills` 读取,不要按仓库相对路径去打开 `SKILL.md`
 - **插件市场**:兼容 [Agent Plugins 1.0.0](https://agent-plugins.org/specification) 标准(`plugin.json` + `skills/` + `mcp.json`),也兼容 Claude/Codex/Copilot 布局的插件目录;内置一方法插件与官方仓库精选,并扫描仓库 `plugins/` 目录作为「本地仓库」市场(默认未安装);支持从 git 地址、`owner/repo`、`local:<名>` 或本地目录安装,插件贡献的技能与 MCP 服务器自动进入会话,可随时停用/卸载
 - **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
 - **文件操作**:文件面板的文件树、搜索结果和预览标题支持右键下载、删除。PNG、JPEG、GIF、WebP、BMP、AVIF、ICO 图片可直接预览；下载保留原始字节，不受文本预览限制；删除需二次确认及工作区/会话所有者权限，不支持递归删除目录。
@@ -173,7 +173,7 @@ docker compose -f docker-compose-prod.yml up -d --build
 
 推荐在「设置 → 模型服务」添加 OpenAI 兼容服务,Base URL 填 API 根路径(例如含 `/v1`),选择 `completions` 或 `responses`,再设置默认模型。Chat 上游必须支持 `stream: true` 和 function tool calling;网关转换文字、图片输入、推理增量、并行工具调用和工具结果,并把 Codex 的 free-form `apply_patch` 包装成带 `input` 字符串的 JSON 函数参数。兼容 Codex 的客户端 `tool_search`、搜索返回的 MCP 工具和命名空间调用。工具参数截断或流异常会报错,不会伪装成成功。手动压缩使用 Codex 的本地摘要流程,不伪造远程加密压缩结果。
 
-图片生成使用 Codex 0.167 自带的 `image_gen` 工具(`features.image_generation`,默认随设置开关启用),不再注册自定义 `cca_imagegen` MCP。自定义模型服务会给 Codex 的 `cca` provider 加上 `x-openai-actor-authorization` 头,让原生生图工具出现在会话里,并由 LLM 网关把 `/images/generations`(及编辑接口)转到已配置的 GPT Image 提供商;`gpt-image` / `gpt-image-*` 模型的选择规则不变:优先当前聊天提供商,否则按配置顺序取第一个匹配项。原生 Codex 账号则走 ChatGPT 生图,不需要额外 `OPENAI_API_KEY`。生成结果仍作为助手图片附件保存,支持聊天内预览、刷新恢复和 QQ 私聊/群聊/频道原生图片回传;单张图片限制 10 MB,计入现有图片存储额度。DSH 运行时没有对等的原生生图工具,该开关对 DSH 会话无效果。
+图片生成使用 Codex 0.167 自带的 `image_gen` 工具(`features.image_generation`,默认随设置开关启用),不再注册自定义 `cca_imagegen` MCP。自定义模型服务会给 Codex 的 `cca` provider 加上 `x-openai-actor-authorization` 头,让原生生图工具出现在会话里,并由 LLM 网关把 `/images/generations`(及编辑接口)转到已配置的 GPT Image 提供商;`gpt-image` / `gpt-image-*` 模型的选择规则不变:优先当前聊天提供商,否则按配置顺序取第一个匹配项。Codex 0.167 的工具调用即使只传 `prompt` 和 `transparent_background: false`,HTTP 体仍会带上硬编码模型 `gpt-image-2` 以及 `quality/size: "auto"`、`background: "opaque"`;网关会改写为已配置的 GPT Image 模型,并去掉 1.x/2 代理会据此注入 `complexity: "medium"` 的字段,必要时再压缩重试或回退到 `gpt-image-1.5`。原生 Codex 账号则走 ChatGPT 生图,不需要额外 `OPENAI_API_KEY`。生成结果仍作为助手图片附件保存,支持聊天内预览、刷新恢复和 QQ 私聊/群聊/频道原生图片回传;单张图片限制 10 MB,计入现有图片存储额度。DSH 运行时没有对等的原生生图工具,该开关对 DSH 会话无效果。
 
 不保证所有 OpenAI 兼容服务的扩展字段兼容;暂不支持依赖 `previous_response_id` 的服务端状态、原生 Anthropic、跨协议加密推理历史、Copilot CLI 插件市场和 Ultra 子代理模式。扩展请使用插件(Agent Plugins)、Skill 或 MCP 管理。自动提交信息通过自定义模型服务执行纯文本请求,不开放工具;原生 Codex 账号暂需手动填写提交信息。上游 API key 保留在服务端网关,子进程仅持有会话级随机网关凭证;本地网关不对外发布端口。
 

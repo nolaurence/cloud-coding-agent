@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ResourceScope, SkillInfo } from "@cca/protocol";
 import { pluginSkillDirectories } from "./agentPlugins.js";
-import { PLUGIN_DATA_DIR, SKILLS_DIR } from "./env.js";
+import { DATA_DIR, PLUGIN_DATA_DIR, SKILLS_DIR } from "./env.js";
 import { store } from "./store.js";
 
 const WORKSPACE_SKILLS_PATH = path.join(".github", "skills");
@@ -61,16 +61,22 @@ function workspaceSkillsDir(workspacePath: string): string {
   return target;
 }
 
-function scopeDirectories(scope: ResourceScope, workspacePath?: string): string[] {
-  if (scope === "workspace") {
-    if (!workspacePath) throw new Error("工作区技能操作缺少工作区路径");
-    return [workspaceSkillsDir(workspacePath)];
-  }
-  return [SKILLS_DIR, ...store.settings.skillDirectories, ...pluginSkillDirectories()];
+export function engineSystemSkillsDirectory(runtime: string | undefined, threadId: string): string | undefined {
+  if (!threadId || !/^[A-Za-z0-9-]{1,100}$/.test(threadId)) return;
+  if (runtime === "codex") return path.join(DATA_DIR, "codex-home", threadId, "skills", ".system");
+  if (runtime === "dsh") return path.join(DATA_DIR, "dsh-home", threadId, "skills", ".system");
 }
 
-function scanSkills(scope: ResourceScope, workspacePath?: string): SkillInfo[] {
-  const dirs = scopeDirectories(scope, workspacePath);
+function scopeDirectories(scope: ResourceScope, workspacePath?: string, extraDirectories: string[] = []): string[] {
+  if (scope === "workspace") {
+    if (!workspacePath) throw new Error("工作区技能操作缺少工作区路径");
+    return [workspaceSkillsDir(workspacePath), ...extraDirectories];
+  }
+  return [SKILLS_DIR, ...store.settings.skillDirectories, ...pluginSkillDirectories(), ...extraDirectories];
+}
+
+function scanSkills(scope: ResourceScope, workspacePath?: string, extraDirectories: string[] = []): SkillInfo[] {
+  const dirs = scopeDirectories(scope, workspacePath, extraDirectories);
   const seen = new Set<string>();
   const skills: SkillInfo[] = [];
 
@@ -122,17 +128,29 @@ export function listSkills(): SkillInfo[] {
   return scanSkills("platform");
 }
 
-export function listScopedSkills(scope: ResourceScope, workspacePath?: string): SkillInfo[] {
-  return scanSkills(scope, workspacePath);
+export function listScopedSkills(scope: ResourceScope, workspacePath?: string, extraDirectories: string[] = []): SkillInfo[] {
+  return scanSkills(scope, workspacePath, extraDirectories);
+}
+
+export function missingSkillError(name: string, extraDirectories: string[] = []): Error {
+  const systemHint = extraDirectories.some((dir) => dir.includes(`${path.sep}.system`) || dir.endsWith(".system"));
+  return new Error(systemHint
+    ? `技能 ${name} 不存在。Codex 内置技能（imagegen、openai-docs）位于会话 $CODEX_HOME/skills/.system/<name>/SKILL.md，不在 git 工作区中；若该目录尚未生成，请先完成一次 Codex 会话启动后再查询。`
+    : `技能 ${name} 不存在`);
 }
 
 export function getScopedSkill(
   scope: ResourceScope,
   name: string,
   workspacePath?: string,
+  extraDirectories: string[] = [],
 ): SkillInfo | undefined {
   const normalized = normalizeSkillName(name);
-  return scanSkills(scope, workspacePath).find((skill) => skill.name === normalized);
+  const found = scanSkills(scope, workspacePath, extraDirectories).find((skill) => skill.name === normalized);
+  if (found) return found;
+  if (scope === "workspace" && extraDirectories.length) {
+    return scanSkills("platform", undefined, extraDirectories).find((skill) => skill.name === normalized);
+  }
 }
 
 function managedSkillDir(scope: ResourceScope, name: string, workspacePath?: string): string {
@@ -153,7 +171,7 @@ export function saveScopedSkill(
   mode: "upsert" | "create" | "update" = "upsert",
 ): SkillInfo {
   const normalized = normalizeSkillName(name);
-  const existing = getScopedSkill(scope, normalized, workspacePath);
+  const existing = getScopedSkill(scope, normalized, workspacePath, []);
   if (mode === "create" && existing) throw new Error("技能已存在");
   if (mode === "update" && !existing) throw new Error("技能不存在");
   if (existing && scope === "platform" && !existing.builtin) {

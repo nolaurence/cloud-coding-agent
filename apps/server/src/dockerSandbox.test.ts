@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import fixtures from "./dockerSandboxFixtures.json" with { type: "json" };
 import { spawnSync } from "node:child_process";
-import { applySandboxChanges, DockerSandbox, gitSnapshotNames, readDockerSandboxConfig, sandboxSyncLimits, snapshotWorkspace, validateWorkspaceName, type SandboxResult } from "./dockerSandbox.js";
+import { applyRecoveredWorkspace, applySandboxChanges, DockerSandbox, gitSnapshotNames, isPreviousExportFailed, readDockerSandboxConfig, sandboxSyncLimits, snapshotWorkspace, validateWorkspaceName, type SandboxResult } from "./dockerSandbox.js";
 
 const result = (files: Record<string, { data: string; executable: boolean }>, deleted: string[] = []): SandboxResult => ({
   stdout: "", stderr: "", exitCode: 0, timedOut: false, truncated: false, files, deleted,
@@ -57,6 +57,30 @@ test("sync refuses traversal, reserved names, links and concurrent editor change
   await fs.symlink(outside, path.join(root, "link"), "junction");
   await assert.rejects(applySandboxChanges(root, before, result({ "link/escape": entry("escape") })), /符号链接/);
   assert.deepEqual(await fs.readdir(outside), []);
+});
+
+test("temp, recovery and validation files do not fail snapshot or conflict apply", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-sync-temp-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, ".codex-tmp", "image-validation"), { recursive: true });
+  await fs.writeFile(path.join(root, ".codex-tmp", "tailwind-check3.mjs"), "local temp");
+  await fs.mkdir(path.join(root, ".acl-recovery"));
+  await fs.writeFile(path.join(root, ".acl-recovery", "acl-backup-1.json"), "{}");
+  await fs.writeFile(path.join(root, "keep.ts"), "export {}\n");
+  const before = await snapshotWorkspace(root);
+  assert.deepEqual(Object.keys(before).sort(), ["keep.ts"]);
+  await applySandboxChanges(root, before, result({
+    "keep.ts": entry("updated"),
+    ".codex-tmp/tailwind-check3.mjs": entry("remote temp"),
+    ".acl-recovery/acl-backup-1.json": entry("remote recovery"),
+  }));
+  assert.equal(await fs.readFile(path.join(root, "keep.ts"), "utf8"), "updated");
+  assert.equal(await fs.readFile(path.join(root, ".codex-tmp", "tailwind-check3.mjs"), "utf8"), "local temp");
+  assert.equal(await fs.readFile(path.join(root, ".acl-recovery", "acl-backup-1.json"), "utf8"), "{}");
+  await applyRecoveredWorkspace(root, { "apps/server/src/imageGeneration.ts": entry("recovered") });
+  assert.equal(await fs.readFile(path.join(root, "apps/server/src/imageGeneration.ts"), "utf8"), "recovered");
+  assert.equal(isPreviousExportFailed(new Error("Docker 沙箱：Previous workspace export failed; recover remote files before retrying: /tmp/ws")), true);
+  assert.equal(isPreviousExportFailed(new Error("unrelated")), false);
 });
 
 test("gitignored files, extra editor dirs and oversized blobs are skipped instead of failing the snapshot", async t => {
@@ -127,8 +151,8 @@ test("nested Python, Node, Go and Java projects synchronize source but never gen
   const before = await snapshotWorkspace(root);
   assert.deepEqual(Object.keys(before).sort(), [...fixtures.source].sort());
   for (const name of fixtures.generated) {
-    await assert.rejects(applySandboxChanges(root, before, result({ [name]: entry("remote cache") })), /无效.*路径/);
-    await assert.rejects(applySandboxChanges(root, before, result({}, [name])), /无效.*路径/);
+    await applySandboxChanges(root, before, result({ [name]: entry("remote cache") }));
+    await applySandboxChanges(root, before, result({}, [name]));
     assert.equal(await fs.readFile(path.join(root, name), "utf8"), name, "local caches must remain untouched");
   }
   await applySandboxChanges(root, before, result({ "services/java/src/Main.java": entry("updated") }));

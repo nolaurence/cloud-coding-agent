@@ -1,12 +1,14 @@
 {
-  "version": 2,
+  "version": 3,
   "directories": [
     ".git", ".cache", "dist", "build", "coverage",
     "node_modules", ".next", ".nuxt", ".output", ".svelte-kit", ".angular", ".parcel-cache", ".turbo", ".npm", ".pnpm-store",
     ".venv", "venv", "__pycache__", "__pypackages__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".pytype", ".tox", ".nox", ".hypothesis", "htmlcov",
     ".gocache", ".gomodcache",
-    ".gradle", "target", "out"
+    ".gradle", "target", "out",
+    ".codex-tmp", ".cursor", ".acl-recovery", ".dsh-acl-recovery"
   ],
+  "directoryPrefixes": [".codex-test-"],
   "directorySuffixes": [".egg-info", ".dist-info"],
   "files": [".coverage", ".pnp.cjs", ".pnp.loader.mjs", ".pnp.data.json"],
   "fileSuffixes": [".pyc", ".pyo", ".class", ".tsbuildinfo", ".test", ".test.exe"],
