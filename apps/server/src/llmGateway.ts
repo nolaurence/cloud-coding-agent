@@ -1,5 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
+import { DEFAULT_COMPLEXITY_IMAGE_MODEL, isComplexityImageModel } from "./imageGeneration.js";
+
+export { DEFAULT_COMPLEXITY_IMAGE_MODEL };
 
 export type JsonObject = Record<string, unknown>;
 export function object(value: unknown): JsonObject {
@@ -23,6 +26,7 @@ export interface GatewayProvider {
   azure?: { apiVersion?: string };
   reasoningEffort?: "max";
   imageGenerationModel?: string;
+  imageGenerationComplexityModel?: string;
   imageGenerationBaseUrl?: string;
   imageGenerationApiKey?: string;
 }
@@ -55,7 +59,6 @@ const IMAGE_REQUEST_FIELDS = new Set([
   "output_format", "output_compression", "moderation", "user",
   "partial_images", "stream", "image", "images", "mask", "input_fidelity",
 ]);
-const COMPLEXITY_IMAGE_MODEL = /gpt-image-2\.6(?:-|$)/i;
 const EXTENDED_QUALITY_IMAGE_MODEL = /gpt-image-2\.[5-9]/i;
 const BASE_IMAGE_QUALITY = new Set(["low", "medium", "high", "auto"]);
 const EXTENDED_IMAGE_QUALITY = new Set(["low", "medium", "high", "auto", "xhigh", "max"]);
@@ -63,7 +66,6 @@ const EXTENDED_IMAGE_QUALITY = new Set(["low", "medium", "high", "auto", "xhigh"
 const IMAGE_COMPAT_FIELDS = ["prompt", "model", "n", "image", "images", "mask"] as const;
 const IMAGE_AUTO_FIELDS = ["quality", "size", "background"] as const;
 const IMAGE_PARAM_IN_MESSAGE = /\b(complexity|quality|size|background|output_format|output_compression|moderation|style)\b/i;
-const GPT_IMAGE_2_BASE = /^gpt-image-2(?![.\d])/i;
 
 /** Codex 0.167 image_gen.imagegen always posts this JSON, even when the tool caller only sent prompt + transparent_background. */
 export function codexImagegenHttpBody(prompt: string, transparentBackground = false): JsonObject {
@@ -86,7 +88,7 @@ export function sanitizeCodexImageRequest(model: string, payload: JsonObject): J
   next.model = model;
   if (payload.transparent_background === true) next.background = "transparent";
   else if (payload.transparent_background === false) delete next.background;
-  const supportsComplexity = COMPLEXITY_IMAGE_MODEL.test(model);
+  const supportsComplexity = isComplexityImageModel(model);
   if (supportsComplexity) {
     if (payload.complexity === "low" || payload.complexity === "medium" || payload.complexity === "high") {
       next.complexity = payload.complexity;
@@ -118,15 +120,42 @@ export function compactCodexImageRequest(payload: JsonObject): JsonObject | unde
   return Object.keys(payload).some((key) => !(key in next)) ? next : undefined;
 }
 
-/** Some proxies still inject complexity for model id gpt-image-2 even after extras are stripped. */
-export function complexityModelFallback(model: string, payload: JsonObject, status: number, body: Buffer): JsonObject | undefined {
+/**
+ * Production 1.x/2 proxies inject complexity:"medium" even after extras are stripped.
+ * Retry on a GPT Image 2.6 model that legally accepts that field.
+ */
+export function complexityCompatibleRetry(
+  currentModel: string,
+  inbound: JsonObject,
+  status: number,
+  body: Buffer,
+  preferredComplexityModel?: string,
+): JsonObject | undefined {
   if (unsupportedImageRequestParam(status, body) !== "complexity") return;
-  if ("complexity" in payload) return;
-  if (!GPT_IMAGE_2_BASE.test(model)) return;
-  const next: JsonObject = { model: "gpt-image-1.5" };
-  for (const key of IMAGE_COMPAT_FIELDS) if (key !== "model" && payload[key] != null) next[key] = payload[key];
-  if (payload.background === "transparent") next.background = "transparent";
+  if (isComplexityImageModel(currentModel)) return;
+  const nextModel = preferredComplexityModel?.trim() && isComplexityImageModel(preferredComplexityModel.trim())
+    ? preferredComplexityModel.trim()
+    : DEFAULT_COMPLEXITY_IMAGE_MODEL;
+  if (nextModel === currentModel) return;
+  const next = sanitizeCodexImageRequest(nextModel, inbound);
+  if (next.complexity == null) next.complexity = "medium";
   return next;
+}
+
+/** Surface the model actually sent upstream so a 400 can be diagnosed. */
+export function annotateImageError(status: number, contentType: string, body: Buffer, model: string): Buffer {
+  if (status < 400 || !contentType.includes("json") || !model) return body;
+  try {
+    const payload = object(JSON.parse(body.toString("utf8")));
+    const error = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error) ? object(payload.error) : payload;
+    const message = String(error.message ?? error.msg ?? "");
+    if (message && !message.includes(model)) error.message = message.replace(/\s*$/, "") + `（实际模型：${model}）`;
+    error.model = model;
+    if (payload.error) payload.error = error;
+    return Buffer.from(JSON.stringify(payload));
+  } catch {
+    return body;
+  }
 }
 
 export function unsupportedImageRequestParam(status: number, body: Buffer): string | undefined {
@@ -478,10 +507,12 @@ export async function startLlmGateway(provider: GatewayProvider): Promise<{ url:
       return;
     }
     const contentType = String(req.headers["content-type"] ?? "application/json");
+    let inbound: JsonObject | undefined;
     let payload: JsonObject | undefined;
     let upstreamBody = body;
     if (contentType.includes("application/json")) {
-      payload = sanitizeCodexImageRequest(model, object(JSON.parse(body.toString("utf8"))));
+      inbound = object(JSON.parse(body.toString("utf8")));
+      payload = sanitizeCodexImageRequest(model, inbound);
       upstreamBody = Buffer.from(JSON.stringify(payload));
     }
     const url = new URL(route, imageApiBase(provider));
@@ -512,18 +543,25 @@ export async function startLlmGateway(provider: GatewayProvider): Promise<{ url:
           responseBody = Buffer.from(await upstream.arrayBuffer());
         }
       }
-      if (upstream.status >= 400) {
-        const fallback = complexityModelFallback(model, payload, upstream.status, responseBody);
-        if (fallback) {
-          payload = fallback;
+      if (upstream.status >= 400 && inbound) {
+        const retry = complexityCompatibleRetry(
+          String(payload.model ?? model),
+          inbound,
+          upstream.status,
+          responseBody,
+          provider.imageGenerationComplexityModel,
+        );
+        if (retry) {
+          payload = retry;
           upstream = await forward(Buffer.from(JSON.stringify(payload)));
           responseBody = Buffer.from(await upstream.arrayBuffer());
         }
       }
     }
     const contentTypeHeader = upstream.headers.get("content-type") ?? "application/json";
+    const outboundModel = String(payload?.model ?? model);
     res.writeHead(upstream.status, { "content-type": contentTypeHeader });
-    res.end(normalizeCodexImageResponse(upstream.status, contentTypeHeader, responseBody));
+    res.end(annotateImageError(upstream.status, contentTypeHeader, normalizeCodexImageResponse(upstream.status, contentTypeHeader, responseBody), outboundModel));
   }
   async function handle(req: IncomingMessage, res: ServerResponse) {
     if (req.headers.authorization !== "Bearer " + token) { res.writeHead(401); res.end(); return; }

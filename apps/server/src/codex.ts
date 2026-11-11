@@ -428,6 +428,7 @@ export class CodexSession implements AgentSession {
           reasoningEffort: String(this.config.reasoningEffort) === "max" ? "max" : undefined,
           ...(imageProvider ? {
             imageGenerationModel: imageProvider.model,
+            imageGenerationComplexityModel: imageProvider.complexityModel,
             imageGenerationBaseUrl: imageProvider.baseUrl,
             imageGenerationApiKey: imageProvider.apiKey,
           } : {}),

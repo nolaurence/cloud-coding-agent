@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { object, responsesToChat, chatToResponses, sseData, startLlmGateway, normalizeCodexImageResponse, sanitizeCodexImageRequest, compactCodexImageRequest, complexityModelFallback, codexImagegenHttpBody, unsupportedImageRequestParam, type JsonObject } from "./llmGateway.js";
+import { object, responsesToChat, chatToResponses, sseData, startLlmGateway, normalizeCodexImageResponse, sanitizeCodexImageRequest, compactCodexImageRequest, complexityCompatibleRetry, annotateImageError, DEFAULT_COMPLEXITY_IMAGE_MODEL, codexImagegenHttpBody, unsupportedImageRequestParam, type JsonObject } from "./llmGateway.js";
 
 function stream(chunks: unknown[]): ReadableStream<Uint8Array> {
   const bytes = new TextEncoder().encode(chunks.map((chunk) => "data: " + (typeof chunk === "string" ? chunk : JSON.stringify(chunk)) + "\r\n\r\n").join(""));
@@ -202,10 +202,16 @@ test("sanitizeCodexImageRequest strips Codex 0.167 opaque-background imagegen bo
   const complexityError = Buffer.from(JSON.stringify({
     error: { message: "Complexity 'medium' is not supported for this image model.", param: "complexity", type: "image_generation_user_error" },
   }));
-  assert.deepEqual(complexityModelFallback("gpt-image-2", { model: "gpt-image-2", prompt: "A cat" }, 400, complexityError), {
-    model: "gpt-image-1.5", prompt: "A cat",
+  assert.deepEqual(complexityCompatibleRetry("gpt-image-1.5", body, 400, complexityError), {
+    prompt: liveCall.prompt, background: "opaque", model: DEFAULT_COMPLEXITY_IMAGE_MODEL, quality: "auto", size: "auto", complexity: "medium",
   });
-  assert.equal(complexityModelFallback("gpt-image-1.5", { model: "gpt-image-1.5", prompt: "A cat" }, 400, complexityError), undefined);
+  assert.deepEqual(complexityCompatibleRetry("gpt-image-2", { model: "gpt-image-2", prompt: "A cat" }, 400, complexityError, "gpt-image-2.6-flare"), {
+    model: "gpt-image-2.6-flare", prompt: "A cat", complexity: "medium",
+  });
+  assert.equal(complexityCompatibleRetry(DEFAULT_COMPLEXITY_IMAGE_MODEL, body, 400, complexityError), undefined);
+  const annotated = object(JSON.parse(annotateImageError(400, "application/json", complexityError, "gpt-image-1.5").toString()));
+  assert.equal(object(annotated.error).message, "Complexity 'medium' is not supported for this image model.（实际模型：gpt-image-1.5）");
+  assert.equal(object(annotated.error).model, "gpt-image-1.5");
 });
 
 test("unsupportedImageRequestParam reads OpenAI image model rejection fields", () => {
@@ -421,7 +427,7 @@ test("gateway forwards the live prompt+transparent_background=false Codex 0.167 
   } finally { await gateway.close(); }
 });
 
-test("gateway falls back from gpt-image-2 to gpt-image-1.5 when a proxy still injects complexity", async (t) => {
+test("gateway retries complexity 400 on GPT Image 2.6 even when the configured model is already 1.5", async (t) => {
   const requests: JsonObject[] = [];
   const upstream = createServer((req, res) => {
     void (async () => {
@@ -430,7 +436,7 @@ test("gateway falls back from gpt-image-2 to gpt-image-1.5 when a proxy still in
       const body = object(JSON.parse(Buffer.concat(chunks).toString()));
       requests.push(body);
       res.setHeader("content-type", "application/json");
-      if (body.model !== "gpt-image-1.5") {
+      if (!/^gpt-image-2\.6/i.test(String(body.model ?? ""))) {
         res.writeHead(400);
         res.end(JSON.stringify({
           error: { message: "Complexity 'medium' is not supported for this image model.", param: "complexity", type: "image_generation_user_error" },
@@ -447,7 +453,7 @@ test("gateway falls back from gpt-image-2 to gpt-image-1.5 when a proxy still in
   const imageBase = "http://127.0.0.1:" + address.port + "/v1";
   const gateway = await startLlmGateway({
     type: "openai", baseUrl: imageBase, apiKey: "chat-key",
-    imageGenerationModel: "gpt-image-2", imageGenerationBaseUrl: imageBase, imageGenerationApiKey: "image-test-key",
+    imageGenerationModel: "gpt-image-1.5", imageGenerationBaseUrl: imageBase, imageGenerationApiKey: "image-test-key",
   });
   try {
     const generated = await fetch(gateway.url + "/images/generations", {
@@ -455,7 +461,80 @@ test("gateway falls back from gpt-image-2 to gpt-image-1.5 when a proxy still in
       body: JSON.stringify(codexImagegenHttpBody("A cat", false)),
     });
     assert.equal(generated.status, 200, await generated.text());
-    assert.deepEqual(requests.at(-1), { model: "gpt-image-1.5", prompt: "A cat" });
+    assert.deepEqual(requests[0], { model: "gpt-image-1.5", prompt: "A cat" });
+    assert.deepEqual(requests.at(-1), {
+      prompt: "A cat", background: "opaque", model: DEFAULT_COMPLEXITY_IMAGE_MODEL, quality: "auto", size: "auto", complexity: "medium",
+    });
+  } finally { await gateway.close(); }
+});
+
+test("image 400 responses name the model actually sent upstream", async (t) => {
+  const upstream = createServer((_req, res) => {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      error: { message: "Complexity 'medium' is not supported for this image model.", param: "complexity", type: "image_generation_user_error" },
+    }));
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => { upstream.closeAllConnections(); upstream.close(() => resolve()); }));
+  const address = upstream.address();
+  assert.ok(address && typeof address !== "string");
+  const imageBase = "http://127.0.0.1:" + address.port + "/v1";
+  const gateway = await startLlmGateway({
+    type: "openai", baseUrl: imageBase, apiKey: "chat-key",
+    imageGenerationModel: "gpt-image-1.5", imageGenerationComplexityModel: "gpt-image-2.6-flare",
+    imageGenerationBaseUrl: imageBase, imageGenerationApiKey: "image-test-key",
+  });
+  try {
+    const generated = await fetch(gateway.url + "/images/generations", {
+      method: "POST", headers: { authorization: "Bearer " + gateway.token, "content-type": "application/json" },
+      body: JSON.stringify(codexImagegenHttpBody("A cat", false)),
+    });
+    assert.equal(generated.status, 400);
+    const payload = object(await generated.json());
+    assert.equal(object(payload.error).model, "gpt-image-2.6-flare");
+    assert.match(String(object(payload.error).message), /实际模型：gpt-image-2\.6-flare/);
+  } finally { await gateway.close(); }
+});
+
+test("gateway sends GPT Image 2.6 Codex extras on the first request when that model is selected", async (t) => {
+  const requests: JsonObject[] = [];
+  const upstream = createServer((req, res) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = object(JSON.parse(Buffer.concat(chunks).toString()));
+      requests.push(body);
+      res.setHeader("content-type", "application/json");
+      if (!/^gpt-image-2\.6/i.test(String(body.model ?? ""))) {
+        res.writeHead(400);
+        res.end(JSON.stringify({
+          error: { message: "Complexity 'medium' is not supported for this image model.", param: "complexity" },
+        }));
+        return;
+      }
+      res.end(JSON.stringify({ created: 1, data: [{ b64_json: "aW1hZ2U=" }] }));
+    })().catch(() => res.destroy());
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => { upstream.closeAllConnections(); upstream.close(() => resolve()); }));
+  const address = upstream.address();
+  assert.ok(address && typeof address !== "string");
+  const imageBase = "http://127.0.0.1:" + address.port + "/v1";
+  const gateway = await startLlmGateway({
+    type: "openai", baseUrl: imageBase, apiKey: "chat-key",
+    imageGenerationModel: DEFAULT_COMPLEXITY_IMAGE_MODEL, imageGenerationBaseUrl: imageBase, imageGenerationApiKey: "image-test-key",
+  });
+  try {
+    const generated = await fetch(gateway.url + "/images/generations", {
+      method: "POST", headers: { authorization: "Bearer " + gateway.token, "content-type": "application/json" },
+      body: JSON.stringify(codexImagegenHttpBody("A cat", false)),
+    });
+    assert.equal(generated.status, 200, await generated.text());
+    assert.equal(requests.length, 1, JSON.stringify(requests));
+    assert.deepEqual(requests[0], {
+      prompt: "A cat", background: "opaque", model: DEFAULT_COMPLEXITY_IMAGE_MODEL, quality: "auto", size: "auto",
+    });
   } finally { await gateway.close(); }
 });
 

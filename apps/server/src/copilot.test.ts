@@ -1915,6 +1915,24 @@ test("native Codex sessions store generated images without a GPT Image provider"
   assert.equal(config.imageGenerationProvider, undefined);
 });
 
+test("configured GPT Image 2.6 is preferred over an earlier 1.5 listing", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.model = { providerId: "chat", modelId: "chat" };
+  store.settings.providers = [
+    { id: "chat", name: "Chat", type: "openai", baseUrl: "https://chat.example.com/v1", models: [{ id: "chat" }, { id: "gpt-image-1.5" }] },
+    { id: "images", name: "Images", type: "openai", baseUrl: "https://images.example.com/v1", models: [{ id: "gpt-image-2.6-sunburst" }] },
+  ];
+  const client = new FakeClient();
+  const manager = new CopilotManager(() => client as unknown as CopilotClient);
+  t.after(() => manager.shutdown());
+  await manager.subscribe(threadId, "admin");
+  const config = client.createdConfigs[0] as { imageGenerationModel?: string; imageGenerationProvider?: { model: string; complexityModel?: string } };
+  assert.equal(config.imageGenerationModel, "gpt-image-2.6-sunburst");
+  assert.equal(config.imageGenerationProvider?.model, "gpt-image-2.6-sunburst");
+  assert.equal(config.imageGenerationProvider?.complexityModel, undefined);
+});
+
 test("configured GPT Image providers enable image generation independently of the chat provider", async (t) => {
   for (const configuration of ["none", "other-provider", "selected-provider", "anthropic", "similar-name"] as const) {
     await t.test(configuration, async (t) => {
