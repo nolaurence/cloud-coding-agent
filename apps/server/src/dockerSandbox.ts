@@ -21,6 +21,7 @@ export interface SandboxResult {
   exitCode: number;
   timedOut: boolean;
   truncated: boolean;
+  errorCode?: string;
   files: Snapshot;
   deleted: string[];
 }
@@ -87,10 +88,10 @@ export function gitSnapshotNames(root: string): string[] | undefined {
 }
 
 export const SANDBOX_INSTRUCTIONS = `本会话使用远端 Docker 工作区 /workspace。所有代码、命令和项目文件操作必须使用 cca_sandbox 的 run_code 工具。
-run_code 接收 JavaScript async 函数体，可在同一代码块内使用 for/while、条件和 Promise.all 调用 tools.exec(command, {cwd?, timeout_ms?})、tools.read_file(path)、tools.write_file(path, content)、tools.list_files(path?)。
+run_code 接收 JavaScript async 函数体，可在同一代码块内使用 for/while、条件和 Promise.all 调用 tools.exec(command, {cwd?, timeout_ms?})、tools.read_file(path)、tools.write_file(path, content)、tools.list_files(path?)、tools.fetch(url, {timeout_ms?})。
 用 print(value) 输出需要反馈给模型的结果，或 return JSON 值；不要每次循环都请求模型。示例：for (const file of await tools.list_files('.')) { print(file); }
 每次执行使用独立 Linux Docker 容器和全新工作目录，源码及普通文件自动同步回工作区；依赖、构建缓存、JS 内存、/tmp 和后台进程均不跨代码块保留。安装依赖、构建和测试必须放在同一个 run_code 中完成，先检查 tools.exec 的 exitCode 再执行后续步骤。
-工作区可能包含多层嵌套或多个工程，先定位 package.json、pyproject.toml/requirements.txt、go.mod/go.work、pom.xml/build.gradle(.kts) 等清单，再用 tools.exec 的 cwd 指定实际工程目录，不要假设工程在 /workspace 根目录。
+工作区可能包含多层嵌套或多个工程，先定位 package.json、pyproject.toml/requirements.txt、go.mod/go.work、pom.xml/build.gradle(.kts) 等清单，再用 tools.exec 的 cwd 指定实际工程目录。会话/宿主工作区路径会自动映射到 /workspace；目录不存在时返回 errorCode=ENOENT 和 "directory does not exist"，子命令超时返回 timedOut=true 且 errorCode=TIMEOUT。
 所有层级的 node_modules、Python 虚拟环境/字节码、Go 模块/编译缓存、Maven/Gradle 构建目录、.codex-tmp / .acl-recovery 等临时目录及通用 dist/build/coverage 等生成物均不参与同步。Git 仓库还会遵循 .gitignore，超过单文件上限的大文件会被跳过而不是让整个工作区失败。导出失败后可继续执行清理或后续代码块，已修改源码会先收回再继续。保留源码、清单、锁文件、Yarn/Maven/Gradle wrapper 和 Go vendor 源码。需要交付的构建产物请在同一代码块内复制到未排除的目录。Git 元数据不在沙箱中，认证 Git 操作使用平台入口。禁止尝试回退到服务端本地命令执行。`;
 
 export async function readDockerSandboxConfig(): Promise<DockerSandboxConfig | undefined> {
@@ -287,7 +288,10 @@ export class DockerSandbox {
       if (this.closed) throw new Error("Docker 沙箱已关闭");
       controller.signal.throwIfAborted();
       dispatched = true;
-      const request = { action: "run", workspace_policy_version: SANDBOX_WORKSPACE_POLICY_VERSION, workspace: this.workspace, run: id, code, timeout_ms: timeoutMs, files: before, network: this.network };
+      const request = {
+        action: "run", workspace_policy_version: SANDBOX_WORKSPACE_POLICY_VERSION, workspace: this.workspace, run: id,
+        code, timeout_ms: timeoutMs, files: before, network: this.network, host_workspace: this.cwd,
+      };
       let result: SandboxResult;
       try {
         result = await invokeSandbox<SandboxResult>(this.config, request);
@@ -310,7 +314,12 @@ export class DockerSandbox {
         throw new Error(`${error instanceof Error ? error.message : "沙箱同步失败"}；结果已保存在服务端 ${recovery}`);
       }
       const { files, deleted, ...output } = result;
-      return { ...output, changedFiles: [...Object.keys(files), ...deleted] };
+      return {
+        ...output,
+        timedOut: output.timedOut,
+        errorCode: output.timedOut ? output.errorCode || "TIMEOUT" : output.errorCode,
+        changedFiles: [...Object.keys(files), ...deleted],
+      };
     })();
     this.active = { id, done, controller, dispatched: () => dispatched };
     void done.finally(() => { if (this.active?.id === id) this.active = undefined; }).catch(() => {});

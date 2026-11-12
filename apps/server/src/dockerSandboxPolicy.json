@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "directories": [
     ".git", ".cache", "dist", "build", "coverage",
     "node_modules", ".next", ".nuxt", ".output", ".svelte-kit", ".angular", ".parcel-cache", ".turbo", ".npm", ".pnpm-store",

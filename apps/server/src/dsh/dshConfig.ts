@@ -10,6 +10,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import type { PermissionMode, ReasoningEffort } from "@cca/protocol";
+import {
+  CCA_WEB_FETCH_PLUGIN_FILE,
+  CCA_WEB_FETCH_PLUGIN_ID,
+  ccaWebFetchPluginSource,
+} from "./ccaWebFetchPlugin.js";
+import { credentialEnvName, dshSearchPatch } from "./dshCredentials.js";
+
+export { credentialEnvName } from "./dshCredentials.js";
 
 /** DSH 沙箱模式（dsh-sandbox 的 SandboxMode 词汇）。 */
 export type DshSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -90,10 +98,6 @@ export function piAiReasoningFor(effort: ReasoningEffort | undefined): string | 
   return effort === "none" ? "off" : effort;
 }
 
-export function credentialEnvName(providerId: string): string {
-  return "CCA_DSH_KEY_" + providerId.toUpperCase().replace(/[^A-Z0-9]/g, "_");
-}
-
 function readSkillNames(dir: string): string[] {
   try {
     return fs
@@ -149,7 +153,8 @@ const PERMISSION_PRESETS = {
  * - llm-pi-ai：本会话唯一的模型路由（BYOK；apiKey 只以环境变量引用形式出现）
  * - agent-default-model：子代理继承同一路由
  * - sandbox-policy / approval / permission：文件沙箱 + 非交互审批
- * - insert：每个 MCP 服务器一行 mcp-client 插件
+ * - web-search-deepseek：把搜索凭据指到本会话的 CCA 路由 key
+ * - insert：CCA Fake-IP fetch 插件 + 每个 MCP 服务器一行 mcp-client 插件
  */
 export function patchDocFor(
   routes: readonly DshProviderRoute[],
@@ -158,6 +163,7 @@ export function patchDocFor(
   workspaceRoot: string,
   dockerSandbox = false,
   systemInstructions?: string,
+  localPlugins: { id: string; name: string }[] = [],
 ): unknown {
   const providers: Record<string, unknown> = {};
   for (const route of routes) providers[route.id] = providerRow(route);
@@ -189,6 +195,8 @@ export function patchDocFor(
       config: { provider: firstRoute.id, model: firstModel.id },
     });
   }
+  const search = dshSearchPatch(firstRoute);
+  if (search) rows.push(search);
   const mcpInserts = mcpRows.map((row) => ({
     id: row.id,
     name: "@deepseek-ai/dsh-mcp-client",
@@ -199,7 +207,8 @@ export function patchDocFor(
       failOnStartupError: false,
     },
   }));
-  if (mcpInserts.length > 0) rows.push({ insert: mcpInserts });
+  const inserts = [...localPlugins, ...mcpInserts];
+  if (inserts.length > 0) rows.push({ insert: inserts });
   return rows;
 }
 
@@ -210,8 +219,9 @@ export function patchYamlFor(
   workspaceRoot: string,
   dockerSandbox = false,
   systemInstructions?: string,
+  localPlugins: { id: string; name: string }[] = [],
 ): string {
-  return JSON.stringify(patchDocFor(routes, mcpRows, sandboxMode, workspaceRoot, dockerSandbox, systemInstructions), null, 2);
+  return JSON.stringify(patchDocFor(routes, mcpRows, sandboxMode, workspaceRoot, dockerSandbox, systemInstructions, localPlugins), null, 2);
 }
 
 /**
@@ -250,10 +260,22 @@ export function prepareDshHome(
     }
   }
 
+  const fetchPlugin = path.join(setup.homeDir, CCA_WEB_FETCH_PLUGIN_FILE);
+  fs.writeFileSync(fetchPlugin, ccaWebFetchPluginSource(), { encoding: "utf8", mode: 0o600 });
+  try { fs.chmodSync(fetchPlugin, 0o600); } catch { /* Windows chmod is limited */ }
+  const localPlugins = [{ id: CCA_WEB_FETCH_PLUGIN_ID, name: "./" + CCA_WEB_FETCH_PLUGIN_FILE }];
   const patchPath = path.join(setup.homeDir, "cca.patch.json");
   fs.writeFileSync(
     patchPath,
-    patchYamlFor(routes, setup.mcpRows, setup.sandboxMode, setup.workspaceRoot, setup.dockerSandbox, setup.systemInstructions),
+    patchYamlFor(
+      routes,
+      setup.mcpRows,
+      setup.sandboxMode,
+      setup.workspaceRoot,
+      setup.dockerSandbox,
+      setup.systemInstructions,
+      localPlugins,
+    ),
     { encoding: "utf8", mode: 0o600 },
   );
   try {

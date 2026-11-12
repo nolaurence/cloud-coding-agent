@@ -45,13 +45,14 @@ import {
 } from "./dshStats.js";
 import type { DshSessionEvent } from "./dshWire.js";
 import {
-  credentialEnvName,
   dshBinPath,
   prepareDshHome,
   sandboxModeFor,
   type DshMcpRow,
   type DshProviderRoute,
 } from "./dshConfig.js";
+import { dshRuntimeCredentials } from "./dshCredentials.js";
+import { CCA_WEB_FETCH_PROVIDER_ID } from "./ccaWebFetchPlugin.js";
 
 export const DSH_HOME_ROOT = path.join(DATA_DIR, "dsh-home");
 /** SDK initialize 的固定路由 id：一个运行时只挂本会话的模型路由。 */
@@ -397,7 +398,10 @@ export class DshSession implements AgentSession {
       id: "cca-docker-sandbox", serverName: "cca_sandbox", timeoutMs: 360000,
       config: { transport: "streamable-http", serverName: "cca_sandbox", url: this.sandboxServer.url, headers: { Authorization: "Bearer " + this.sandboxServer.token } },
     });
-    const credentials = route.apiKey ? { [credentialEnvName(ROUTE_ID)]: route.apiKey } : {};
+    const credentials = {
+      ...dshRuntimeCredentials(route),
+      DSH_WEB_FETCH_PROVIDER: CCA_WEB_FETCH_PROVIDER_ID,
+    };
     const { patchPath } = prepareDshHome(
       {
         homeDir: this.home,

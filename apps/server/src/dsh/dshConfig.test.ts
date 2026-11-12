@@ -84,6 +84,8 @@ test("patch keeps credentials out of the file and mounts sandbox, approvals, and
   assert.equal(patch.includes('"defaultPreset":"workspace-write"'), true);
   assert.equal(patch.includes('"name":"@deepseek-ai/dsh-mcp-client"'), true);
   assert.equal(patch.includes('"toolCallTimeoutMs":12000'), true);
+  assert.equal(patch.includes('"id":"web-search-deepseek"'), true);
+  assert.equal(patch.includes('"apiKeyEnv":"' + credentialEnvName("cca-primary") + '"'), true);
 });
 
 test("prepareDshHome creates the profile parent, links enabled skills, and hides disabled ones", (t) => {
@@ -124,6 +126,9 @@ test("prepareDshHome creates the profile parent, links enabled skills, and hides
   const patch = JSON.parse(fs.readFileSync(patchPath, "utf8")) as Array<Record<string, unknown>>;
   assert.equal(patch.some((row) => row.id === "llm-pi-ai"), true);
   assert.equal(patch.some((row) => row.id === "sandbox-policy"), true);
+  assert.equal(fs.existsSync(path.join(home, "cca-web-fetch.mjs")), true);
+  const insert = patch.find((row) => Array.isArray(row.insert))?.insert as Array<Record<string, unknown>> | undefined;
+  assert.equal(insert?.some((row) => row.id === "cca-web-fetch" && row.name === "./cca-web-fetch.mjs"), true);
   if (process.platform !== "win32") assert.equal(fs.statSync(patchPath).mode & 0o777, 0o600);
 });
 
