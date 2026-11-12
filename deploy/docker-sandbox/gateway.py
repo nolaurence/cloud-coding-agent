@@ -24,27 +24,124 @@ if not POLICY_FILE.exists():  # Repository checkout; the installer copies the sa
 POLICY = json.loads(POLICY_FILE.read_text(encoding="utf8"))
 RUNNER = r"""
 const fs = require('node:fs/promises');
+const path = require('node:path');
+const net = require('node:net');
 const {execFile} = require('node:child_process');
+const {lookup} = require('node:dns/promises');
 const {promisify} = require('node:util');
 const exec = promisify(execFile);
+const SANDBOX_ROOT = '/workspace';
+const hostWorkspace = process.env.CCA_HOST_WORKSPACE || '';
+function posixNorm(value) {
+  const collapsed = path.posix.normalize(String(value).replaceAll('\\', '/'));
+  return collapsed !== '/' && collapsed.endsWith('/') ? collapsed.slice(0, -1) : collapsed;
+}
+function mapCwd(cwd) {
+  const root = SANDBOX_ROOT;
+  if (!cwd) return {cwd: root};
+  const requested = posixNorm(cwd);
+  if (requested.includes('\0')) return {cwd: root, error: 'cwd 无效'};
+  const host = hostWorkspace ? posixNorm(hostWorkspace) : '';
+  let mapped;
+  if (host && (requested === host || requested.startsWith(host + '/'))) mapped = posixNorm(root + requested.slice(host.length));
+  else if (requested === root || requested.startsWith(root + '/')) mapped = requested;
+  else if (!requested.startsWith('/')) mapped = posixNorm(root + '/' + requested);
+  else mapped = requested;
+  if (mapped !== root && !mapped.startsWith(root + '/')) return {cwd: mapped, error: 'cwd 不在沙箱工作区内: ' + cwd};
+  return {cwd: mapped};
+}
+function isBlocked(address, allowFakeIp) {
+  if (net.isIPv4(address)) {
+    const [a, b] = address.split('.').map(Number);
+    if (allowFakeIp && a === 198 && b >= 18 && b <= 19) return false;
+    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127) || a >= 224 || (a === 198 && b >= 18 && b <= 19);
+  }
+  if (!net.isIPv6(address)) return true;
+  const normalized = address.replace(/^\[|\]$/g, '').toLowerCase();
+  if (normalized.startsWith('::ffff:')) {
+    const mapped = normalized.slice(7);
+    return net.isIPv4(mapped) ? isBlocked(mapped, allowFakeIp) : true;
+  }
+  const fake6 = normalized === '2001:2::' || normalized.startsWith('2001:2:');
+  if (fake6) return !allowFakeIp;
+  return normalized === '::1' || normalized === '::' || normalized.startsWith('fc') ||
+    normalized.startsWith('fd') || /^fe[89ab]/.test(normalized) || normalized.startsWith('ff');
+}
+async function assertSafeFetch(rawUrl) {
+  let url;
+  try { url = new URL(rawUrl); } catch { const e = new Error('地址无效'); e.code = 'EINVAL'; throw e; }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    const e = new Error('仅支持不含凭据的 HTTP 或 HTTPS 地址'); e.code = 'WEB_BLOCKED_URL'; throw e;
+  }
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  const addresses = net.isIP(hostname) ? [hostname]
+    : (await lookup(hostname, {all: true, verbatim: true})).map((entry) => entry.address);
+  const allowFakeIp = !net.isIP(hostname);
+  if (!addresses.length || addresses.some((address) => isBlocked(address, allowFakeIp))) {
+    const e = new Error('URL hostname "' + hostname + '" resolves to a non-public IP address');
+    e.code = 'WEB_BLOCKED_URL'; throw e;
+  }
+  return url;
+}
 (async () => {
   let input = ''; for await (const chunk of process.stdin) input += chunk;
   const {code, timeout_ms} = JSON.parse(input);
   const tools = {
     exec: async (command, options = {}) => {
+      const mapped = mapCwd(options.cwd);
+      if (mapped.error) return {stdout: '', stderr: mapped.error, exitCode: 1, timedOut: false, errorCode: 'EINVAL'};
+      try {
+        const st = await fs.stat(mapped.cwd);
+        if (!st.isDirectory()) return {stdout: '', stderr: 'cwd is not a directory: ' + mapped.cwd, exitCode: 1, timedOut: false, errorCode: 'ENOTDIR'};
+      } catch (e) {
+        if (e.code === 'ENOENT' || e.code === 'ENOTDIR') {
+          return {stdout: '', stderr: 'directory does not exist: ' + mapped.cwd, exitCode: 1, timedOut: false, errorCode: 'ENOENT'};
+        }
+        throw e;
+      }
       try {
         const r = await exec('/bin/bash', ['-lc', command], {
-          cwd: options.cwd || '/workspace', timeout: Math.min(options.timeout_ms || timeout_ms, timeout_ms),
+          cwd: mapped.cwd, timeout: Math.min(options.timeout_ms || timeout_ms, timeout_ms),
           maxBuffer: 256 * 1024, env: {...process.env, HOME: '/tmp', TMPDIR: '/tmp'},
         });
-        return {stdout: r.stdout, stderr: r.stderr, exitCode: 0};
+        return {stdout: r.stdout, stderr: r.stderr, exitCode: 0, timedOut: false};
       } catch (e) {
-        return {stdout: e.stdout || '', stderr: e.stderr || e.message, exitCode: typeof e.code === 'number' ? e.code : 1};
+        const timedOut = e.killed === true || e.code === 'ETIMEDOUT';
+        return {
+          stdout: e.stdout || '', stderr: e.stderr || e.message,
+          exitCode: typeof e.code === 'number' ? e.code : 1, timedOut,
+          errorCode: timedOut ? 'TIMEOUT' : (typeof e.code === 'string' ? e.code : undefined),
+        };
+      }
+    },
+    fetch: async (raw, options = {}) => {
+      try {
+        let current = String(raw);
+        let response;
+        const signal = AbortSignal.timeout(Math.min(options.timeout_ms || 30000, timeout_ms));
+        for (let hop = 0; hop <= 5; hop++) {
+          const parsed = await assertSafeFetch(current);
+          response = await fetch(parsed, {redirect: 'manual', signal, headers: {'user-agent': 'cca-sandbox'}});
+          const location = response.headers.get('location');
+          if (response.status < 300 || response.status >= 400 || !location) break;
+          const next = new URL(location, parsed);
+          if (next.origin !== parsed.origin) {
+            return {ok: false, status: response.status, errorCode: 'WEB_BLOCKED_URL', stderr: 'cross-origin redirect requires a new fetch', timedOut: false};
+          }
+          current = next.href;
+        }
+        const body = await response.text();
+        return {ok: response.ok, status: response.status, url: current, body: body.slice(0, 100000), timedOut: false};
+      } catch (e) {
+        const timedOut = e.name === 'TimeoutError' || e.code === 'ETIMEDOUT';
+        return {ok: false, stderr: e.message, timedOut, errorCode: e.code === 'WEB_BLOCKED_URL' ? 'WEB_BLOCKED_URL' : (timedOut ? 'TIMEOUT' : 'FETCH_ERROR')};
       }
     },
     read_file: (file) => fs.readFile(file, 'utf8'),
     write_file: async (file, content) => {
-      await fs.mkdir(require('node:path').dirname(file), {recursive: true});
+      await fs.mkdir(path.dirname(file), {recursive: true});
       await fs.writeFile(file, content); return {path: file};
     },
     list_files: (directory = '.') => fs.readdir(directory),
@@ -282,6 +379,9 @@ def execute_code(request, workspace, code, timeout):
     run_id = identifier(request["run"])
     cancelled = ROOT / (run_id + ".cancelled")
     name = "cca-code-" + run_id
+    host_workspace = request.get("host_workspace") or ""
+    if not isinstance(host_workspace, str) or "\x00" in host_workspace or len(host_workspace) > 4096:
+        raise ValueError("Invalid host workspace")
     command = ["docker", "run", "--rm", "-i", "--name", name, "--label", "cca.code-sandbox=true",
                "--init", "--user", f"{os.getuid()}:{os.getgid()}", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges", "--memory", "2g", "--memory-swap", "2g",
@@ -290,9 +390,14 @@ def execute_code(request, workspace, code, timeout):
                "--env", "npm_config_cache=/tmp/.npm", "--env", "PIP_CACHE_DIR=/tmp/pip", "--env", "UV_CACHE_DIR=/tmp/uv",
                "--env", "GOPATH=/tmp/go", "--env", "GOCACHE=/tmp/go-build", "--env", "GOMODCACHE=/tmp/go/pkg/mod",
                "--env", "GRADLE_USER_HOME=/tmp/.gradle", "--env", "JAVA_TOOL_OPTIONS=-Duser.home=/tmp",
+               "--env", "CCA_HOST_WORKSPACE=" + host_workspace,
                "--network", "bridge" if request.get("network") is True else "none",
                "--workdir", "/workspace", "--mount", f"type=bind,src={workspace},dst=/workspace",
                "--entrypoint", "/usr/local/bin/node", IMAGE, "--disable-sigusr1", "-e", RUNNER]
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
+        value = os.environ.get(key)
+        if value:
+            command.extend(["--env", f"{key}={value}"])
     output = {"stdout": bytearray(), "stderr": bytearray()}
     timed_out, truncated = False, False
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -334,8 +439,11 @@ def execute_code(request, workspace, code, timeout):
             process.kill()
             process.wait(timeout=10)
         cancelled.unlink(missing_ok=True)
-    return {"stdout": output["stdout"].decode(errors="replace"), "stderr": output["stderr"].decode(errors="replace"),
-            "exitCode": process.returncode, "timedOut": timed_out, "truncated": truncated}
+    result = {"stdout": output["stdout"].decode(errors="replace"), "stderr": output["stderr"].decode(errors="replace"),
+              "exitCode": process.returncode, "timedOut": timed_out, "truncated": truncated}
+    if timed_out:
+        result["errorCode"] = "TIMEOUT"
+    return result
 
 
 def main():

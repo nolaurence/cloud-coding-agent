@@ -70,3 +70,8 @@ test("browser navigation blocks loopback and URL credentials", async () => {
   await assert.rejects(assertSafeBrowserUrl("http://127.0.0.1:8787"), /禁止访问/);
   await assert.rejects(assertSafeBrowserUrl("https://user:pass@example.com"), /不含凭据/);
 });
+
+test("browser navigation blocks Fake-IP literals but not private-looking metadata gaps", async () => {
+  await assert.rejects(assertSafeBrowserUrl("http://198.18.0.1/"), /禁止访问/);
+  await assert.rejects(assertSafeBrowserUrl("http://169.254.169.254/"), /禁止访问/);
+});

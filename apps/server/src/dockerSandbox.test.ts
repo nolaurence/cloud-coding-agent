@@ -192,6 +192,7 @@ test("real Docker executes loops, discards dependencies, bounds output and kills
   await assert.rejects(fs.access(path.join(root, "loop-0.txt")));
   const timeout = await sandbox.run(`await tools.write_file('before-timeout', 'saved'); while (true) {}`, 1500);
   assert.equal(timeout.timedOut, true);
+  assert.equal(timeout.errorCode, "TIMEOUT");
   assert.equal(await fs.readFile(path.join(root, "before-timeout"), "utf8"), "saved");
   const pending = sandbox.run(`await tools.exec('sleep 20; echo escaped > cancelled-child');`, 30000);
   await new Promise(resolve => setTimeout(resolve, 1500));

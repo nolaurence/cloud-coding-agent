@@ -7,6 +7,7 @@ import path from "node:path";
 import { defineTool, type Tool } from "@github/copilot-sdk";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { DATA_DIR } from "./env.js";
+import { blockedResolvedAddress } from "./networkPolicy.js";
 
 const SCREEN = process.env.BROWSER_SCREEN?.trim() || "1280x900x24";
 const START_TIMEOUT_MS = 20_000;
@@ -92,34 +93,6 @@ async function waitForUrl(url: string) {
   throw new Error(`浏览器启动超时: ${lastError instanceof Error ? lastError.message : url}`);
 }
 
-function isPrivateAddress(address: string): boolean {
-  if (net.isIPv4(address)) {
-    const [a, b] = address.split(".").map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) ||
-      (a === 172 && b! >= 16 && b! <= 31) || (a === 192 && b === 168) ||
-      (a === 100 && b! >= 64 && b! <= 127) || a! >= 224;
-  }
-  if (net.isIPv6(address)) {
-    const normalized = address.toLowerCase();
-    if (normalized.startsWith("::ffff:")) {
-      const mapped = normalized.slice("::ffff:".length);
-      if (net.isIPv4(mapped)) return isPrivateAddress(mapped);
-      const groups = mapped.split(":");
-      if (groups.length === 2) {
-        const high = Number.parseInt(groups[0]!, 16);
-        const low = Number.parseInt(groups[1]!, 16);
-        if (Number.isInteger(high) && Number.isInteger(low)) {
-          return isPrivateAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
-        }
-      }
-      return true;
-    }
-    return normalized === "::1" || normalized === "::" || normalized.startsWith("fc") ||
-      normalized.startsWith("fd") || /^fe[89ab]/.test(normalized) || normalized.startsWith("ff");
-  }
-  return true;
-}
-
 export async function assertSafeBrowserUrl(rawUrl: string): Promise<URL> {
   let url: URL;
   try {
@@ -132,8 +105,10 @@ export async function assertSafeBrowserUrl(rawUrl: string): Promise<URL> {
   }
   if (ALLOW_PRIVATE_NETWORK) return url;
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
-  const addresses = await lookup(hostname, { all: true, verbatim: true }).catch(() => []);
-  if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) {
+  const addresses = net.isIP(hostname)
+    ? [hostname]
+    : (await lookup(hostname, { all: true, verbatim: true }).catch(() => [])).map(({ address }) => address);
+  if (!addresses.length || blockedResolvedAddress(hostname, addresses)) {
     throw new Error("浏览器默认禁止访问本机、内网和元数据地址");
   }
   return url;

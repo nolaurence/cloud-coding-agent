@@ -13,7 +13,7 @@ print(results);
 print(await tools.exec('npm ci && npm test', { cwd: '/workspace/apps/web', timeout_ms: 120000 }));
 ```
 
-工具参数：`code` 为 JavaScript async 函数体，`timeout_ms` 默认为 60000，范围 100～300000。提供 `tools.exec(command, {cwd?, timeout_ms?})`、`tools.read_file(path)`、`tools.write_file(path, content)`、`tools.list_files(path?)` 和 `print(value)`。命令返回 `stdout`、`stderr`、`exitCode`，需要在代码中自行检查失败退出码。
+工具参数：`code` 为 JavaScript async 函数体，`timeout_ms` 默认为 60000，范围 100～300000。提供 `tools.exec(command, {cwd?, timeout_ms?})`、`tools.read_file(path)`、`tools.write_file(path, content)`、`tools.list_files(path?)`、`tools.fetch(url, {timeout_ms?})` 和 `print(value)`。命令返回 `stdout`、`stderr`、`exitCode`、`timedOut`；超时另有 `errorCode: "TIMEOUT"`，目录不存在为 `errorCode: "ENOENT"`。需要在代码中自行检查失败退出码。`cwd` 可使用 `/workspace/...` 或会话上下文中的宿主路径。
 
 ## 配置
 
@@ -59,7 +59,9 @@ CCA_DOCKER_SANDBOX_CONFIG=/data/docker-sandbox.json
 
 由流水线发布包含本次代码的镜像，并保留同一数据卷及上述运行时环境变量后，新建或重新打开会话即可启用。单独重启旧镜像不会增加沙箱功能。SSH 密码不需要传入流水线。
 
-**工作区策略 v3 升级：**应用发布之外，还需要将本仓库的 `apps/server/src/dockerSandboxPolicy.json` 和 `deploy/docker-sandbox/gateway.py` 更新到 `.130` 的 `~/cca-code-sandbox/` 同一目录。先上传策略文件，再更新网关脚本，建议上传到临时文件后原子替换，保留网关所有者及 `0700` 权限。安装器也会同时复制这两个文件；已有部署仅更新文件即可，保留原有 SSH 授权和密钥。网关每次 SSH 调用时加载，无需操作或重启容器。新旧应用/网关混用会明确报版本不匹配。v3 将 `.codex-tmp`、`.cursor`、`.acl-recovery` 等临时目录排除出同步，导出时跳过超大单文件，并在上次导出失败后允许恢复源码后继续执行（含清理），不再用 sticky dirty 标记堵死后续 `run_code`。
+**工作区策略升级（当前 v4）：**云效应用镜像**不会**把这些文件同步到沙箱主机 `192.168.100.130`。发布应用之外，必须将本仓库的 `apps/server/src/dockerSandboxPolicy.json` 和 `deploy/docker-sandbox/gateway.py` 更新到 `.130` 的 `~/cca-code-sandbox/` 同一目录。先上传策略文件，再把网关脚本传到临时文件后原子替换，保留网关所有者及 `0700` 权限。安装器也会同时复制这两个文件；已有部署仅更新文件即可，保留原有 SSH 授权和密钥。网关每次 SSH 调用时加载，无需操作或重启容器。新旧应用/网关混用会明确报版本不匹配。
+
+v4：`tools.exec` 将会话/宿主工作区路径映射到 `/workspace`；目录不存在时返回 `errorCode=ENOENT` 和 `directory does not exist`，而不是 `spawn /bin/bash ENOENT`；子命令超时返回 `timedOut=true` 且 `errorCode=TIMEOUT`。`tools.fetch` 对主机名允许 Clash/sing-box Fake-IP（`198.18.0.0/15`），仍拒绝真实内网、链路本地、回环和云元数据地址，以及这些范围内的 IP 字面量。容器会继承网关进程的 `HTTP(S)_PROXY` / `ALL_PROXY` / `NO_PROXY`。v3 已将 `.codex-tmp`、`.cursor`、`.acl-recovery` 等临时目录排除出同步，导出时跳过超大单文件，并在上次导出失败后允许恢复源码后继续执行。
 
 ## 执行与文件
 

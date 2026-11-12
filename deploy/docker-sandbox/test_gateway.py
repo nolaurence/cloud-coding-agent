@@ -43,7 +43,7 @@ class WorkspaceTests(unittest.TestCase):
         self.addCleanup(docker_patch.stop)
         self.workspace = self.root / ("a" * 32)
         self.dirty = self.root / (self.workspace.name + ".dirty")
-        self.request = {"workspace_policy_version": 3, "run": "b" * 32, "code": "print('ok')",
+        self.request = {"workspace_policy_version": 4, "run": "b" * 32, "code": "print('ok')",
                         "files": {"nested/src/main.py": entry("source")}}
 
     def test_nested_language_filter_matches_upload_policy(self):
@@ -137,7 +137,7 @@ class WorkspaceTests(unittest.TestCase):
         for name in FIXTURES["generated"]:
             self.assertFalse((self.workspace / name).exists(), name)
 
-        recovered = gateway.recover_locked({"workspace_policy_version": 3, "workspace": self.workspace.name}, self.workspace)
+        recovered = gateway.recover_locked({"workspace_policy_version": 4, "workspace": self.workspace.name}, self.workspace)
         self.assertEqual(recovered["files"]["nested/src/main.py"]["data"], entry("unsynchronized")["data"])
         self.assertTrue(self.dirty.exists(), "recover must not drop the dirty marker before source is rewritten")
 
@@ -203,7 +203,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_old_clients_and_invalid_requests_cannot_reset_workspace(self):
         source = write(self.workspace, "keep.txt", "keep")
-        for changes in [{"workspace_policy_version": 2}, {"code": ""},
+        for changes in [{"workspace_policy_version": 3}, {"code": ""},
                         {"files": {"apps/web/node_modules/x": entry("invalid")}}]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 gateway.run_locked({**self.request, **changes}, self.workspace)
@@ -213,6 +213,23 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cancelled"):
             gateway.run_locked(self.request, self.workspace)
         self.assertEqual(source.read_text(), "keep")
+
+    def test_runner_maps_host_cwd_reports_missing_directory_timeout_and_fake_ip(self):
+        runner = gateway.RUNNER
+        self.assertIn("CCA_HOST_WORKSPACE", runner)
+        self.assertIn("directory does not exist", runner)
+        self.assertIn("errorCode: timedOut ? 'TIMEOUT'", runner)
+        self.assertIn("198", runner)
+        self.assertIn("assertSafeFetch", runner)
+        self.assertIn("WEB_BLOCKED_URL", runner)
+
+    def test_execute_code_forwards_host_workspace_proxy_and_timeout_code(self):
+        import inspect
+        source = inspect.getsource(gateway.execute_code)
+        self.assertIn("CCA_HOST_WORKSPACE", source)
+        self.assertIn("HTTPS_PROXY", source)
+        self.assertIn("host_workspace", source)
+        self.assertIn('result["errorCode"] = "TIMEOUT"', source)
 
 
 if __name__ == "__main__":
