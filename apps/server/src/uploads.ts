@@ -69,6 +69,109 @@ export function uploadDisplayName(name: string, fallback = "附件"): string {
   return name.replaceAll("\\", "/").split("/").pop()?.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200).trim() || fallback;
 }
 
+/** 上传文件在会话工作区内的落地目录；模型与远端沙箱都只能读取工作区。 */
+export const WORKSPACE_UPLOADS_DIRECTORY = ".uploads";
+
+/** 工作区内的文件名：去掉路径与平台非法字符，保留扩展名并限制字节长度。 */
+function workspaceUploadName(displayName: string | undefined, fallbackExtension: string): string {
+  const base = (displayName ?? "").replaceAll("\\", "/").split("/").pop() ?? "";
+  const cleaned = base
+    .replace(/[\x00-\x1f\x7f<>:"|?*]/g, "_")
+    .replace(/[. ]+$/g, "")
+    .trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return "附件" + fallbackExtension;
+  const name = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(cleaned) ? "_" + cleaned : cleaned;
+  const extensionIndex = name.lastIndexOf(".");
+  const candidateExtension = extensionIndex > 0 ? name.slice(extensionIndex) : "";
+  const extension = Buffer.byteLength(candidateExtension) <= 24 ? candidateExtension : "";
+  let stem = extension ? name.slice(0, extensionIndex) : name;
+  // 文件名上限 255 字节，给目录层与扩展名留出余量。
+  while (stem && Buffer.byteLength(stem + extension) > 120) {
+    stem = Array.from(stem).slice(0, -1).join("");
+  }
+  return (stem || "附件") + extension;
+}
+
+/** 上传标识 `<uuid>.<ext>` 对应的稳定目录，保证同一上传在工作区里只有一份。 */
+function workspaceUploadDirectory(workspaceRoot: string, fileId: string): string {
+  assertWorkspaceDirectory(workspaceRoot, path.join(workspaceRoot, WORKSPACE_UPLOADS_DIRECTORY));
+  const index = fileId.lastIndexOf(".");
+  const identifier = index > 0 ? fileId.slice(0, index) : fileId;
+  return assertWorkspaceDirectory(
+    workspaceRoot,
+    path.join(workspaceRoot, WORKSPACE_UPLOADS_DIRECTORY, identifier),
+  );
+}
+
+/** 确认目录位于工作区内（拒绝符号链接/junction 逃逸），必要时创建。 */
+function assertWorkspaceDirectory(workspaceRoot: string, directory: string): string {
+  if (fs.existsSync(directory)) {
+    const realDirectory = fs.realpathSync.native(directory);
+    if (!isInside(workspaceRoot, realDirectory) || !fs.lstatSync(realDirectory).isDirectory()) {
+      throw new Error("工作区附件目录无效");
+    }
+    return realDirectory;
+  }
+  try {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  } catch {
+    throw new Error("工作区附件目录无效");
+  }
+  const realDirectory = fs.realpathSync.native(directory);
+  if (!isInside(workspaceRoot, realDirectory) || !fs.lstatSync(realDirectory).isDirectory()) {
+    throw new Error("工作区附件目录无效");
+  }
+  return realDirectory;
+}
+
+/**
+ * 把已校验的上传文件复制进会话工作区，并把附件路径改写为工作区内路径。
+ * 引擎的文件沙箱和远端 Docker 沙箱只能访问工作区，中央上传目录对模型不可见。
+ */
+export function materializeTurnAttachments(
+  username: string,
+  projectPath: string,
+  attachments?: TurnAttachment[],
+) {
+  if (!attachments?.some((attachment) => attachment?.fileId)) return;
+  let workspaceRoot: string;
+  try {
+    workspaceRoot = fs.realpathSync.native(projectPath);
+  } catch {
+    throw new Error("会话工作区不存在或不可访问");
+  }
+  for (const attachment of attachments) {
+    if (!attachment?.fileId) continue;
+    let source: string;
+    try {
+      source = storedUploadPath(username, attachment.fileId, "file");
+    } catch {
+      throw new Error("附件不存在或不属于当前用户");
+    }
+    const directory = workspaceUploadDirectory(workspaceRoot, attachment.fileId);
+    const target = path.join(directory, workspaceUploadName(attachment.displayName, path.extname(attachment.fileId)));
+    const existing = fs.existsSync(target) ? fs.lstatSync(target) : undefined;
+    if (existing) {
+      if (!existing.isFile()) throw new Error("工作区附件路径无效");
+    } else {
+      try {
+        fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+        try {
+          fs.chmodSync(target, 0o600);
+        } catch {
+          // Windows 等平台的权限位语义有限，读权限由工作区访问控制保证。
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw new Error("上传文件写入工作区失败", { cause: error });
+        }
+      }
+      if (!fs.lstatSync(target).isFile()) throw new Error("工作区附件路径无效");
+    }
+    attachment.path = target;
+  }
+}
+
 function prepareUploadDirectory(username: string, size: number): string {
   const directory = uploadDirectory(username);
   fs.mkdirSync(directory, { recursive: true });

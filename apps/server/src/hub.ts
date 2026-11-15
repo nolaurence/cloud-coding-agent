@@ -81,7 +81,12 @@ import {
   withProjectGitMutation,
 } from "./gitWorkspace.js";
 import { ConnectorManager } from "./connectors/manager.js";
-import { removeThreadUploads, removeUploadedImages, validateTurnAttachments } from "./uploads.js";
+import {
+  materializeTurnAttachments,
+  removeThreadUploads,
+  removeUploadedImages,
+  validateTurnAttachments,
+} from "./uploads.js";
 import {
   createThreadShare,
   deleteThreadShare,
@@ -754,6 +759,8 @@ export class Hub {
               conn.pendingThreadSubs.add(thread.id);
               await this.manager.subscribe(thread.id, conn.user.username);
               this.assertProvisionalOwner(conn, thread.id);
+              // 引擎只能读取会话工作区，上传文件需要先落到工作区里。
+              materializeTurnAttachments(conn.user.username, project.path, initialTurn.attachments);
               await this.manager.sendMessage(
                 thread.id,
                 initialTurn.text,
@@ -1054,6 +1061,8 @@ export class Hub {
               throw new Error("会话关联的工作区无效");
             }
             validateTurnAttachments(conn.user.username, project.path, msg.attachments);
+            // 引擎只能读取会话工作区，上传文件需要先落到工作区里。
+            materializeTurnAttachments(conn.user.username, project.path, msg.attachments);
             await this.manager.sendMessage(msg.threadId, msg.text, msg.attachments, conn.user.username);
           } catch (error) {
             removeUploadedImages(conn.user.username, msg.attachments, store.threads);
