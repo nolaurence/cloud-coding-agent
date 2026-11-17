@@ -11,6 +11,7 @@ import type {
 import {
   DEFAULT_MODEL_PROVIDER_ID,
   flattenModels,
+  forkedThreadTitle,
   isReasoningEffort,
   normalizeReasoningEfforts,
   resolveModelContextWindowTokens,
@@ -2092,6 +2093,69 @@ export class CopilotManager {
       if (rt.reconfiguring === reconfiguring) rt.reconfiguring = null;
       this.scheduleDetach(rt, true);
     }
+  }
+
+  async forkThread(threadId: string, actorId?: string): Promise<ThreadMeta> {
+    await this.assertThreadEditable(threadId);
+    const thread = store.getThread(threadId);
+    if (!thread) throw new Error("会话不存在");
+    if (thread.archived) throw new Error("会话已归档,请先在“设置 > 归档对话”中恢复");
+    const rt = this.threads.get(threadId);
+    if (rt?.running) throw new Error("任务仍在运行,请停止或等待完成后再分叉");
+    if (rt?.compacting) throw new Error("上下文正在压缩,请等待完成后再分叉");
+    if (rt?.reconfiguring) throw new Error("会话模式正在切换,请稍候");
+    if (rt?.attaching) await rt.attaching;
+
+    if (rt?.session) {
+      this.clearDetachTimer(rt);
+      const session = rt.session;
+      rt.session = null;
+      rt.sessionActorId = "";
+      await session.disconnect();
+    }
+    const shouldReattach = Boolean(rt && rt.subscribers > 0);
+
+    const destId = randomUUID();
+    const now = Date.now();
+    const forked: ThreadMeta = {
+      runtime: thread.runtime,
+      id: destId,
+      projectId: thread.projectId,
+      title: forkedThreadTitle(thread.title),
+      model: thread.model,
+      modelProviderId: thread.modelProviderId,
+      agentMode: thread.agentMode,
+      permissionMode: thread.permissionMode,
+      userId: actorId || thread.userId,
+      createdAt: now,
+      updatedAt: now,
+      archived: false,
+      overview: thread.overview,
+      contextUsage: thread.contextUsage,
+      runtimeStats: thread.runtimeStats,
+      messageAttachments: thread.messageAttachments,
+      messageAuthors: thread.messageAuthors,
+    };
+
+    const client = await this.ensureClient(this.runtimeOf(thread));
+    if (typeof client.forkSession !== "function") {
+      throw new Error("当前引擎不支持分叉会话");
+    }
+    try {
+      await client.forkSession(threadId, destId);
+    } catch (error) {
+      await client.deleteSession(destId).catch(() => {});
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    store.upsertThread(forked);
+    if (shouldReattach && rt) {
+      try {
+        await this.attach(threadId, actorId || thread.userId || "");
+      } catch (error) {
+        console.warn(`[cca] reattach after fork failed thread=${threadId}`, error);
+      }
+    }
+    return forked;
   }
 
   async deleteThread(threadId: string): Promise<void> {

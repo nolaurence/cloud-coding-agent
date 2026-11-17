@@ -1,18 +1,15 @@
 import { useEffect, useState, type DragEvent } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
-  Archive,
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Eye,
   Folder,
   FolderPlus,
   GripVertical,
   Loader2,
   LogOut,
   MessagesSquare,
-  Pin,
   Search,
   ShieldCheck,
   SquarePen,
@@ -33,6 +30,7 @@ import { sortSidebarWorkspaces, type WorkspaceDropPlacement } from "../lib/works
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { BrandLogo } from "./BrandLogo";
+import { isSessionShortcutTarget, SidebarThreadRow } from "./SidebarThreadRow";
 import {
   Dialog,
   DialogContent,
@@ -76,8 +74,7 @@ export function Sidebar({
   const runningIds = useApp((s) => s.runningThreadIds);
   const createWorkspace = useApp((s) => s.createWorkspace);
   const removeWorkspace = useApp((s) => s.removeWorkspace);
-  const setThreadPinned = useApp((s) => s.setThreadPinned);
-  const setThreadArchived = useApp((s) => s.setThreadArchived);
+  const forkThread = useApp((s) => s.forkThread);
   const user = useApp((s) => s.user);
   const logout = useApp((s) => s.logout);
   const connected = useApp((s) => s.connected);
@@ -93,6 +90,7 @@ export function Sidebar({
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(new Set());
   const [expandedProjects, setExpandedProjects] = useState<ReadonlySet<string>>(new Set());
   const [actionError, setActionError] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{
     id: string;
@@ -142,27 +140,34 @@ export function Sidebar({
     });
   };
 
-  const togglePinned = async (thread: ThreadMeta) => {
-    setActionError("");
-    try {
-      await setThreadPinned(thread.id, thread.pinnedAt === undefined);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "更新置顶状态失败");
-    }
-  };
-
-  const archiveThread = async (thread: ThreadMeta) => {
-    setActionError("");
-    try {
-      await setThreadArchived(thread.id, true);
-      if (location.pathname === `/thread/${thread.id}`) {
-        navigate("/");
-        onNavigate?.();
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.altKey || event.metaKey || event.repeat) return;
+      if (isSessionShortcutTarget(event.target)) return;
+      const match = location.pathname.match(/^\/thread\/([^/]+)$/);
+      const threadId = match?.[1] ? decodeURIComponent(match[1]) : undefined;
+      const thread = threads.find((item) => item.id === threadId);
+      if (!thread || thread.archived || thread.access !== "owner") return;
+      const key = event.key.toLowerCase();
+      if (key === "g") {
+        event.preventDefault();
+        setRenamingId(thread.id);
+      } else if (key === "f") {
+        event.preventDefault();
+        setActionError("");
+        void forkThread(thread.id)
+          .then((created) => {
+            navigate(`/thread/${created.id}`);
+            onNavigate?.();
+          })
+          .catch((error) => {
+            setActionError(error instanceof Error ? error.message : "分叉会话失败");
+          });
       }
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "归档会话失败");
-    }
-  };
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [forkThread, location.pathname, navigate, onNavigate, threads]);
 
   const createNamedWorkspace = async () => {
     const name = workspaceName.trim();
@@ -180,92 +185,20 @@ export function Sidebar({
     }
   };
 
-  const renderThread = (thread: ThreadMeta, options: { manage: boolean }) => {
-    const active = location.pathname === `/thread/${thread.id}`;
-    const running = runningIds.includes(thread.id);
-    const pinned = thread.pinnedAt !== undefined;
-    const status = running
-      ? <Loader2 className="size-3.5 animate-spin text-[var(--ds-link)]" strokeWidth={1.8} />
-      : thread.access === "readonly"
-        ? <Eye className="size-3.5 text-label-3" strokeWidth={1.8} />
-        : thread.access === "collaborate"
-          ? <MessagesSquare className="size-3.5 text-label-3" strokeWidth={1.8} />
-          : null;
-    return (
-      <div key={thread.id} className="group/thread relative">
-        <Link
-          to={`/thread/${thread.id}`}
-          onClick={onNavigate}
-          title={
-            thread.access === "readonly"
-              ? `${thread.title}（只读分享）`
-              : thread.access === "collaborate"
-                ? `${thread.title}（可加入分享）`
-                : thread.title
-          }
-          className={cn(
-            "flex h-8 items-center gap-1.5 rounded-[12px] px-2 text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover",
-            active && "bg-hover",
-          )}
-        >
-          <span className="flex size-4 shrink-0 items-center justify-center">{status}</span>
-          <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-          {pinned && (
-            <Pin
-              className={cn(
-                "size-3 shrink-0 text-label-3 transition-opacity",
-                options.manage && !active && "group-hover/thread:opacity-0 group-focus-within/thread:opacity-0",
-                active && "opacity-0",
-              )}
-              strokeWidth={1.8}
-              aria-label="已置顶"
-            />
-          )}
-          <span
-            className={cn(
-              "shrink-0 text-[11px] leading-4 tabular-nums text-label-3 transition-opacity",
-              options.manage && !active && "group-hover/thread:opacity-0 group-focus-within/thread:opacity-0",
-              active && "opacity-0",
-            )}
-          >
-            {relativeTime(thread.updatedAt)}
-          </span>
-        </Link>
-        {options.manage && (
-          <div
-            className={cn(
-              "absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity",
-              active
-                ? "pointer-events-auto opacity-100"
-                : "pointer-events-none opacity-0 group-hover/thread:pointer-events-auto group-hover/thread:opacity-100 group-focus-within/thread:pointer-events-auto group-focus-within/thread:opacity-100",
-            )}
-          >
-            <button
-              type="button"
-              aria-label={pinned ? `取消置顶 ${thread.title}` : `置顶 ${thread.title}`}
-              title={pinned ? "取消置顶" : "置顶"}
-              className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
-              onClick={() => void togglePinned(thread)}
-            >
-              <Pin
-                className={cn("size-3.5", pinned && "fill-current text-[var(--ds-link)]")}
-                strokeWidth={1.8}
-              />
-            </button>
-            <button
-              type="button"
-              aria-label={`归档会话 ${thread.title}`}
-              title="归档"
-              className="flex size-6 items-center justify-center rounded-[6px] text-label-3 transition-colors hover:bg-hover hover:text-label-1"
-              onClick={() => void archiveThread(thread)}
-            >
-              <Archive className="size-3.5" strokeWidth={1.8} />
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  };
+  const renderThread = (thread: ThreadMeta, options: { manage: boolean }) => (
+    <SidebarThreadRow
+      key={thread.id}
+      thread={thread}
+      manage={options.manage}
+      active={location.pathname === `/thread/${thread.id}`}
+      running={runningIds.includes(thread.id)}
+      renaming={renamingId === thread.id}
+      onRenameStart={() => setRenamingId(thread.id)}
+      onRenameEnd={() => setRenamingId((current) => (current === thread.id ? null : current))}
+      onNavigate={onNavigate}
+      relativeTime={relativeTime}
+    />
+  );
 
   return (
     <aside className="flex h-full w-full min-w-0 shrink-0 flex-col border-r-[0.5px] border-line-3 bg-panel px-3 py-1.5 md:w-[280px]">
