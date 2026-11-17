@@ -109,6 +109,8 @@ class FakeClient {
   readonly createdConfigs: unknown[] = [];
   readonly resumedConfigs: unknown[] = [];
   readonly deletedSessionIds: string[] = [];
+  readonly forkedSessions: Array<{ sourceId: string; destId: string }> = [];
+  forkError: Error | undefined;
   readonly rpcRequests: Array<{ method: string; params: Record<string, unknown> }> = [];
   readonly connection = {
     sendRequest: async (method: string, params?: unknown) => {
@@ -150,6 +152,11 @@ class FakeClient {
 
   async deleteSession(sessionId: string) {
     this.deletedSessionIds.push(sessionId);
+  }
+
+  async forkSession(sourceId: string, destId: string) {
+    if (this.forkError) throw this.forkError;
+    this.forkedSessions.push({ sourceId, destId });
   }
 
   async listModels() {
@@ -2068,4 +2075,61 @@ test("routes threads to the Codex or DSH client by runtime", async (t) => {
   await manager.deleteThread(dshId);
   assert.deepEqual(dshClient.deletedSessionIds, [dshId]);
   assert.deepEqual(codexClient.deletedSessionIds, []);
+});
+
+test("forks Codex and DSH threads through the matching engine client", async (t) => {
+  const dshId = randomUUID();
+  setupStore(t, dshId);
+  store.threads[0]!.runtime = "dsh";
+  store.threads[0]!.title = "上下文修复";
+  const codexId = randomUUID();
+  store.upsertThread({ ...store.threads[0]!, id: codexId, runtime: "codex", title: "Codex 会话" });
+
+  const dshClient = new FakeClient();
+  const codexClient = new FakeClient();
+  const manager = new CopilotManager(
+    () => codexClient as unknown as CopilotClient,
+    () => dshClient as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  const forkedDsh = await manager.forkThread(dshId, "admin");
+  assert.equal(forkedDsh.runtime, "dsh");
+  assert.equal(forkedDsh.projectId, "project-1");
+  assert.equal(forkedDsh.title, "上下文修复（分叉）");
+  assert.equal(forkedDsh.archived, false);
+  assert.equal(forkedDsh.pinnedAt, undefined);
+  assert.notEqual(forkedDsh.id, dshId);
+  assert.deepEqual(dshClient.forkedSessions, [{ sourceId: dshId, destId: forkedDsh.id }]);
+  assert.equal(codexClient.forkedSessions.length, 0);
+  assert.equal(store.getThread(forkedDsh.id)?.title, "上下文修复（分叉）");
+
+  const forkedCodex = await manager.forkThread(codexId, "admin");
+  assert.equal(forkedCodex.runtime, "codex");
+  assert.equal(forkedCodex.title, "Codex 会话（分叉）");
+  assert.deepEqual(codexClient.forkedSessions, [{ sourceId: codexId, destId: forkedCodex.id }]);
+  assert.equal(dshClient.forkedSessions.length, 1);
+});
+
+test("refuses to fork a running thread and cleans up if the engine copy fails", async (t) => {
+  const threadId = randomUUID();
+  setupStore(t, threadId);
+  store.threads[0]!.runtime = "dsh";
+  const client = new FakeClient();
+  const manager = new CopilotManager(
+    () => new FakeClient() as unknown as CopilotClient,
+    () => client as unknown as CopilotClient,
+  );
+  t.after(() => manager.shutdown());
+
+  await manager.sendMessage(threadId, "进行中");
+  await assert.rejects(manager.forkThread(threadId, "admin"), /任务仍在运行/);
+  assert.equal(client.forkedSessions.length, 0);
+  await manager.interrupt(threadId);
+
+  client.forkError = new Error("磁盘不足");
+  const before = store.threads.map((thread) => thread.id);
+  await assert.rejects(manager.forkThread(threadId, "admin"), /磁盘不足/);
+  assert.equal(client.deletedSessionIds.length, 1);
+  assert.deepEqual(store.threads.map((thread) => thread.id), before);
 });

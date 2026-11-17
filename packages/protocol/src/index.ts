@@ -338,6 +338,27 @@ export interface ThreadCreateResult extends ThreadMeta {
   initialTurnAccepted?: true;
 }
 
+/** 侧栏会话标题的最大长度（与工作区名称输入框一致）。 */
+export const THREAD_TITLE_MAX_LENGTH = 80;
+export const FORKED_THREAD_TITLE_SUFFIX = "（分叉）";
+
+export function normalizeThreadTitle(value: unknown): string {
+  if (typeof value !== "string") throw new Error("会话标题无效");
+  const title = value.replace(/\s+/g, " ").trim();
+  if (!title) throw new Error("会话标题不能为空");
+  if (title.length > THREAD_TITLE_MAX_LENGTH) {
+    throw new Error(`会话标题不能超过 ${THREAD_TITLE_MAX_LENGTH} 个字符`);
+  }
+  return title;
+}
+
+export function forkedThreadTitle(title: string): string {
+  const base = title.replace(/\s+/g, " ").trim() || "新会话";
+  const maxBase = THREAD_TITLE_MAX_LENGTH - FORKED_THREAD_TITLE_SUFFIX.length;
+  const truncated = base.length > maxBase ? base.slice(0, maxBase).trimEnd() : base;
+  return `${truncated}${FORKED_THREAD_TITLE_SUFFIX}`;
+}
+
 /** 归档会话的保留时长:归档满 30 天后自动删除。 */
 export const ARCHIVED_THREAD_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -847,6 +868,8 @@ export type ClientMessage =
       initialTurn?: TurnInput;
     }
   | { id: string; type: "thread.delete"; threadId: string }
+  | { id: string; type: "thread.rename"; threadId: string; title: string }
+  | { id: string; type: "thread.fork"; threadId: string }
   | { id: string; type: "thread.setPinned"; threadId: string; pinned: boolean }
   | { id: string; type: "thread.setArchived"; threadId: string; archived: boolean }
   | { id: string; type: "thread.setModel"; threadId: string; model: ModelRef }

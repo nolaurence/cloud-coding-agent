@@ -48,6 +48,7 @@ import {
   isReasoningEffort,
   normalizeContextWindowTokens,
   normalizeModelRefReasoning,
+  normalizeThreadTitle,
   resolveThreadModel,
   resolveThreadModelProviderId,
 } from "@cca/protocol";
@@ -831,6 +832,32 @@ export class Hub {
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
           await this.deleteThreadCompletely(thread);
           this.reply(conn, msg.id);
+          break;
+        }
+        case "thread.rename": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          this.assertNotArchived(thread);
+          const title = normalizeThreadTitle(msg.title);
+          if (title === thread.title) {
+            this.reply(conn, msg.id, this.threadMeta(conn, thread));
+            break;
+          }
+          const updated: ThreadMeta = { ...thread, title, updatedAt: Date.now() };
+          store.upsertThread(updated);
+          this.broadcastShell();
+          this.reply(conn, msg.id, this.threadMeta(conn, updated));
+          break;
+        }
+        case "thread.fork": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          this.assertNotArchived(thread);
+          const forked = await this.manager.forkThread(msg.threadId, conn.user.username);
+          this.broadcastShell();
+          this.reply(conn, msg.id, this.threadMeta(conn, forked));
           break;
         }
         case "thread.setPinned": {

@@ -12,7 +12,8 @@ import type { AgentClient, AgentSession, AgentModelInfo } from "./agentRuntime.j
 import { isReasoningEffort } from "@cca/protocol";
 import { COPILOT_HOME, DATA_DIR } from "./env.js";
 import { usingDatabase } from "./db.js";
-import { ThreadEventStore, deleteThreadEvents } from "./threadEvents.js";
+import { ThreadEventStore, copyThreadEvents, deleteThreadEvents } from "./threadEvents.js";
+import { copySessionHome } from "./sessionFork.js";
 import { CodexRpc } from "./codexRpc.js";
 import { retryCodexReconnect } from "./codexReconnect.js";
 import { array, object, startLlmGateway, text, type GatewayProvider, type JsonObject } from "./llmGateway.js";
@@ -825,6 +826,16 @@ export class CodexClient implements AgentClient {
   }
   createSession(config: SessionConfig) { return this.open(config.sessionId ?? randomUUID(), config, false); }
   resumeSession(id: string, config: ResumeSessionConfig) { return this.open(id, config, true); }
+  async forkSession(sourceId: string, destId: string) {
+    const open = [...this.sessions].filter(
+      (session) => session.sessionId === sourceId || session.sessionId === destId,
+    );
+    for (const session of open) await session.disconnect().catch(() => {});
+    sessionPath(sourceId);
+    sessionPath(destId);
+    copySessionHome(sessionPath(sourceId), sessionPath(destId));
+    await copyThreadEvents(sourceId, destId);
+  }
   async deleteSession(id: string) {
     for (const session of this.sessions) if (session.sessionId === id) await session.disconnect();
     sessionPath(id);

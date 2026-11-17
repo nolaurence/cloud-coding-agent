@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SessionEvent } from "@github/copilot-sdk";
 import { initDb, closeDb, query } from "./db.js";
-import { ThreadEventStore, deleteThreadEvents } from "./threadEvents.js";
+import { ThreadEventStore, copyThreadEvents, deleteThreadEvents } from "./threadEvents.js";
 
 function event(id: string): SessionEvent {
   return { id, parentId: null, timestamp: new Date().toISOString(), type: "user.message", data: { content: id } };
@@ -25,6 +25,22 @@ test("event batches preserve ordering, isolate threads and replay idempotently",
     assert.deepEqual(await first.read(), []);
     assert.equal((await second.read()).length, 1);
     assert.deepEqual(errors, []);
+  } finally { await closeDb(); }
+});
+
+test("copying thread events duplicates history onto a new thread id", async () => {
+  await initDb("sqlite::memory:");
+  try {
+    const source = new ThreadEventStore("source", () => {});
+    source.append(event("a"), 1);
+    source.append(event("b"), 2);
+    await source.flush();
+    await copyThreadEvents("source", "forked");
+    const copied = new ThreadEventStore("forked", () => {});
+    assert.deepEqual((await copied.read()).map((item) => item.id), ["a", "b"]);
+    assert.deepEqual((await source.read()).map((item) => item.id), ["a", "b"]);
+    await copyThreadEvents("source", "forked");
+    assert.equal((await copied.read()).length, 2);
   } finally { await closeDb(); }
 });
 
