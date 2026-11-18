@@ -32,7 +32,7 @@ const noImages: TrajectoryViewProps["renderSlot"] = () => null;
 const loadImage: TrajectoryViewProps["loadImage"] = async () => { throw new Error("图片预览暂不可用"); };
 const completeViewRequest = () => {};
 
-/** Native DSH trajectory; raw events are projected by the vendored DSH source. */
+/** 原生轨迹视图;Codex 与 DSH 会话的原始事件都由服务端投影为同一事件流后交由 vendored 投影器渲染。 */
 export default function DshTrajectory({ threadId, composerHeight }: { threadId: string; composerHeight: number }) {
   const connected = useApp(state => state.connected);
   const [history, setHistory] = useState<HistoryState>({ events: [], hasMoreBefore: false, loading: true, loadingOlder: false, error: null });

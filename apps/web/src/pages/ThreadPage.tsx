@@ -55,8 +55,9 @@ export function ThreadPage() {
   const setShareDialogOpen = useApp((s) => s.setShareDialogOpen);
   const state = useThreadState(threadId);
   const thread = threads.find((t) => t.id === threadId);
+  const trajectoryRuntime = thread?.runtime === "dsh" || thread?.runtime === "codex";
   const [viewState, setViewState] = useState(() => ({ threadId, view: readThreadView(threadId) }));
-  const view: ThreadView = thread?.runtime === "dsh"
+  const view: ThreadView = trajectoryRuntime
     ? viewState.threadId === threadId ? viewState.view : readThreadView(threadId)
     : "chat";
   const selectView = (next: ThreadView) => {
@@ -337,7 +338,7 @@ export function ThreadPage() {
           </p>
         )}
         {legacySession && <p className="border-b px-4 py-2 text-sm text-muted-foreground">旧 Copilot 会话仅保留历史浏览，请新建 Codex 或 DSH 会话继续工作。</p>}
-        {thread?.runtime === "dsh" && (
+        {trajectoryRuntime && (
           <div role="tablist" aria-label="会话视图" className="flex shrink-0 gap-4 border-b px-4">
             {([['chat', '对话'], ['trajectory', '轨迹']] as const).map(([id, label]) => (
               <button
@@ -353,7 +354,7 @@ export function ThreadPage() {
             ))}
           </div>
         )}
-        <div id="thread-view-panel" role={thread?.runtime === "dsh" ? "tabpanel" : undefined} aria-labelledby={thread?.runtime === "dsh" ? `thread-${view}-tab` : undefined} className="relative min-h-0 flex-1 overflow-hidden">
+        <div id="thread-view-panel" role={trajectoryRuntime ? "tabpanel" : undefined} aria-labelledby={trajectoryRuntime ? `thread-${view}-tab` : undefined} className="relative min-h-0 flex-1 overflow-hidden">
           {view === "trajectory" ? (
             <Suspense fallback={<div role="status" className="flex h-full items-center justify-center text-sm text-muted-foreground">正在加载轨迹…</div>}>
               <DshTrajectory key={threadId} threadId={threadId} composerHeight={canInteract ? composerHeight : 0} />

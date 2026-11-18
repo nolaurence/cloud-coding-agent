@@ -54,6 +54,7 @@ import {
 import { verifyToken, type TokenPayload } from "./auth.js";
 import { getThreadAccess } from "./threadAccess.js";
 import { readDshTrajectory } from "./dsh/dshTrajectory.js";
+import { readCodexTrajectory } from "./codexTrajectory.js";
 import { discoverProviderModels } from "./providers.js";
 import {
   deleteProjectFile,
@@ -951,8 +952,10 @@ export class Hub {
         case "thread.trajectory.load": {
           const thread = store.getThread(msg.threadId);
           if (!thread || !this.canRead(conn, thread)) throw new Error("无权访问该会话");
-          if (thread.runtime !== "dsh") throw new Error("仅 DSH 会话提供原生轨迹");
-          const trajectory = await readDshTrajectory(msg.threadId, msg);
+          if (thread.runtime !== "codex" && thread.runtime !== "dsh") throw new Error("仅 Codex 和 DSH 会话提供原生轨迹");
+          const trajectory = thread.runtime === "codex"
+            ? await readCodexTrajectory(msg.threadId, msg)
+            : await readDshTrajectory(msg.threadId, msg);
           if (!this.canRead(conn, store.getThread(msg.threadId))) throw new Error("无权访问该会话");
           this.reply(conn, msg.id, trajectory);
           break;
