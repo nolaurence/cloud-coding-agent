@@ -131,6 +131,10 @@
   background: var(--accent);
 }
 
+.composer-model-trigger.is-prompt {
+  color: var(--muted-foreground);
+}
+
 .composer-model-trigger:disabled {
   opacity: 0.5;
 }
@@ -147,13 +151,69 @@
   color: var(--muted-foreground);
 }
 
-.composer-model-panel {
-  width: 256px;
-  padding: 12px;
+.composer-model-tooltip {
+  border: 1px solid rgb(255 255 255 / 10%);
+  background: rgb(36 36 38 / 96%) !important;
+  color: rgb(245 245 247) !important;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+}
+
+.composer-model-panel.composer-popover {
+  width: auto;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  animation: none;
+}
+
+.composer-model-morph {
+  position: relative;
+  width: 280px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--popover) 82%, transparent);
+  color: var(--popover-foreground);
+  box-shadow: 0 10px 40px rgb(0 0 0 / 18%);
+  backdrop-filter: blur(22px) saturate(1.35);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  transform-origin: 0 0;
+}
+
+.dark .composer-model-morph {
+  border-color: rgb(255 255 255 / 8%);
+  background: rgb(30 30 32 / 88%);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 48%);
 }
 
 .composer-panel-view {
-  animation: composer-popover-enter 140ms ease-out;
+  width: 100%;
+  transition: opacity 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.composer-panel-view.is-active {
+  position: relative;
+  opacity: 1;
+}
+
+.composer-panel-view.is-hidden {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.composer-reasoning-view {
+  padding: 14px 16px 16px;
+}
+
+.composer-models-view {
+  padding: 8px 0 8px;
 }
 
 .composer-reasoning-heading {
@@ -215,56 +275,75 @@
   color: var(--foreground);
 }
 
-.composer-model-back {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  border-radius: 5px;
-  padding: 2px 0 8px;
+.composer-model-list-header {
+  padding: 6px 16px 8px;
   color: var(--muted-foreground);
   font-size: 12px;
+  line-height: 16px;
 }
 
-.composer-model-search {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-bottom: 4px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 7px 8px;
-  color: var(--muted-foreground);
+.composer-model-section {
+  padding: 4px 16px 10px;
 }
 
-.composer-model-search:focus-within {
-  border-color: var(--ring);
-}
-
-.composer-model-search input {
-  width: 100%;
-  min-width: 0;
-  background: transparent;
+.composer-model-section-title {
   color: var(--foreground);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.composer-model-section-sub {
+  margin-top: 1px;
+  color: var(--muted-foreground);
   font-size: 12px;
-  outline: none;
+  line-height: 16px;
 }
 
 .composer-model-list {
-  max-height: 260px;
+  max-height: 320px;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(0 0 0 / 22%) transparent;
+}
+
+.dark .composer-model-list {
+  scrollbar-color: rgb(255 255 255 / 22%) transparent;
+}
+
+.composer-model-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.composer-model-list::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 18%);
+}
+
+.dark .composer-model-list::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 22%);
+}
+
+.composer-model-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .composer-model-option {
   display: flex;
-  width: 100%;
-  min-height: 34px;
+  width: auto;
+  min-height: 36px;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border-radius: 7px;
-  padding: 6px 9px;
+  margin: 1px 8px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: transparent;
   text-align: left;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 18px;
 }
 
 .composer-model-option > span {
@@ -274,9 +353,33 @@
   white-space: nowrap;
 }
 
-.composer-model-option:hover:not(:disabled), .composer-model-option:focus-visible {
-  background: var(--accent);
+.composer-model-option.is-selected {
+  background: transparent;
+}
+
+.composer-model-option.is-selected > svg {
+  color: var(--muted-foreground);
+}
+
+.composer-model-option:hover:not(:disabled),
+.composer-model-option:focus-visible {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
   outline: none;
+}
+
+.dark .composer-model-option:hover:not(:disabled),
+.dark .composer-model-option:focus-visible {
+  background: rgb(255 255 255 / 12%);
+}
+
+.composer-model-option.is-selected:hover:not(:disabled),
+.composer-model-option.is-selected:focus-visible {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+
+.dark .composer-model-option.is-selected:hover:not(:disabled),
+.dark .composer-model-option.is-selected:focus-visible {
+  background: rgb(255 255 255 / 12%);
 }
 
 .composer-model-panel button:disabled {
@@ -297,7 +400,7 @@
   display: flex;
   height: 28px;
   align-items: center;
-  margin-top: 12px;
+  margin-top: 14px;
   touch-action: none;
   user-select: none;
   cursor: pointer;
@@ -357,14 +460,6 @@
   outline-offset: 3px;
 }
 
-.composer-reasoning-labels {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 9px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-}
-
 @keyframes composer-popover-enter {
   from {
     opacity: 0;
@@ -381,6 +476,7 @@
 @media (prefers-reduced-motion: reduce) {
   .composer-popover, .composer-panel-view {
     animation: none;
+    transition: none;
   }
 
   .composer-reasoning-fill, .composer-reasoning-thumb {

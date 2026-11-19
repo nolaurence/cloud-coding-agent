@@ -48,6 +48,7 @@ import {
   isReasoningEffort,
   normalizeContextWindowTokens,
   normalizeModelRefReasoning,
+  normalizeThreadTitle,
   resolveThreadModel,
   resolveThreadModelProviderId,
 } from "@cca/protocol";
@@ -82,7 +83,12 @@ import {
   withProjectGitMutation,
 } from "./gitWorkspace.js";
 import { ConnectorManager } from "./connectors/manager.js";
-import { removeThreadUploads, removeUploadedImages, validateTurnAttachments } from "./uploads.js";
+import {
+  materializeTurnAttachments,
+  removeThreadUploads,
+  removeUploadedImages,
+  validateTurnAttachments,
+} from "./uploads.js";
 import {
   createThreadShare,
   deleteThreadShare,
@@ -755,6 +761,8 @@ export class Hub {
               conn.pendingThreadSubs.add(thread.id);
               await this.manager.subscribe(thread.id, conn.user.username);
               this.assertProvisionalOwner(conn, thread.id);
+              // 引擎只能读取会话工作区，上传文件需要先落到工作区里。
+              materializeTurnAttachments(conn.user.username, project.path, initialTurn.attachments);
               await this.manager.sendMessage(
                 thread.id,
                 initialTurn.text,
@@ -825,6 +833,32 @@ export class Hub {
           if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
           await this.deleteThreadCompletely(thread);
           this.reply(conn, msg.id);
+          break;
+        }
+        case "thread.rename": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          this.assertNotArchived(thread);
+          const title = normalizeThreadTitle(msg.title);
+          if (title === thread.title) {
+            this.reply(conn, msg.id, this.threadMeta(conn, thread));
+            break;
+          }
+          const updated: ThreadMeta = { ...thread, title, updatedAt: Date.now() };
+          store.upsertThread(updated);
+          this.broadcastShell();
+          this.reply(conn, msg.id, this.threadMeta(conn, updated));
+          break;
+        }
+        case "thread.fork": {
+          const thread = store.getThread(msg.threadId);
+          if (!thread) throw new Error("会话不存在");
+          if (!this.canManage(conn, thread)) throw new Error("无权管理该会话");
+          this.assertNotArchived(thread);
+          const forked = await this.manager.forkThread(msg.threadId, conn.user.username);
+          this.broadcastShell();
+          this.reply(conn, msg.id, this.threadMeta(conn, forked));
           break;
         }
         case "thread.setPinned": {
@@ -1057,6 +1091,8 @@ export class Hub {
               throw new Error("会话关联的工作区无效");
             }
             validateTurnAttachments(conn.user.username, project.path, msg.attachments);
+            // 引擎只能读取会话工作区，上传文件需要先落到工作区里。
+            materializeTurnAttachments(conn.user.username, project.path, msg.attachments);
             await this.manager.sendMessage(msg.threadId, msg.text, msg.attachments, conn.user.username);
           } catch (error) {
             removeUploadedImages(conn.user.username, msg.attachments, store.threads);

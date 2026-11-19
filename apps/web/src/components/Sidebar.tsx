@@ -1,12 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState, type DragEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Folder,
   FolderPlus,
+  GripVertical,
   Loader2,
   LogOut,
+  MessagesSquare,
   Search,
   ShieldCheck,
   SquarePen,
+  Trash2,
   User,
   WifiOff,
   X,
@@ -14,10 +21,16 @@ import {
 import type { ThreadMeta } from "@cca/protocol";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/utils";
-import { listSidebarThreads } from "../lib/threadGroups";
+import {
+  SIDEBAR_THREAD_LIMIT,
+  sortSidebarThreads,
+  visibleSidebarThreads,
+} from "../lib/threadGroups";
+import { sortSidebarWorkspaces, type WorkspaceDropPlacement } from "../lib/workspaceOrder";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { BrandLogo } from "./BrandLogo";
-import { SidebarThreadCard } from "./SidebarThreadCard";
+import { isSessionShortcutTarget, SidebarThreadRow } from "./SidebarThreadRow";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +41,25 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
+/** 侧栏时间:与工作区视图一致,只保留跨度,超过一个月显示日期。 */
+function relativeTime(at: number): string {
+  const diff = Date.now() - at;
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diff < minute) return "刚刚";
+  if (diff < hour) return `${Math.floor(diff / minute)}分钟`;
+  if (diff < day) return `${Math.floor(diff / hour)}小时`;
+  if (diff < 30 * day) return `${Math.floor(diff / day)}天`;
+  const date = new Date(at);
+  return `${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function workspaceDropPlacement(event: DragEvent<HTMLElement>): WorkspaceDropPlacement {
+  const bounds = event.currentTarget.getBoundingClientRect();
+  return event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+}
+
 export function Sidebar({
   onNavigate,
   onClose,
@@ -36,11 +68,13 @@ export function Sidebar({
   onClose?: () => void;
 }) {
   const projects = useApp((s) => s.projects);
+  const workspaceOrder = useApp((s) => s.workspaceOrder);
+  const reorderWorkspaces = useApp((s) => s.reorderWorkspaces);
   const threads = useApp((s) => s.threads);
   const runningIds = useApp((s) => s.runningThreadIds);
   const createWorkspace = useApp((s) => s.createWorkspace);
-  const setThreadPinned = useApp((s) => s.setThreadPinned);
-  const setThreadArchived = useApp((s) => s.setThreadArchived);
+  const removeWorkspace = useApp((s) => s.removeWorkspace);
+  const forkThread = useApp((s) => s.forkThread);
   const user = useApp((s) => s.user);
   const logout = useApp((s) => s.logout);
   const connected = useApp((s) => s.connected);
@@ -53,47 +87,87 @@ export function Sidebar({
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(new Set());
+  const [expandedProjects, setExpandedProjects] = useState<ReadonlySet<string>>(new Set());
   const [actionError, setActionError] = useState("");
-  const [threadListScrolling, setThreadListScrolling] = useState(false);
-  const threadListScrollIdle = useRef(0);
-  // 每 minute 刷新一次，让「5m / 2h / 7d」这类相对时间保持新鲜
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{
+    id: string;
+    placement: WorkspaceDropPlacement;
+  } | null>(null);
+  // 每 minute 刷新一次,让「14分钟 / 23小时」这类相对时间保持新鲜
   const [, setClock] = useState(0);
   useEffect(() => {
     const timer = window.setInterval(() => setClock((value) => value + 1), 60_000);
     return () => window.clearInterval(timer);
   }, []);
-  useEffect(() => () => window.clearTimeout(threadListScrollIdle.current), []);
-  const onThreadListScroll = () => {
-    setThreadListScrolling(true);
-    window.clearTimeout(threadListScrollIdle.current);
-    threadListScrollIdle.current = window.setTimeout(() => setThreadListScrolling(false), 400);
+  const [confirmTarget, setConfirmTarget] = useState<
+    { kind: "project"; id: string; name: string } | null
+  >(null);
+
+  const keyword = query.trim().toLowerCase();
+  const orderedProjects = sortSidebarWorkspaces(projects, workspaceOrder);
+  const matches = (thread: ThreadMeta) => !keyword || thread.title.toLowerCase().includes(keyword);
+  const ownedProjectIds = new Set(projects.map((project) => project.id));
+  const threadsByProject = (projectId: string) =>
+    sortSidebarThreads(
+      threads.filter((thread) => thread.projectId === projectId && !thread.archived),
+    );
+  const sharedThreads = threads
+    .filter((thread) => !thread.archived && !ownedProjectIds.has(thread.projectId))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .filter(matches);
+  const visibleProjectCount = projects.filter(
+    (project) => threadsByProject(project.id).some(matches),
+  ).length;
+
+  const toggleProject = (projectId: string) => {
+    setCollapsedProjects((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
   };
 
-  const keyword = query.trim();
-  const listedThreads = listSidebarThreads(threads, projects, keyword);
-  const projectsById = new Map(projects.map((project) => [project.id, project]));
-
-  const togglePinned = async (thread: ThreadMeta) => {
-    setActionError("");
-    try {
-      await setThreadPinned(thread.id, thread.pinnedAt === undefined);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "更新置顶状态失败");
-    }
+  const toggleExpanded = (projectId: string) => {
+    setExpandedProjects((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
   };
 
-  const archiveThread = async (thread: ThreadMeta) => {
-    setActionError("");
-    try {
-      await setThreadArchived(thread.id, true);
-      if (location.pathname === `/thread/${thread.id}`) {
-        navigate("/");
-        onNavigate?.();
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.altKey || event.metaKey || event.repeat) return;
+      if (isSessionShortcutTarget(event.target)) return;
+      const match = location.pathname.match(/^\/thread\/([^/]+)$/);
+      const threadId = match?.[1] ? decodeURIComponent(match[1]) : undefined;
+      const thread = threads.find((item) => item.id === threadId);
+      if (!thread || thread.archived || thread.access !== "owner") return;
+      const key = event.key.toLowerCase();
+      if (key === "g") {
+        event.preventDefault();
+        setRenamingId(thread.id);
+      } else if (key === "f") {
+        event.preventDefault();
+        setActionError("");
+        void forkThread(thread.id)
+          .then((created) => {
+            navigate(`/thread/${created.id}`);
+            onNavigate?.();
+          })
+          .catch((error) => {
+            setActionError(error instanceof Error ? error.message : "分叉会话失败");
+          });
       }
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "归档会话失败");
-    }
-  };
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [forkThread, location.pathname, navigate, onNavigate, threads]);
 
   const createNamedWorkspace = async () => {
     const name = workspaceName.trim();
@@ -110,6 +184,21 @@ export function Sidebar({
       setCreatingWorkspace(false);
     }
   };
+
+  const renderThread = (thread: ThreadMeta, options: { manage: boolean }) => (
+    <SidebarThreadRow
+      key={thread.id}
+      thread={thread}
+      manage={options.manage}
+      active={location.pathname === `/thread/${thread.id}`}
+      running={runningIds.includes(thread.id)}
+      renaming={renamingId === thread.id}
+      onRenameStart={() => setRenamingId(thread.id)}
+      onRenameEnd={() => setRenamingId((current) => (current === thread.id ? null : current))}
+      onNavigate={onNavigate}
+      relativeTime={relativeTime}
+    />
+  );
 
   return (
     <aside className="flex h-full w-full min-w-0 shrink-0 flex-col border-r-[0.5px] border-line-3 bg-panel px-3 py-1.5 md:w-[280px]">
@@ -204,26 +293,141 @@ export function Sidebar({
         </div>
       )}
 
-      <div
-        className="sidebar-thread-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-3"
-        data-scrolling={threadListScrolling ? "" : undefined}
-        onScroll={onThreadListScroll}
-      >
-        {listedThreads.map((thread) => (
-          <SidebarThreadCard
-            key={thread.id}
-            thread={thread}
-            project={projectsById.get(thread.projectId)}
-            active={location.pathname === `/thread/${thread.id}`}
-            running={runningIds.includes(thread.id)}
-            manage={thread.access === "owner"}
-            onNavigate={onNavigate}
-            onTogglePinned={(item) => void togglePinned(item)}
-            onArchive={(item) => void archiveThread(item)}
-          />
-        ))}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+        {orderedProjects
+          .filter((project) => !keyword || threadsByProject(project.id).some(matches))
+          .map((project) => {
+            const matchedThreads = threadsByProject(project.id).filter(matches);
+            const collapsed = !keyword && collapsedProjects.has(project.id);
+            const expanded = keyword !== "" || expandedProjects.has(project.id);
+            const { visible: projectThreads, hiddenCount } = visibleSidebarThreads(
+              matchedThreads,
+              expanded,
+            );
+            return (
+              <section
+                key={project.id}
+                className={cn("relative pb-1", draggedProjectId === project.id && "opacity-40")}
+                onDragOver={(event) => {
+                  if (!draggedProjectId || draggedProjectId === project.id) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  const placement = workspaceDropPlacement(event);
+                  setDropTarget((current) => current?.id === project.id && current.placement === placement
+                    ? current
+                    : { id: project.id, placement });
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                    setDropTarget((current) => current?.id === project.id ? null : current);
+                  }
+                }}
+                onDrop={(event) => {
+                  if (!draggedProjectId) return;
+                  event.preventDefault();
+                  reorderWorkspaces(draggedProjectId, project.id, workspaceDropPlacement(event));
+                  setDraggedProjectId(null);
+                  setDropTarget(null);
+                }}
+              >
+                {dropTarget?.id === project.id && (
+                  <div
+                    aria-hidden="true"
+                    className={cn(
+                      "pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-[var(--ds-link)]",
+                      dropTarget.placement === "before" ? "top-0" : "bottom-0",
+                    )}
+                  />
+                )}
+                <div className="group/workspace relative">
+                  <button
+                    type="button"
+                    aria-expanded={!collapsed}
+                    aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                    title={`${project.name}（拖动排序，或按 Alt + ↑ / ↓ 移动）`}
+                    draggable={projects.length > 1}
+                    className="flex h-[34px] w-full cursor-grab items-center gap-1.5 rounded-[12px] py-0 pl-2 pr-8 text-left text-[14px] leading-5 text-label-1 transition-colors hover:bg-hover active:cursor-grabbing"
+                    onClick={() => toggleProject(project.id)}
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("application/x-cca-workspace", project.id);
+                      setDraggedProjectId(project.id);
+                      setDropTarget(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedProjectId(null);
+                      setDropTarget(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+                      event.preventDefault();
+                      const index = orderedProjects.findIndex((workspace) => workspace.id === project.id);
+                      const movingUp = event.key === "ArrowUp";
+                      const target = orderedProjects[index + (movingUp ? -1 : 1)];
+                      if (target) reorderWorkspaces(project.id, target.id, movingUp ? "before" : "after");
+                    }}
+                  >
+                    <span className="relative flex size-4 shrink-0 items-center justify-center text-[var(--ds-label-caption)]">
+                      <Folder
+                        className="size-4 transition-opacity group-hover/workspace:opacity-0"
+                        strokeWidth={1.6}
+                      />
+                      {collapsed ? (
+                        <ChevronRight className="absolute size-3.5 opacity-0 transition-opacity group-hover/workspace:opacity-100" />
+                      ) : (
+                        <ChevronDown className="absolute size-3.5 opacity-0 transition-opacity group-hover/workspace:opacity-100" />
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                    {projects.length > 1 && (
+                      <GripVertical
+                        aria-hidden="true"
+                        className="size-3.5 shrink-0 text-label-3 opacity-0 transition-opacity group-hover/workspace:opacity-100 group-focus-within/workspace:opacity-100"
+                        strokeWidth={1.8}
+                      />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`移除工作区 ${project.name}`}
+                    title="移除工作区"
+                    className="absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-label-3 opacity-0 transition-colors hover:bg-hover hover:text-label-1 group-hover/workspace:opacity-100"
+                    onClick={() => setConfirmTarget({ kind: "project", id: project.id, name: project.name })}
+                  >
+                    <Trash2 className="size-3.5" strokeWidth={1.8} />
+                  </button>
+                </div>
+                {!collapsed && projectThreads.map((thread) => renderThread(thread, { manage: thread.access === "owner" }))}
+                {!collapsed && !keyword && matchedThreads.length > SIDEBAR_THREAD_LIMIT && (
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    className="flex h-7 w-full items-center gap-1 rounded-[10px] py-1 pl-[30px] pr-2 text-left text-[12px] leading-5 text-label-3 transition-colors hover:bg-hover hover:text-label-1"
+                    onClick={() => toggleExpanded(project.id)}
+                  >
+                    {expanded
+                      ? <><ChevronUp className="size-3.5" strokeWidth={1.8} />收起</>
+                      : <><ChevronDown className="size-3.5" strokeWidth={1.8} />显示更多（{hiddenCount}）</>}
+                  </button>
+                )}
+                {!collapsed && matchedThreads.length === 0 && !keyword && (
+                  <div className="px-2 py-1 pl-[30px] text-[12px] leading-5 text-label-3">还没有会话</div>
+                )}
+              </section>
+            );
+          })}
 
-        {projects.length === 0 && listedThreads.length === 0 && !keyword && (
+        {sharedThreads.length > 0 && (
+          <section className="mt-1 border-t border-line-2 pt-2">
+            <div className="flex h-9 items-center gap-1.5 px-2 text-[12px] font-medium leading-5 text-label-3">
+              <MessagesSquare className="size-3.5" strokeWidth={1.8} />
+              共享会话
+            </div>
+            {sharedThreads.map((thread) => renderThread(thread, { manage: false }))}
+          </section>
+        )}
+
+        {projects.length === 0 && sharedThreads.length === 0 && (
           <div className="flex flex-col items-center gap-2 px-4 pt-16 text-center">
             <FolderPlus className="size-5 text-label-caption" strokeWidth={1.6} />
             <p className="text-[13px] leading-5 text-label-3">还没有工作区</p>
@@ -237,13 +441,7 @@ export function Sidebar({
           </div>
         )}
 
-        {projects.length > 0 && listedThreads.length === 0 && !keyword && (
-          <div className="px-2 py-6 text-center text-[12px] leading-5 text-label-3">
-            还没有会话
-          </div>
-        )}
-
-        {keyword && listedThreads.length === 0 && (
+        {keyword && visibleProjectCount === 0 && sharedThreads.length === 0 && (
           <div className="px-2 py-6 text-center text-[12px] leading-5 text-label-3">
             没有匹配的会话
           </div>
@@ -320,6 +518,19 @@ export function Sidebar({
           </form>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={confirmTarget !== null}
+        onOpenChange={(open) => !open && setConfirmTarget(null)}
+        title="移除工作区？"
+        description={confirmTarget ? `将移除“${confirmTarget.name}”，其中的归档会话也会被删除；磁盘文件不会删除。` : ""}
+        confirmLabel="移除"
+        destructive
+        onConfirm={() => {
+          if (confirmTarget) void removeWorkspace(confirmTarget.id);
+          setConfirmTarget(null);
+        }}
+      />
     </aside>
   );
 }

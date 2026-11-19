@@ -17,6 +17,8 @@ export interface AgentClient {
   stop(): Promise<Error[]>;
   createSession(config: SessionConfig): Promise<AgentSession>;
   resumeSession(id: string, config: ResumeSessionConfig): Promise<AgentSession>;
+  /** 复制引擎落盘历史，使目标会话能从源会话的上下文独立继续。 */
+  forkSession?(sourceId: string, destId: string): Promise<void>;
   deleteSession(id: string): Promise<void>;
   listModels(): Promise<AgentModelInfo[]>;
   /** 无工具的一次性文本生成（提交信息等）；不支持的引擎省略即可。 */

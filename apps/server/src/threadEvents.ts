@@ -57,3 +57,40 @@ export async function deleteThreadEvents(threadId: string) {
   await flushDbWrites();
   await query("DELETE FROM thread_events WHERE thread_id = ?", [threadId]);
 }
+
+export async function copyThreadEvents(sourceId: string, destId: string) {
+  if (!usingDatabase()) return;
+  if (sourceId === destId) throw new Error("不能分叉到同一会话");
+  await flushDbWrites();
+  const { rows } = await query<{
+    event_id: string;
+    sequence_number: number | bigint | string;
+    event_type: string;
+    occurred_at: string;
+    data: string | SessionEvent;
+  }>(
+    "SELECT event_id, sequence_number, event_type, occurred_at, data FROM thread_events WHERE thread_id = ? ORDER BY sequence_number",
+    [sourceId],
+  );
+  if (rows.length === 0) return;
+  await transaction(async (execute) => {
+    for (const row of rows) {
+      await upsert(
+        {
+          table: "thread_events",
+          values: {
+            thread_id: destId,
+            event_id: row.event_id,
+            sequence_number: Number(row.sequence_number),
+            event_type: row.event_type,
+            occurred_at: row.occurred_at,
+            data: typeof row.data === "string" ? row.data : JSON.stringify(row.data),
+          },
+          conflictColumns: ["thread_id", "event_id"],
+          updateColumns: [],
+        },
+        execute,
+      );
+    }
+  });
+}

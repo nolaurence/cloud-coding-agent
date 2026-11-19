@@ -264,6 +264,8 @@ interface AppState {
   ) => Promise<ThreadMeta>;
   setThreadPinned: (threadId: string, pinned: boolean) => Promise<ThreadMeta>;
   setThreadArchived: (threadId: string, archived: boolean) => Promise<ThreadMeta>;
+  renameThread: (threadId: string, title: string) => Promise<ThreadMeta>;
+  forkThread: (threadId: string) => Promise<ThreadMeta>;
   setThreadModel: (threadId: string, model: ModelRef) => Promise<void>;
   updateThreadOverview: (threadId: string, overview: ThreadOverviewAnnotations) => Promise<void>;
   setThreadAgentMode: (threadId: string, agentMode: AgentMode) => Promise<void>;
@@ -887,6 +889,28 @@ export const useApp = create<AppState>((set, get) => {
         threads: state.threads.map((thread) => (thread.id === threadId ? updated : thread)),
       }));
       return updated;
+    },
+
+    renameThread: async (threadId, title) => {
+      const updated = await request<ThreadMeta>({
+        type: "thread.rename",
+        threadId,
+        title,
+      });
+      set((state) => ({
+        threads: state.threads.map((thread) => (thread.id === threadId ? updated : thread)),
+      }));
+      return updated;
+    },
+
+    forkThread: async (threadId) => {
+      const created = await request<ThreadMeta>({ type: "thread.fork", threadId });
+      set((state) => ({
+        threads: state.threads.some((thread) => thread.id === created.id)
+          ? state.threads.map((thread) => (thread.id === created.id ? created : thread))
+          : [created, ...state.threads],
+      }));
+      return created;
     },
 
     setThreadModel: async (threadId, model) => {

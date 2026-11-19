@@ -14,7 +14,7 @@
 - **MCP 模块**:本地 stdio / 远程 HTTP MCP 服务器管理,支持平台级配置和 workspace 根目录 `.mcp.json`,按工具白名单启用
 - **Skill 模块**:SKILL.md 技能管理(新建/编辑/启停/外部目录),支持平台级技能和 workspace `.github/skills/<name>/SKILL.md`,输入框 `/技能名` 调用。Codex 内置技能(`imagegen`、`openai-docs`)在会话 `$CODEX_HOME/skills/.system` 下,不在 git 工作区;可用 `manage_skills` 读取,不要按仓库相对路径去打开 `SKILL.md`
 - **插件市场**:兼容 [Agent Plugins 1.0.0](https://agent-plugins.org/specification) 标准(`plugin.json` + `skills/` + `mcp.json`),也兼容 Claude/Codex/Copilot 布局的插件目录;内置一方法插件与官方仓库精选,并扫描仓库 `plugins/` 目录作为「本地仓库」市场(默认未安装);支持从 git 地址、`owner/repo`、`local:<名>` 或本地目录安装,插件贡献的技能与 MCP 服务器自动进入会话,可随时停用/卸载
-- **输入框增强**:`@` 引用项目文件(自动作为附件发送)、`/` 选择技能
+- **输入框增强**:支持选择、拖拽或粘贴上传文件与图片(单个文件 20 MB、图片 10 MB);`@` 引用项目文件(自动作为附件发送)、`/` 选择技能。上传文件会在发送回合前复制到会话工作区的 `.uploads/<上传标识>/` 下,保证 Codex/DSH 文件沙箱与远端 Docker 沙箱都能直接读取
 - **文件操作**:文件面板的文件树、搜索结果和预览标题支持右键下载、删除。PNG、JPEG、GIF、WebP、BMP、AVIF、ICO 图片可直接预览；下载保留原始字节，不受文本预览限制；删除需二次确认及工作区/会话所有者权限，不支持递归删除目录。
 - **项目管理**:一个项目 = 服务器上的一个工作目录,会话在其 cwd 中执行
 - **代码托管账户**:在「设置 → 通用」绑定 GitHub / Gitee,Agent 可使用当前用户的授权执行 clone、fetch、pull、push

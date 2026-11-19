@@ -32,7 +32,8 @@ import type { AgentClient, AgentModelInfo, AgentSession } from "../agentRuntime.
 import { usingDatabase } from "../db.js";
 import { COPILOT_HOME, DATA_DIR } from "../env.js";
 import { store } from "../store.js";
-import { ThreadEventStore, deleteThreadEvents } from "../threadEvents.js";
+import { ThreadEventStore, copyThreadEvents, deleteThreadEvents } from "../threadEvents.js";
+import { copySessionHome, forkDshNativeSession, rewriteDshSessionIdentity } from "../sessionFork.js";
 import { object, array, startLlmGateway, text } from "../llmGateway.js";
 import { sanitizedDshRuntimeEnv } from "../runtimeEnv.js";
 import { startDockerSandboxServer, SANDBOX_INSTRUCTIONS } from "../dockerSandbox.js";
@@ -672,6 +673,25 @@ export class DshClient implements AgentClient {
 
   resumeSession(id: string, config: ResumeSessionConfig) {
     return this.open(id, config, true);
+  }
+
+  async forkSession(sourceId: string, destId: string) {
+    const source = this.sessions.get(sourceId);
+    if (source) {
+      await source.disconnect().catch(() => {});
+      this.sessions.delete(sourceId);
+    }
+    const dest = this.sessions.get(destId);
+    if (dest) {
+      await dest.disconnect().catch(() => {});
+      this.sessions.delete(destId);
+    }
+    sessionPath(sourceId);
+    sessionPath(destId);
+    copySessionHome(sessionPath(sourceId), sessionPath(destId));
+    rewriteDshSessionIdentity(sessionPath(destId), sourceId, destId);
+    await forkDshNativeSession(sessionPath(destId), sourceId, destId);
+    await copyThreadEvents(sourceId, destId);
   }
 
   async deleteSession(id: string) {

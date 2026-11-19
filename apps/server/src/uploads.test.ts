@@ -9,7 +9,8 @@ const testRoot = fs.mkdtempSync(path.join(process.cwd(), ".uploads-test-"));
 const originalDataDir = process.env.CCA_DATA_DIR;
 process.env.CCA_DATA_DIR = testRoot;
 const {
-  MAX_FILE_SIZE, MAX_USER_UPLOADS_SIZE, storeUploadedFile, storeUploadedImage,
+  MAX_FILE_SIZE, MAX_USER_UPLOADS_SIZE, WORKSPACE_UPLOADS_DIRECTORY,
+  materializeTurnAttachments, storeUploadedFile, storeUploadedImage,
   uploadDirectory, validateTurnAttachments, readStoredImage, removeUploadedImages, removeThreadUploads,
 } = await import("./uploads.js");
 const { registerUploadRoutes } = await import("./uploadRoutes.js");
@@ -290,4 +291,149 @@ test("draft deletion checks ownership and refuses attachments referenced by any 
     assert.equal((await app.inject({ method: "DELETE", url, headers: { authorization: "Bearer draft-owner" } })).statusCode, 204);
     assert.equal(fs.existsSync(stored.path), false);
   }
+});
+
+function workspacePath(workspace: string, target: string): string {
+  return path.relative(fs.realpathSync(workspace), target);
+}
+
+test("copies uploaded files into the session workspace for the engine", (t) => {
+  const { workspace } = fixture(t);
+  const file = storeUploadedFile("workspace-owner", Buffer.from("hello workspace"), "notes/季度 报告.md");
+  const attachments: TurnAttachment[] = [{ ...file }];
+
+  validateTurnAttachments("workspace-owner", workspace, attachments);
+  materializeTurnAttachments("workspace-owner", workspace, attachments);
+
+  const target = attachments[0]!.path;
+  const relative = workspacePath(workspace, target);
+  assert.ok(!relative.startsWith("..") && !path.isAbsolute(relative), relative);
+  assert.deepEqual(relative.split(path.sep), [WORKSPACE_UPLOADS_DIRECTORY, file.fileId!.replace(/\.md$/, ""), "季度 报告.md"]);
+  assert.equal(fs.readFileSync(target, "utf8"), "hello workspace");
+
+  // 重复发送同一上传时复用工作区副本，不再复制。
+  const repeated: TurnAttachment[] = [{ ...file }];
+  validateTurnAttachments("workspace-owner", workspace, repeated);
+  materializeTurnAttachments("workspace-owner", workspace, repeated);
+  assert.equal(repeated[0]!.path, target);
+  assert.deepEqual(fs.readdirSync(path.dirname(target)), ["季度 报告.md"]);
+});
+
+test("sanitizes workspace attachment names without escaping the workspace", (t) => {
+  const { workspace } = fixture(t);
+  const file = storeUploadedFile("sanitize", Buffer.from("data"), "report.txt");
+  for (const displayName of ["../../escape.txt", "a:b*c?.txt", 'quote".txt', "CON.txt", "报告".repeat(80) + ".md"]) {
+    const attachments: TurnAttachment[] = [{ ...file, displayName }];
+    validateTurnAttachments("sanitize", workspace, attachments);
+    materializeTurnAttachments("sanitize", workspace, attachments);
+    const target = attachments[0]!.path;
+    const relative = workspacePath(workspace, target);
+    assert.ok(!relative.startsWith("..") && !path.isAbsolute(relative), relative);
+    assert.equal(relative.split(path.sep).length, 3, relative);
+    const base = path.basename(target);
+    assert.ok(!/[<>:"|?*]/.test(base), base);
+    assert.ok(Buffer.byteLength(base) <= 255, base);
+    assert.equal(fs.readFileSync(target, "utf8"), "data");
+  }
+});
+
+test("leaves workspace-relative and image attachments unchanged", (t) => {
+  const { workspace } = fixture(t);
+  const image = storeUploadedImage("mixed", png, "image/png", "photo.png");
+  const attachments: TurnAttachment[] = [
+    { path: "src/inside.ts", displayName: "src/inside.ts" },
+    { ...image },
+  ];
+
+  validateTurnAttachments("mixed", workspace, attachments);
+  materializeTurnAttachments("mixed", workspace, attachments);
+
+  assert.equal(attachments[0]!.path, fs.realpathSync(path.join(workspace, "src", "inside.ts")));
+  assert.equal(attachments[1]!.path, image.path);
+});
+
+test("refuses to copy another user's upload into a workspace", (t) => {
+  const { workspace } = fixture(t);
+  const file = storeUploadedFile("upload-owner", Buffer.from("private"), "private.txt");
+  assert.throws(
+    () => materializeTurnAttachments("other-user", workspace, [{ ...file }]),
+    /不属于当前用户/,
+  );
+  assert.equal(fs.existsSync(path.join(workspace, WORKSPACE_UPLOADS_DIRECTORY)), false);
+});
+
+test("rejects workspace upload directories that escape the workspace", (t) => {
+  const { workspace, outside } = fixture(t);
+  try {
+    fs.symlinkSync(outside, path.join(workspace, WORKSPACE_UPLOADS_DIRECTORY), "junction");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") return t.skip("当前环境不允许创建符号链接");
+    throw error;
+  }
+  const file = storeUploadedFile("escape-owner", Buffer.from("escape"), "escape.txt");
+  const attachments: TurnAttachment[] = [{ ...file }];
+  validateTurnAttachments("escape-owner", workspace, attachments);
+  assert.throws(
+    () => materializeTurnAttachments("escape-owner", workspace, attachments),
+    /工作区附件目录无效/,
+  );
+  assert.deepEqual(fs.readdirSync(outside), ["secret.txt"]);
+});
+
+test("rejects a symbolic link at the workspace attachment target", (t) => {
+  const { workspace } = fixture(t);
+  const file = storeUploadedFile("target-link", Buffer.from("payload"), "report.txt");
+  const directory = path.join(
+    workspace,
+    WORKSPACE_UPLOADS_DIRECTORY,
+    file.fileId!.replace(/\.[a-z0-9]{1,16}$/, ""),
+  );
+  fs.mkdirSync(directory, { recursive: true });
+  try {
+    fs.symlinkSync(path.join(workspace, "src", "inside.ts"), path.join(directory, "report.txt"), "file");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") return t.skip("当前环境不允许创建符号链接");
+    throw error;
+  }
+  const attachments: TurnAttachment[] = [{ ...file }];
+  validateTurnAttachments("target-link", workspace, attachments);
+  assert.throws(
+    () => materializeTurnAttachments("target-link", workspace, attachments),
+    /工作区附件路径无效/,
+  );
+  assert.equal(fs.readFileSync(path.join(workspace, "src", "inside.ts"), "utf8"), "export {};\n");
+});
+
+test("turn.start hands the engine a path inside the session workspace", async (t) => {
+  const { workspace } = fixture(t);
+  const previousThreads = store.threads;
+  const previousProjects = store.projects;
+  t.after(() => { store.threads = previousThreads; store.projects = previousProjects; });
+  const file = storeUploadedFile("engine-owner", Buffer.from("engine payload"), "engine.txt");
+  const current = { ...thread(), userId: "engine-owner", messageAttachments: {} };
+  store.threads = [current];
+  store.projects = [{ id: "project", name: "Project", ownerId: "engine-owner", path: workspace }];
+  const { Hub } = await import("./hub.js");
+  const delivered: TurnAttachment[][] = [];
+  const hub = Object.assign(Object.create(Hub.prototype), {
+    clients: new Set(),
+    provisionalThreads: new Map(),
+    manager: {
+      sendMessage: async (_threadId: string, _text: string, attachments: TurnAttachment[]) => {
+        delivered.push(attachments);
+      },
+    },
+  }) as { onMessage(conn: unknown, raw: string): Promise<void> };
+  const replies: { ok: boolean; error?: string }[] = [];
+  const conn = { user: { username: "engine-owner", role: "user" }, socket: {
+    readyState: 1, OPEN: 1, send: (raw: string) => replies.push(JSON.parse(raw)),
+  } };
+  await hub.onMessage(conn, JSON.stringify({ type: "turn.start", id: "workspace", threadId: current.id,
+    text: "send", attachments: [file] }));
+  assert.equal(replies.at(-1)?.ok, true, replies.at(-1)?.error);
+  const enginePath = delivered[0]?.[0]?.path;
+  assert.ok(enginePath, "engine did not receive attachment path");
+  const relative = workspacePath(workspace, enginePath);
+  assert.ok(!relative.startsWith("..") && !path.isAbsolute(relative), relative);
+  assert.equal(fs.readFileSync(enginePath, "utf8"), "engine payload");
 });
