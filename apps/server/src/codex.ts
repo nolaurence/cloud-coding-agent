@@ -23,7 +23,7 @@ import { CODEX_IMAGE_ACTOR_HEADER, CODEX_IMAGE_ACTOR_VALUE, type ImageGeneration
 import { attachmentReferenceText } from "./attachmentPrompt.js";
 import { startDockerSandboxServer, SANDBOX_INSTRUCTIONS } from "./dockerSandbox.js";
 
-const CODEX_HOME = path.join(DATA_DIR, "codex-home");
+export const CODEX_HOME = path.join(DATA_DIR, "codex-home");
 const MAX_CONTEXT_OUTPUT_RESERVE_TOKENS = 16_000;
 export class SessionNotFoundError extends Error {}
 
