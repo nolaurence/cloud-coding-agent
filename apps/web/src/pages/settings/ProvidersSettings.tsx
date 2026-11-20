@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useState, type ComponentProps } from "react";
+import { Check, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import {
   REASONING_EFFORTS,
   type ModelEntry,
@@ -32,6 +32,27 @@ const reasoningEffortLabels: Record<ReasoningEffort, string> = {
   xhigh: "极高",
   max: "最高",
 };
+
+function ReasoningEffortPill({
+  selected,
+  children,
+  ...props
+}: ComponentProps<typeof Button> & { selected: boolean }) {
+  return (
+    <Button
+      type="button"
+      {...props}
+      variant={selected ? "secondary" : "outline"}
+      size="xs"
+      aria-pressed={selected}
+    >
+      {children}
+      {selected ? (
+        <Check data-icon="inline-end" className="size-3" strokeWidth={2.25} aria-hidden="true" />
+      ) : null}
+    </Button>
+  );
+}
 
 const emptyProvider = (): ModelProviderConfig => ({
   id: "",
@@ -431,37 +452,28 @@ export function ProvidersSettings() {
                       <span className="mr-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
                         推理强度
                       </span>
-                      <Button
-                        type="button"
-                        variant={model.supportedReasoningEfforts === undefined ? "secondary" : "outline"}
-                        size="xs"
-                        aria-pressed={model.supportedReasoningEfforts === undefined}
+                      <ReasoningEffortPill
+                        selected={model.supportedReasoningEfforts === undefined}
                         onClick={() => setModelReasoningEfforts(index, undefined)}
                       >
                         自动
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={model.supportedReasoningEfforts?.length === 0 ? "secondary" : "outline"}
-                        size="xs"
-                        aria-pressed={model.supportedReasoningEfforts?.length === 0}
+                      </ReasoningEffortPill>
+                      <ReasoningEffortPill
+                        selected={model.supportedReasoningEfforts?.length === 0}
                         onClick={() => setModelReasoningEfforts(index, [])}
                       >
                         不支持
-                      </Button>
+                      </ReasoningEffortPill>
                       {REASONING_EFFORTS.map((effort) => {
                         const selected = model.supportedReasoningEfforts?.includes(effort) ?? false;
                         return (
-                          <Button
+                          <ReasoningEffortPill
                             key={effort}
-                            type="button"
-                            variant={selected ? "secondary" : "outline"}
-                            size="xs"
-                            aria-pressed={selected}
+                            selected={selected}
                             onClick={() => toggleModelReasoningEffort(index, effort)}
                           >
                             {reasoningEffortLabels[effort]}
-                          </Button>
+                          </ReasoningEffortPill>
                         );
                       })}
                       {model.supportedReasoningEfforts && model.supportedReasoningEfforts.length > 0 && (
