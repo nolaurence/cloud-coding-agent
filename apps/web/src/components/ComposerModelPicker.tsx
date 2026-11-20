@@ -21,6 +21,7 @@ import {
   pickerTriggerCopy,
   playRectMorph,
   prefersReducedMotion,
+  reasoningSliderProgress,
   type MorphRect,
 } from "./composerModelPicker";
 import "./composer.css";
@@ -318,13 +319,18 @@ export function ComposerModelPicker({
                   step={1}
                   value={[displayedIndex]}
                   disabled={controlsDisabled || !current}
+                  style={{
+                    ["--reasoning-progress" as string]: String(
+                      reasoningSliderProgress(displayedIndex, efforts.length),
+                    ),
+                  }}
                   onValueChange={([index]) => setPreviewIndex(index ?? 0)}
                   onValueCommit={([index]) => {
                     if (current) void select({ ...current, reasoningEffort: choices[index ?? 0] });
                   }}
                 >
                   <Slider.Track className="composer-reasoning-track">
-                    <Slider.Range className="composer-reasoning-fill" />
+                    <span className="composer-reasoning-fill" aria-hidden="true" />
                     <span className="composer-reasoning-marks" aria-hidden="true">
                       {choices.map((effort) => <span key={effort ?? "default"} />)}
                     </span>
