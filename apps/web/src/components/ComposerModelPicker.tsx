@@ -20,9 +20,11 @@ import {
   modelSectionHeading,
   pickerTriggerCopy,
   playRectMorph,
+  playSizeMorph,
   prefersReducedMotion,
   reasoningSliderProgress,
   type MorphRect,
+  type SizeBox,
 } from "./composerModelPicker";
 import "./composer.css";
 
@@ -40,6 +42,11 @@ function readRect(node: HTMLElement | null): MorphRect | null {
   if (!node) return null;
   const rect = node.getBoundingClientRect();
   return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+}
+
+function readSize(node: HTMLElement | null): SizeBox | null {
+  if (!node) return null;
+  return { width: node.offsetWidth, height: node.offsetHeight };
 }
 
 export function ComposerModelPicker({
@@ -65,8 +72,11 @@ export function ComposerModelPicker({
   const [open, setOpen] = useState(false);
   const [showModels, setShowModels] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [sizeLock, setSizeLock] = useState<SizeBox | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const morphRef = useRef<HTMLDivElement>(null);
+  const reasoningViewRef = useRef<HTMLDivElement>(null);
+  const modelsViewRef = useRef<HTMLDivElement>(null);
   const modelChoiceRef = useRef<HTMLButtonElement>(null);
   const pendingFromRef = useRef<MorphRect | null>(null);
   const morphKindRef = useRef<"open" | "view" | null>(null);
@@ -109,6 +119,12 @@ export function ComposerModelPicker({
   const cancelMorph = () => {
     activeAnimationRef.current?.cancel();
     activeAnimationRef.current = null;
+    const element = morphRef.current;
+    if (!element) return;
+    element.style.width = "";
+    element.style.height = "";
+    element.style.transform = "";
+    element.style.opacity = "";
   };
 
   const playMorphFrom = (from: MorphRect, duration: number, easing: string, opacityFrom = 1) => {
@@ -149,19 +165,26 @@ export function ComposerModelPicker({
     if (closeGenerationRef.current !== generation) return;
     setOpen(false);
     setShowModels(false);
+    setSizeLock(null);
     closingRef.current = false;
   };
 
-  const returnToReasoning = () => {
-    pendingFromRef.current = readRect(morphRef.current);
+  const captureViewSize = () => {
+    cancelMorph();
+    const size = readSize(morphRef.current);
+    pendingFromRef.current = size ? { left: 0, top: 0, ...size } : null;
     morphKindRef.current = "view";
+    setSizeLock(size);
+  };
+
+  const returnToReasoning = () => {
+    captureViewSize();
     setShowModels(false);
     requestAnimationFrame(() => modelChoiceRef.current?.focus());
   };
 
   const openModels = () => {
-    pendingFromRef.current = readRect(morphRef.current);
-    morphKindRef.current = "view";
+    captureViewSize();
     setShowModels(true);
   };
 
@@ -170,7 +193,7 @@ export function ComposerModelPicker({
     const selected =
       morphRef.current?.querySelector<HTMLButtonElement>(".composer-model-option.is-selected:not(:disabled)") ??
       morphRef.current?.querySelector<HTMLButtonElement>(".composer-model-option:not(:disabled)");
-    selected?.focus();
+    selected?.focus({ preventScroll: true });
   }, [open, showModels]);
 
   useEffect(() => {
@@ -182,6 +205,7 @@ export function ComposerModelPicker({
       cancelMorph();
       setOpen(false);
       setShowModels(false);
+      setSizeLock(null);
     }
   }, [disabled]);
 
@@ -201,7 +225,30 @@ export function ComposerModelPicker({
       return;
     }
     if (kind === "view") {
-      playMorphFrom(from, COMPOSER_MODEL_MOTION.viewMs, COMPOSER_MODEL_MOTION.viewEasing);
+      const element = morphRef.current;
+      const incoming = (showModels ? modelsViewRef : reasoningViewRef).current;
+      const to = readSize(incoming);
+      const releaseLock = () => {
+        const morph = morphRef.current;
+        if (morph) {
+          morph.style.width = "";
+          morph.style.height = "";
+        }
+        setSizeLock(null);
+      };
+      if (!element || !to) {
+        releaseLock();
+        return;
+      }
+      if (prefersReducedMotion()) {
+        releaseLock();
+        return;
+      }
+      activeAnimationRef.current = playSizeMorph(element, from, to, {
+        duration: COMPOSER_MODEL_MOTION.viewMs,
+        easing: COMPOSER_MODEL_MOTION.viewEasing,
+        onFinished: releaseLock,
+      });
     }
   }, [open, showModels]);
 
@@ -265,6 +312,7 @@ export function ComposerModelPicker({
           align="end"
           sideOffset={8}
           collisionPadding={12}
+          updatePositionStrategy="always"
           aria-label="模型与推理强度"
           onEscapeKeyDown={(event) => {
             if (showModels) {
@@ -273,8 +321,13 @@ export function ComposerModelPicker({
             }
           }}
         >
-          <div ref={morphRef} className={`composer-model-morph${showModels ? " is-models" : ""}`}>
+          <div
+            ref={morphRef}
+            className={`composer-model-morph${showModels ? " is-models" : ""}`}
+            style={sizeLock ? { width: sizeLock.width, height: sizeLock.height } : undefined}
+          >
             <div
+              ref={reasoningViewRef}
               className={`composer-panel-view composer-reasoning-view${showModels ? " is-hidden" : " is-active"}`}
               aria-hidden={showModels}
               {...(showModels ? { inert: true } : {})}
@@ -341,6 +394,7 @@ export function ComposerModelPicker({
             </div>
 
             <div
+              ref={modelsViewRef}
               className={`composer-panel-view composer-models-view${showModels ? " is-active" : " is-hidden"}`}
               aria-hidden={!showModels}
               {...(!showModels ? { inert: true } : {})}

@@ -112,6 +112,63 @@ export function playRectMorph(
   return animation;
 }
 
+export type SizeBox = {
+  width: number;
+  height: number;
+};
+
+export function sizeMorphKeyframes(from: SizeBox, to: SizeBox): Array<{
+  width: string;
+  height: string;
+}> {
+  return [
+    { width: `${from.width}px`, height: `${from.height}px` },
+    { width: `${to.width}px`, height: `${to.height}px` },
+  ];
+}
+
+/**
+ * Animate the popover's layout width/height between two panels.
+ * Scale/opacity FLIP is not used here: transforming `.composer-model-morph`
+ * disables `backdrop-filter` and the incoming panel's CSS opacity fade reads
+ * as a transparent flash. Width/height keep the glass fully opaque while the
+ * box morphs, and they notify Floating UI so the panel stays glued to the
+ * trigger instead of jumping after the size change.
+ */
+export function playSizeMorph(
+  element: HTMLElement,
+  from: SizeBox,
+  to: SizeBox,
+  options: {
+    duration: number;
+    easing: string;
+    onFinished?: () => void;
+  },
+): Animation | null {
+  if (typeof element.animate !== "function" || (from.width === to.width && from.height === to.height)) {
+    options.onFinished?.();
+    return null;
+  }
+  element.style.width = `${from.width}px`;
+  element.style.height = `${from.height}px`;
+  const animation = element.animate(sizeMorphKeyframes(from, to), {
+    duration: options.duration,
+    easing: options.easing,
+    fill: "forwards",
+  });
+  void animation.finished.then(
+    () => {
+      if (animation.playState !== "finished") return;
+      element.style.width = `${to.width}px`;
+      element.style.height = `${to.height}px`;
+      animation.cancel();
+      options.onFinished?.();
+    },
+    () => undefined,
+  );
+  return animation;
+}
+
 export function pickerTriggerCopy(args: {
   open: boolean;
   showModels: boolean;

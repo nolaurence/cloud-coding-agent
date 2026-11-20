@@ -171,40 +171,54 @@
 
 .composer-model-morph {
   position: relative;
+  box-sizing: border-box;
   width: 280px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: 16px;
-  background: color-mix(in srgb, var(--popover) 82%, transparent);
   color: var(--popover-foreground);
   box-shadow: 0 10px 40px rgb(0 0 0 / 18%);
+  transform-origin: 0 0;
+}
+
+.composer-model-morph::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--popover) 92%, white);
   backdrop-filter: blur(22px) saturate(1.35);
   -webkit-backdrop-filter: blur(22px) saturate(1.35);
-  transform-origin: 0 0;
+  pointer-events: none;
 }
 
 .dark .composer-model-morph {
   border-color: rgb(255 255 255 / 8%);
-  background: rgb(30 30 32 / 88%);
   box-shadow: 0 12px 40px rgb(0 0 0 / 48%);
 }
 
+.dark .composer-model-morph::before {
+  background: rgb(30 30 32 / 96%);
+}
+
 .composer-panel-view {
+  position: relative;
+  z-index: 1;
   width: 100%;
-  transition: opacity 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .composer-panel-view.is-active {
   position: relative;
-  opacity: 1;
 }
 
 .composer-panel-view.is-hidden {
   position: absolute;
   right: 0;
-  bottom: 0;
+  bottom: auto;
   left: 0;
-  opacity: 0;
+  top: 0;
+  visibility: hidden;
   pointer-events: none;
 }
 
