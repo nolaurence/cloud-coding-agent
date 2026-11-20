@@ -7,6 +7,33 @@ export const COMPOSER_MODEL_MOTION = {
   viewEasing: "cubic-bezier(0.22, 1, 0.36, 1)",
 } as const;
 
+/** Visual size of `.composer-reasoning-thumb`; keep in sync with composer.css. */
+export const REASONING_THUMB_SIZE_PX = 28;
+
+/**
+ * Width of the blue fill so it runs from the track's left edge to the thumb
+ * center. Radix's Slider.Range uses the raw value percentage of the full
+ * track, but the thumb is inset by `getThumbInBoundsOffset` (half the thumb
+ * at 0%, none at 50%, minus half at 100%). Using that padded span keeps the
+ * fill flush with the thumb at every stop, including during width/left
+ * transitions and the model-picker morph (both layout in the same box).
+ */
+export function reasoningFillWidthPx(
+  progress: number,
+  trackWidth: number,
+  thumbSize = REASONING_THUMB_SIZE_PX,
+): number {
+  if (!(trackWidth > 0) || !(thumbSize >= 0)) return 0;
+  const t = Math.min(Math.max(progress, 0), 1);
+  const usable = Math.max(trackWidth - thumbSize, 0);
+  return thumbSize / 2 + t * usable;
+}
+
+export function reasoningSliderProgress(index: number, max: number): number {
+  if (!(max > 0)) return 0;
+  return Math.min(Math.max(index, 0), max) / max;
+}
+
 export type MorphRect = {
   left: number;
   top: number;

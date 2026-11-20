@@ -396,9 +396,11 @@
 
 
 .composer-reasoning-range {
+  --reasoning-thumb-size: 28px;
+  --reasoning-progress: 0;
   position: relative;
   display: flex;
-  height: 28px;
+  height: var(--reasoning-thumb-size);
   align-items: center;
   margin-top: 14px;
   touch-action: none;
@@ -411,6 +413,7 @@
   display: block;
   height: 24px;
   flex: 1;
+  overflow: hidden;
   border-radius: 12px;
   background: var(--muted);
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 6%);
@@ -423,10 +426,16 @@
 
 .composer-reasoning-fill {
   position: absolute;
+  top: 0;
+  left: 0;
   height: 100%;
-  border-radius: inherit;
+  width: calc(
+    var(--reasoning-thumb-size) * 0.5 +
+    (100% - var(--reasoning-thumb-size)) * var(--reasoning-progress)
+  );
   background: #3b82f6;
   pointer-events: none;
+  transition: width 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .composer-reasoning-marks {
@@ -447,12 +456,21 @@
 
 .composer-reasoning-thumb {
   display: block;
-  width: 28px;
-  height: 28px;
+  width: var(--reasoning-thumb-size);
+  height: var(--reasoning-thumb-size);
   border: 1px solid var(--border);
   border-radius: 50%;
   background: white;
   box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
+}
+
+.composer-reasoning-range > span:has(> .composer-reasoning-thumb) {
+  transition: left 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.composer-reasoning-range:active .composer-reasoning-fill,
+.composer-reasoning-range:active > span:has(> .composer-reasoning-thumb) {
+  transition: none;
 }
 
 .composer-reasoning-thumb:focus-visible {
@@ -479,7 +497,8 @@
     transition: none;
   }
 
-  .composer-reasoning-fill, .composer-reasoning-thumb {
+  .composer-reasoning-fill,
+  .composer-reasoning-range > span:has(> .composer-reasoning-thumb) {
     transition: none;
   }
 
