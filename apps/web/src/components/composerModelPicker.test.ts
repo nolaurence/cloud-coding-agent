@@ -8,7 +8,9 @@ import {
   prefersReducedMotion,
   reasoningFillWidthPx,
   reasoningSliderProgress,
+  playSizeMorph,
   rectToTransform,
+  sizeMorphKeyframes,
 } from "./composerModelPicker.js";
 
 test("motion timings stay in the 200–350ms range", () => {
@@ -32,6 +34,61 @@ test("rectToTransform maps the popover box onto the trigger for a shared-element
     rectToTransform(layout, trigger),
     `translate(${trigger.left - layout.left}px, ${trigger.top - layout.top}px) scale(${trigger.width / layout.width}, ${trigger.height / layout.height})`,
   );
+});
+
+test("view morph animates layout width and height instead of scale or opacity", () => {
+  const from = { width: 280, height: 140 };
+  const to = { width: 280, height: 420 };
+  assert.deepEqual(sizeMorphKeyframes(from, to), [
+    { width: "280px", height: "140px" },
+    { width: "280px", height: "420px" },
+  ]);
+  assert.deepEqual(sizeMorphKeyframes(to, from), [
+    { width: "280px", height: "420px" },
+    { width: "280px", height: "140px" },
+  ]);
+  for (const frame of sizeMorphKeyframes(from, to)) {
+    assert.equal("opacity" in frame, false);
+    assert.equal("transform" in frame, false);
+  }
+});
+
+test("playSizeMorph locks the current box then animates to the next panel size", () => {
+  const calls: unknown[] = [];
+  const element = {
+    style: { width: "", height: "" },
+    animate(keyframes: unknown, options: unknown) {
+      calls.push({ width: this.style.width, height: this.style.height, keyframes, options });
+      return { finished: Promise.resolve(), playState: "finished", cancel() {} };
+    },
+  };
+  const from = { width: 280, height: 140 };
+  const to = { width: 280, height: 420 };
+  const animation = playSizeMorph(element as unknown as HTMLElement, from, to, {
+    duration: COMPOSER_MODEL_MOTION.viewMs,
+    easing: COMPOSER_MODEL_MOTION.viewEasing,
+  });
+  assert.ok(animation);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], {
+    width: "280px",
+    height: "140px",
+    keyframes: sizeMorphKeyframes(from, to),
+    options: {
+      duration: COMPOSER_MODEL_MOTION.viewMs,
+      easing: COMPOSER_MODEL_MOTION.viewEasing,
+      fill: "forwards",
+    },
+  });
+  let released = false;
+  assert.equal(playSizeMorph(element as unknown as HTMLElement, from, from, {
+    duration: 280,
+    easing: "linear",
+    onFinished: () => {
+      released = true;
+    },
+  }), null);
+  assert.equal(released, true);
 });
 
 test("closing uses the reverse mapping so the panel shrinks back into the pill", () => {
