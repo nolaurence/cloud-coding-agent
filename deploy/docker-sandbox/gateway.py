@@ -14,14 +14,14 @@ import time
 
 ROOT = Path(__file__).resolve().parent / "workspaces"
 IMAGE = "ghcr.io/converge-ai-labs/a13n-sandbox:0.3.0"
-LIMIT = 64 * 1024 * 1024
-MAX_FILE = 8 * 1024 * 1024
-MAX_FILES = 10000
 OUTPUT_LIMIT = 256 * 1024
 POLICY_FILE = Path(__file__).with_name("dockerSandboxPolicy.json")
 if not POLICY_FILE.exists():  # Repository checkout; the installer copies the same file beside the gateway.
     POLICY_FILE = Path(__file__).resolve().parents[2] / "apps/server/src/dockerSandboxPolicy.json"
 POLICY = json.loads(POLICY_FILE.read_text(encoding="utf8"))
+LIMIT = int(POLICY.get("maxBytes") or 1024 * 1024 * 1024)
+MAX_FILE = int(POLICY.get("maxFileBytes") or 512 * 1024 * 1024)
+MAX_FILES = int(POLICY.get("maxFiles") or 50_000)
 RUNNER = r"""
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -195,7 +195,25 @@ def walk_error(error):
     raise error  # An unreadable source directory must not look like a deletion.
 
 
-def snapshot(root):
+def format_limit(value):
+    gib, mib = 1024 * 1024 * 1024, 1024 * 1024
+    if value >= gib and value % gib == 0:
+        return f"{value // gib} GiB"
+    if value >= mib and value % mib == 0:
+        return f"{value // mib} MiB"
+    if value >= mib:
+        return f"{value / mib:.1f} MiB"
+    return f"{value} B"
+
+
+def sync_limit_warning(skipped):
+    return (
+        f"工作区同步已截断：单文件 {format_limit(MAX_FILE)}、合计 {format_limit(LIMIT)}、{MAX_FILES} 个文件，"
+        f"已跳过 {skipped} 个文件。请在沙箱 run_code 内删除不需要的大目录或缓存后重试；不要在宿主机上执行清理命令。"
+    )
+
+
+def snapshot(root, skipped=None):
     files, total = {}, 0
     for directory, dirs, names in os.walk(root, followlinks=False, onerror=walk_error):
         dirs[:] = [d for d in dirs if not ignored((Path(directory) / d).relative_to(root).as_posix(), True)
@@ -209,15 +227,17 @@ def snapshot(root):
                 continue
             safe_path(root, relative)
             size = file.stat().st_size
-            if size > MAX_FILE:
+            if size > MAX_FILE or total + size > LIMIT or len(files) >= MAX_FILES:
+                if skipped is not None:
+                    skipped.append(relative)
                 continue
-            if total + size > LIMIT or len(files) >= MAX_FILES:
-                raise ValueError("Workspace synchronization limit exceeded (8 MiB/file, 64 MiB total, 10000 files)")
             # O_NOFOLLOW closes the symlink race; code containers have already exited on export.
             fd = os.open(file, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
             with os.fdopen(fd, "rb") as stream:
                 data = stream.read(MAX_FILE + 1)
             if len(data) > MAX_FILE:
+                if skipped is not None:
+                    skipped.append(relative)
                 continue
             total += size
             files[relative] = {"data": base64.b64encode(data).decode(), "hash": hashlib.sha256(data).hexdigest(), "executable": bool(file.stat().st_mode & 0o111)}
@@ -253,15 +273,16 @@ def run_locked(request, workspace):
         raise ValueError("Invalid sandbox workspace directory")
     dirty = ROOT / (workspace.name + ".dirty")
     incoming = request["files"]
-    if not isinstance(incoming, dict) or len(incoming) > MAX_FILES:
+    if not isinstance(incoming, dict):
         raise ValueError("Invalid workspace files")
-    decoded, total = {}, 0
+    decoded, total, skipped_in = {}, 0, 0
     for name, entry in incoming.items():
         target = safe_path(workspace, name)
         data = base64.b64decode(entry["data"], validate=True)
+        if len(decoded) >= MAX_FILES or len(data) > MAX_FILE or total + len(data) > LIMIT:
+            skipped_in += 1
+            continue
         total += len(data)
-        if len(data) > MAX_FILE or total > LIMIT:
-            raise ValueError("Workspace synchronization limit exceeded")
         decoded[name] = (target, data, entry.get("executable", False))
     if dirty.exists():
         # Keep the dirty marker until this run exports successfully. Recovered
@@ -285,14 +306,20 @@ def run_locked(request, workspace):
     dirty.touch()
     try:
         output = execute_code(request, workspace, code, timeout)
-        after = snapshot(workspace)
+        skipped = []
+        after = snapshot(workspace, skipped)
         changes = {n: e for n, e in after.items() if n not in incoming or e["data"] != incoming[n]["data"] or e["executable"] != incoming[n].get("executable", False)}
     except BaseException:
         # Keep unsynchronized source for recovery, but discard known generated
         # files even when export exceeds the limits or execution fails.
         prune_generated(workspace)
         raise
-    result = {**output, "files": changes, "deleted": list(incoming.keys() - after.keys())}
+    skipped_set = set(skipped)
+    deleted = [n for n in decoded if n not in after and n not in skipped_set]
+    result = {**output, "files": changes, "deleted": deleted}
+    skipped_total = skipped_in + len(skipped)
+    if skipped_total:
+        result["syncWarning"] = sync_limit_warning(skipped_total)
     try:
         discard_tree(workspace)
     except Exception as error:
@@ -332,12 +359,15 @@ def recover_locked(request, workspace):
         raise ValueError("Sandbox workspace policy mismatch; update both the CCA application and sandbox gateway")
     if workspace.parent.resolve() != ROOT.resolve() or workspace.is_symlink():
         raise ValueError("Invalid sandbox workspace directory")
-    files = {}
+    files, skipped = {}, []
     if workspace.exists():
         prune_generated(workspace)
-        files = snapshot(workspace)
-    return {"stdout": "", "stderr": "", "exitCode": 0, "timedOut": False, "truncated": False,
-            "files": files, "deleted": [], "recovered": True}
+        files = snapshot(workspace, skipped)
+    recovered = {"stdout": "", "stderr": "", "exitCode": 0, "timedOut": False, "truncated": False,
+                 "files": files, "deleted": [], "recovered": True}
+    if skipped:
+        recovered["syncWarning"] = sync_limit_warning(len(skipped))
+    return recovered
 
 
 def discard_tree(root):

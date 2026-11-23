@@ -59,9 +59,9 @@ CCA_DOCKER_SANDBOX_CONFIG=/data/docker-sandbox.json
 
 由流水线发布包含本次代码的镜像，并保留同一数据卷及上述运行时环境变量后，新建或重新打开会话即可启用。单独重启旧镜像不会增加沙箱功能。SSH 密码不需要传入流水线。
 
-**工作区策略升级（当前 v4）：**云效应用镜像**不会**把这些文件同步到沙箱主机 `192.168.100.130`。发布应用之外，必须将本仓库的 `apps/server/src/dockerSandboxPolicy.json` 和 `deploy/docker-sandbox/gateway.py` 更新到 `.130` 的 `~/cca-code-sandbox/` 同一目录。先上传策略文件，再把网关脚本传到临时文件后原子替换，保留网关所有者及 `0700` 权限。安装器也会同时复制这两个文件；已有部署仅更新文件即可，保留原有 SSH 授权和密钥。网关每次 SSH 调用时加载，无需操作或重启容器。新旧应用/网关混用会明确报版本不匹配。
+**工作区策略升级（当前 v5）：**云效应用镜像**不会**把这些文件同步到沙箱主机 `192.168.100.130`。发布应用之外，必须将本仓库的 `apps/server/src/dockerSandboxPolicy.json` 和 `deploy/docker-sandbox/gateway.py` 更新到 `.130` 的 `~/cca-code-sandbox/` 同一目录。先上传策略文件，再把网关脚本传到临时文件后原子替换，保留网关所有者及 `0700` 权限。安装器也会同时复制这两个文件；已有部署仅更新文件即可，保留原有 SSH 授权和密钥。网关每次 SSH 调用时加载，无需操作或重启容器。新旧应用/网关混用会明确报版本不匹配。
 
-v4：`tools.exec` 将会话/宿主工作区路径映射到 `/workspace`；目录不存在时返回 `errorCode=ENOENT` 和 `directory does not exist`，而不是 `spawn /bin/bash ENOENT`；子命令超时返回 `timedOut=true` 且 `errorCode=TIMEOUT`。`tools.fetch` 对主机名允许 Clash/sing-box Fake-IP（`198.18.0.0/15`），仍拒绝真实内网、链路本地、回环和云元数据地址，以及这些范围内的 IP 字面量。容器会继承网关进程的 `HTTP(S)_PROXY` / `ALL_PROXY` / `NO_PROXY`。v3 已将 `.codex-tmp`、`.cursor`、`.acl-recovery` 等临时目录排除出同步，导出时跳过超大单文件，并在上次导出失败后允许恢复源码后继续执行。
+v5：同步默认上限提高到单文件 512 MiB、合计 1 GiB、50000 个文件（仍可用 `CCA_SANDBOX_MAX_FILE_BYTES` / `CCA_SANDBOX_MAX_BYTES` / `CCA_SANDBOX_MAX_FILES` 覆盖应用侧），以便工作区内的 JDK/Maven 等工具链能完整往返。超过合计或文件数上限时跳过剩余文件并返回 `syncWarning`，而不是让本次及后续 `run_code` 全部失败；删除类命令因此仍可执行。v4：`tools.exec` 将会话/宿主工作区路径映射到 `/workspace`；目录不存在时返回 `errorCode=ENOENT` 和 `directory does not exist`，而不是 `spawn /bin/bash ENOENT`；子命令超时返回 `timedOut=true` 且 `errorCode=TIMEOUT`。`tools.fetch` 对主机名允许 Clash/sing-box Fake-IP（`198.18.0.0/15`），仍拒绝真实内网、链路本地、回环和云元数据地址，以及这些范围内的 IP 字面量。容器会继承网关进程的 `HTTP(S)_PROXY` / `ALL_PROXY` / `NO_PROXY`。v3 已将 `.codex-tmp`、`.cursor`、`.acl-recovery` 等临时目录排除出同步，导出时跳过超大单文件，并在上次导出失败后允许恢复源码后继续执行。
 
 ## 执行与文件
 
@@ -70,7 +70,7 @@ v4：`tools.exec` 将会话/宿主工作区路径映射到 `/workspace`；目录
 - `full` 权限允许容器通过 bridge 网络访问外部服务；其他权限使用 `--network none`。容器资源限制不随权限提升而取消。
 - Codex 禁用本地 shell、unified exec、JS REPL/code mode；DSH 禁用本地 shell、文件、工作流和子代理执行工具。已有其他 MCP/平台工具继续按其自身权限运行。
 - 每次执行前同步项目普通文件，执行后同步新增、修改、删除及可执行位；二进制文件使用 base64。上传和回写使用同一份 `dockerSandboxPolicy.json`，规则作用于**任意目录层级**，支持工作区下多个嵌套工程；跳过符号链接与下表生成物。现有本地依赖和缓存不会被删除或覆盖。Git 元数据不同步，Git 操作使用平台已有入口。
-- 同步上限默认为单文件 8 MiB、总计 64 MiB、10000 文件，可用 `CCA_SANDBOX_MAX_FILE_BYTES`、`CCA_SANDBOX_MAX_BYTES`、`CCA_SANDBOX_MAX_FILES` 覆盖。上传和回写都会跳过超过单文件上限的文件，以及 `.codex-tmp`、`.acl-recovery`、`.cursor` 等临时/恢复目录，不再让整个工作区失败。Git 仓库额外遵循 `.gitignore`（不上传被忽略的 `data/`、日志、本地缓存等）。输出总计最多 256 KiB，超过后终止容器。单次代码最多 256 KiB。构建产物不会自动回传，可复制需要交付的文件到未排除目录。
+- 同步上限默认为单文件 512 MiB、总计 1 GiB、50000 文件，可用 `CCA_SANDBOX_MAX_FILE_BYTES`、`CCA_SANDBOX_MAX_BYTES`、`CCA_SANDBOX_MAX_FILES` 覆盖应用侧。上传和回写都会跳过超过单文件或合计上限的文件，以及 `.codex-tmp`、`.acl-recovery`、`.cursor` 等临时/恢复目录，并给出警告，不再让整个工作区或后续命令失败。Git 仓库额外遵循 `.gitignore`（不上传被忽略的 `data/`、日志、本地缓存等）。输出总计最多 256 KiB，超过后终止容器。单次代码最多 256 KiB。构建产物不会自动回传，可复制需要交付的文件到未排除目录。
 - 检测到本地编辑冲突时不覆盖变化的文件，完整结果保存在 `<CCA_DATA_DIR>/sandbox-recovery/<run>.json`，错误消息包含位置。远端导出失败时清理已知缓存，保留尚未同步的源码和 `<hash>.dirty`；下次 `run` 会先收回这些源码再执行（因此清理命令不会被同一闸门堵死），也可单独调用 `recover` 把远端源码拉回 CCA。执行目录清理失败时，完整导出结果另存为 `<hash>.recovery.json`。正常执行不保留远端工作目录。
 - 升级前遗留的无 `.dirty` 工作目录，在该会话下一次执行时清空重建；有 `.dirty` 的恢复现场不自动删除。已不使用的旧会话目录由管理员清理。
 
@@ -92,7 +92,7 @@ v4：`tools.exec` 将会话/宿主工作区路径映射到 `/workspace`；目录
 npm run test:sandbox -w @cca/server
 ```
 
-覆盖四种语言的嵌套工程、源码/锁文件/wrapper 保留、双向过滤、超大缓存跳过、执行目录回收、超时/取消/失败结果处理以及导出失败恢复。默认 `npm test` 也包含 TypeScript 文件同步与边界检查；真实 Docker 和引擎集成测试需显式指定配置：
+覆盖四种语言的嵌套工程、源码/锁文件/wrapper 保留、双向过滤、超大缓存跳过、合计超限时截断而非卡死、执行目录回收、超时/取消/失败结果处理以及导出失败恢复。默认 `npm test` 也包含 TypeScript 文件同步与边界检查；真实 Docker 和引擎集成测试需显式指定配置：
 
 ```powershell
 $env:CCA_SANDBOX_INTEGRATION_CONFIG = "$env:USERPROFILE\.cloud-coding-agent\docker-sandbox.json"

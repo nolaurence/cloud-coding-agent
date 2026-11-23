@@ -1,6 +1,9 @@
 import policy from "./dockerSandboxPolicy.json" with { type: "json" };
 
 export const SANDBOX_WORKSPACE_POLICY_VERSION = policy.version;
+export const SANDBOX_SYNC_MAX_BYTES = policy.maxBytes;
+export const SANDBOX_SYNC_MAX_FILE_BYTES = policy.maxFileBytes;
+export const SANDBOX_SYNC_MAX_FILES = policy.maxFiles;
 const directories = new Set(policy.directories);
 const files = new Set(policy.files);
 const directoryPrefixes = policy.directoryPrefixes ?? [];

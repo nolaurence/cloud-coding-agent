@@ -5,7 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import fixtures from "./dockerSandboxFixtures.json" with { type: "json" };
 import { spawnSync } from "node:child_process";
-import { applyRecoveredWorkspace, applySandboxChanges, DockerSandbox, gitSnapshotNames, isPreviousExportFailed, readDockerSandboxConfig, sandboxSyncLimits, snapshotWorkspace, validateWorkspaceName, type SandboxResult } from "./dockerSandbox.js";
+import { applyRecoveredWorkspace, applySandboxChanges, collectWorkspaceSnapshot, DockerSandbox, gitSnapshotNames, isPreviousExportFailed, readDockerSandboxConfig, sandboxSyncLimits, sandboxSyncWarning, snapshotWorkspace, validateWorkspaceName, type SandboxResult } from "./dockerSandbox.js";
+import { SANDBOX_SYNC_MAX_BYTES, SANDBOX_SYNC_MAX_FILE_BYTES, SANDBOX_SYNC_MAX_FILES, SANDBOX_WORKSPACE_POLICY_VERSION } from "./dockerSandboxFiles.js";
 
 const result = (files: Record<string, { data: string; executable: boolean }>, deleted: string[] = []): SandboxResult => ({
   stdout: "", stderr: "", exitCode: 0, timedOut: false, truncated: false, files, deleted,
@@ -112,7 +113,40 @@ test("gitignored files, extra editor dirs and oversized blobs are skipped instea
   assert.deepEqual(Object.keys(before).sort(), [".gitignore", "keep.ts"]);
 });
 
-test("non-git workspaces skip policy caches and honor a lowered sync budget", async t => {
+test("sandbox sync defaults leave room for a JDK plus Maven tree", () => {
+  const previous = {
+    bytes: process.env.CCA_SANDBOX_MAX_BYTES,
+    file: process.env.CCA_SANDBOX_MAX_FILE_BYTES,
+    files: process.env.CCA_SANDBOX_MAX_FILES,
+  };
+  delete process.env.CCA_SANDBOX_MAX_BYTES;
+  delete process.env.CCA_SANDBOX_MAX_FILE_BYTES;
+  delete process.env.CCA_SANDBOX_MAX_FILES;
+  try {
+    const limits = sandboxSyncLimits();
+    assert.equal(SANDBOX_WORKSPACE_POLICY_VERSION, 5);
+    assert.equal(limits.maxBytes, 1024 * 1024 * 1024);
+    assert.equal(limits.maxFileBytes, 512 * 1024 * 1024);
+    assert.equal(limits.maxFiles, 50_000);
+    assert.equal(limits.maxBytes, SANDBOX_SYNC_MAX_BYTES);
+    assert.equal(limits.maxFileBytes, SANDBOX_SYNC_MAX_FILE_BYTES);
+    assert.equal(limits.maxFiles, SANDBOX_SYNC_MAX_FILES);
+    assert.match(sandboxSyncWarning(3), /合计 1 GiB/);
+    assert.match(sandboxSyncWarning(3), /单文件 512 MiB/);
+    assert.match(sandboxSyncWarning(3), /已跳过 3 个文件/);
+    assert.match(sandboxSyncWarning(3), /不要在宿主机上执行清理命令/);
+    assert.doesNotMatch(sandboxSyncWarning(3), /请缩小工作区/);
+  } finally {
+    if (previous.bytes === undefined) delete process.env.CCA_SANDBOX_MAX_BYTES;
+    else process.env.CCA_SANDBOX_MAX_BYTES = previous.bytes;
+    if (previous.file === undefined) delete process.env.CCA_SANDBOX_MAX_FILE_BYTES;
+    else process.env.CCA_SANDBOX_MAX_FILE_BYTES = previous.file;
+    if (previous.files === undefined) delete process.env.CCA_SANDBOX_MAX_FILES;
+    else process.env.CCA_SANDBOX_MAX_FILES = previous.files;
+  }
+});
+
+test("non-git workspaces skip policy caches and honor a lowered sync budget without failing", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-sync-limit-"));
   const previous = {
     bytes: process.env.CCA_SANDBOX_MAX_BYTES,
@@ -127,14 +161,46 @@ test("non-git workspaces skip policy caches and honor a lowered sync budget", as
   });
   await fs.mkdir(path.join(root, "node_modules"));
   await fs.writeFile(path.join(root, "node_modules", "pkg.js"), "ignored");
+  await fs.mkdir(path.join(root, ".tooling"));
+  await fs.writeFile(path.join(root, ".tooling", "jdk.bin"), "xxxxxxxx");
   await fs.writeFile(path.join(root, "a.txt"), "aaaa");
   await fs.writeFile(path.join(root, "b.txt"), "bbbb");
   process.env.CCA_SANDBOX_MAX_BYTES = "6";
   assert.equal(sandboxSyncLimits().maxBytes, 6);
-  await assert.rejects(snapshotWorkspace(root), /合计 0.0 MiB|合计 .* MiB|请缩小工作区/);
+  const limited = await collectWorkspaceSnapshot(root);
+  assert.equal(Object.keys(limited.files).length, 1);
+  assert.ok(limited.skipped >= 1);
+  assert.equal(limited.truncated, true);
+  assert.ok(Object.keys(limited.files).every(name => name === "a.txt" || name === "b.txt"));
   delete process.env.CCA_SANDBOX_MAX_BYTES;
   process.env.CCA_SANDBOX_MAX_FILES = "1";
-  await assert.rejects(snapshotWorkspace(root), /1 个文件/);
+  const one = await collectWorkspaceSnapshot(root);
+  assert.equal(Object.keys(one.files).length, 1);
+  assert.ok(one.skipped >= 1);
+  assert.equal(one.truncated, true);
+});
+
+test("oversize apply still deletes files so a cleanup command can recover the workspace", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-sync-cleanup-"));
+  const previous = process.env.CCA_SANDBOX_MAX_BYTES;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.CCA_SANDBOX_MAX_BYTES;
+    else process.env.CCA_SANDBOX_MAX_BYTES = previous;
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  await fs.writeFile(path.join(root, "keep.txt"), "keep");
+  await fs.writeFile(path.join(root, "gone.txt"), "gone");
+  const before = await snapshotWorkspace(root);
+  process.env.CCA_SANDBOX_MAX_BYTES = "8";
+  const applied = await applySandboxChanges(root, before, result({
+    "tiny.txt": entry("ok"),
+    "huge.bin": { data: Buffer.alloc(16, 0x61).toString("base64"), executable: false },
+  }, ["gone.txt"]));
+  assert.ok(applied.skipped >= 1);
+  await assert.rejects(fs.access(path.join(root, "gone.txt")));
+  assert.equal(await fs.readFile(path.join(root, "keep.txt"), "utf8"), "keep");
+  assert.equal(await fs.readFile(path.join(root, "tiny.txt"), "utf8"), "ok");
+  await assert.rejects(fs.access(path.join(root, "huge.bin")));
 });
 
 test("nested Python, Node, Go and Java projects synchronize source but never generated files", async t => {

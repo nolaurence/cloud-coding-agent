@@ -1,5 +1,8 @@
 {
-  "version": 4,
+  "version": 5,
+  "maxBytes": 1073741824,
+  "maxFileBytes": 536870912,
+  "maxFiles": 50000,
   "directories": [
     ".git", ".cache", "dist", "build", "coverage",
     "node_modules", ".next", ".nuxt", ".output", ".svelte-kit", ".angular", ".parcel-cache", ".turbo", ".npm", ".pnpm-store",

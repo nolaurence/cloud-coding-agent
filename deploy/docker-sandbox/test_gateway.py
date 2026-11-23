@@ -30,6 +30,12 @@ def write(root, name, data="generated"):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_sync_limits_match_shared_policy(self):
+        self.assertEqual(gateway.POLICY["version"], 5)
+        self.assertEqual(gateway.LIMIT, 1024 * 1024 * 1024)
+        self.assertEqual(gateway.MAX_FILE, 512 * 1024 * 1024)
+        self.assertEqual(gateway.MAX_FILES, 50_000)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="cca-gateway-test-")
         self.addCleanup(temporary.cleanup)
@@ -43,7 +49,7 @@ class WorkspaceTests(unittest.TestCase):
         self.addCleanup(docker_patch.stop)
         self.workspace = self.root / ("a" * 32)
         self.dirty = self.root / (self.workspace.name + ".dirty")
-        self.request = {"workspace_policy_version": 4, "run": "b" * 32, "code": "print('ok')",
+        self.request = {"workspace_policy_version": gateway.POLICY["version"], "run": "b" * 32, "code": "print('ok')",
                         "files": {"nested/src/main.py": entry("source")}}
 
     def test_nested_language_filter_matches_upload_policy(self):
@@ -123,11 +129,11 @@ class WorkspaceTests(unittest.TestCase):
             write(workspace, "nested/src/main.py", "unsynchronized")
             return output()
 
-        def fail_first_snapshot(root):
+        def fail_first_snapshot(root, skipped=None):
             if not failed["once"]:
                 failed["once"] = True
-                raise ValueError("Workspace synchronization limit exceeded (8 MiB/file, 64 MiB total, 10000 files)")
-            return real_snapshot(root)
+                raise ValueError("Workspace synchronization limit exceeded")
+            return real_snapshot(root, skipped)
 
         with patch.object(gateway, "execute_code", side_effect=execute), patch.object(gateway, "snapshot", side_effect=fail_first_snapshot):
             with self.assertRaisesRegex(ValueError, "limit exceeded"):
@@ -137,7 +143,7 @@ class WorkspaceTests(unittest.TestCase):
         for name in FIXTURES["generated"]:
             self.assertFalse((self.workspace / name).exists(), name)
 
-        recovered = gateway.recover_locked({"workspace_policy_version": 4, "workspace": self.workspace.name}, self.workspace)
+        recovered = gateway.recover_locked({"workspace_policy_version": gateway.POLICY["version"], "workspace": self.workspace.name}, self.workspace)
         self.assertEqual(recovered["files"]["nested/src/main.py"]["data"], entry("unsynchronized")["data"])
         self.assertTrue(self.dirty.exists(), "recover must not drop the dirty marker before source is rewritten")
 
@@ -173,17 +179,87 @@ class WorkspaceTests(unittest.TestCase):
             write(workspace, ".codex-tmp/image-validation/node_modules/pkg.js", "x" * 100)
             write(workspace, ".codex-tmp/tailwind-check3.mjs")
             write(workspace, ".acl-recovery/acl-backup-test.json", "{}")
-            huge = write(workspace, "payload.bin")
-            with huge.open("wb") as file:
-                file.truncate(9 * 1024 * 1024)
+            write(workspace, "payload.bin", "x" * 64)
             write(workspace, "nested/src/main.py", "edited")
             return output()
 
-        with patch.object(gateway, "execute_code", side_effect=execute):
+        with patch.object(gateway, "MAX_FILE", 32), patch.object(gateway, "execute_code", side_effect=execute):
             result = gateway.run_locked(self.request, self.workspace)
         self.assertEqual(list(result["files"]), ["nested/src/main.py"])
+        self.assertIn("syncWarning", result)
         self.assertFalse(self.dirty.exists())
         self.assertFalse(self.workspace.exists())
+
+    def test_oversize_tooling_is_skipped_and_does_not_block_the_next_run(self):
+        write(self.workspace, "keep.txt", "keep")
+        write(self.workspace, ".tooling/jdk.bin", "x" * 40)
+        with patch.object(gateway, "LIMIT", 10):
+            files = gateway.snapshot(self.workspace)
+        self.assertEqual(list(files), ["keep.txt"])
+
+        def execute(request, workspace, code, timeout):
+            write(workspace, "nested/src/main.py", "edited")
+            write(workspace, ".tooling/jdk.bin", "x" * 40)
+            return output()
+
+        with patch.object(gateway, "LIMIT", 20), patch.object(gateway, "execute_code", side_effect=execute):
+            result = gateway.run_locked(self.request, self.workspace)
+        self.assertEqual(result["files"]["nested/src/main.py"]["data"], entry("edited")["data"])
+        self.assertNotIn(".tooling/jdk.bin", result["files"])
+        self.assertIn("syncWarning", result)
+        self.assertIn("不要在宿主机上执行清理命令", result["syncWarning"])
+        self.assertFalse(self.dirty.exists())
+        self.assertFalse(self.workspace.exists())
+
+    def test_recover_skips_oversize_leftover_instead_of_failing(self):
+        write(self.workspace, "nested/src/main.py", "keep")
+        write(self.workspace, ".tooling/jdk.bin", "x" * 40)
+        with patch.object(gateway, "LIMIT", 10):
+            recovered = gateway.recover_locked(
+                {"workspace_policy_version": gateway.POLICY["version"], "workspace": self.workspace.name},
+                self.workspace,
+            )
+        self.assertIn("nested/src/main.py", recovered["files"])
+        self.assertNotIn(".tooling/jdk.bin", recovered["files"])
+        self.assertIn("syncWarning", recovered)
+        self.assertIn("不要在宿主机上执行清理命令", recovered["syncWarning"])
+
+    def test_oversize_dirty_workspace_still_runs_cleanup(self):
+        write(self.workspace, "nested/src/main.py", "unsynchronized")
+        write(self.workspace, ".tooling/jdk.bin", "x" * 40)
+        self.dirty.touch()
+        ran = {"cleanup": False}
+
+        def cleanup(request, workspace, code, timeout):
+            ran["cleanup"] = True
+            self.assertEqual((workspace / "nested/src/main.py").read_text(), "unsynchronized")
+            self.assertFalse((workspace / ".tooling/jdk.bin").exists())
+            write(workspace, "nested/src/main.py", "cleaned")
+            return output()
+
+        with patch.object(gateway, "LIMIT", 20), patch.object(gateway, "execute_code", side_effect=cleanup):
+            result = gateway.run_locked({**self.request, "code": "print('rm -rf .tooling')"}, self.workspace)
+        self.assertTrue(ran["cleanup"])
+        self.assertEqual(result["files"]["nested/src/main.py"]["data"], entry("cleaned")["data"])
+        self.assertFalse(self.dirty.exists())
+        self.assertFalse(self.workspace.exists())
+
+    def test_incoming_oversize_files_are_skipped_so_run_still_starts(self):
+        ran = {"execute": False}
+
+        def execute(request, workspace, code, timeout):
+            ran["execute"] = True
+            self.assertFalse((workspace / "huge.bin").exists())
+            self.assertEqual((workspace / "nested/src/main.py").read_text(), "source")
+            return output()
+
+        with patch.object(gateway, "LIMIT", 20), patch.object(gateway, "execute_code", side_effect=execute):
+            gateway.run_locked({
+                **self.request,
+                "files": {**self.request["files"], "huge.bin": entry("x" * 40)},
+            }, self.workspace)
+        self.assertTrue(ran["execute"])
+        self.assertFalse(self.dirty.exists())
 
     def test_cleanup_failure_preserves_complete_export_even_after_partial_removal(self):
         def execute(request, workspace, code, timeout):
