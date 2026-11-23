@@ -40,6 +40,8 @@ export function AppLayout() {
       }
       return next;
     });
+  // 只有主页（新聊天 / 会话页）展示会话侧边栏，设置等页面只保留主导航
+  const showSidebar = location.pathname === "/" || location.pathname.startsWith("/thread");
   const threadPathMatch = location.pathname.match(/^\/thread\/([^/]+)$/);
   const routeThreadId = threadPathMatch?.[1]
     ? decodeURIComponent(threadPathMatch[1])
@@ -83,7 +85,7 @@ export function AppLayout() {
       <div className="hidden h-full min-h-0 shrink-0 md:flex">
         <NavRail
           sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={toggleSidebarCollapsed}
+          onToggleSidebar={showSidebar ? toggleSidebarCollapsed : undefined}
         />
       </div>
 
@@ -91,23 +93,25 @@ export function AppLayout() {
         <SheetContent
           side="left"
           showCloseButton={false}
-          className="w-[min(92vw,23rem)] max-w-none gap-0 p-0 md:hidden sm:max-w-none"
+          className={`${showSidebar ? "w-[min(92vw,23rem)]" : "w-auto"} max-w-none gap-0 p-0 md:hidden sm:max-w-none`}
         >
           <SheetTitle className="sr-only">导航</SheetTitle>
           <div className="flex h-full min-h-0">
             <NavRail onNavigate={() => setSidebarOpen(false)} />
-            <div className="min-w-0 flex-1">
-              <Sidebar
-                onNavigate={() => setSidebarOpen(false)}
-                onClose={() => setSidebarOpen(false)}
-              />
-            </div>
+            {showSidebar && (
+              <div className="min-w-0 flex-1">
+                <Sidebar
+                  onNavigate={() => setSidebarOpen(false)}
+                  onClose={() => setSidebarOpen(false)}
+                />
+              </div>
+            )}
           </div>
         </SheetContent>
       </Sheet>
 
       <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:my-0 md:mr-0 md:rounded-[12px] md:border md:border-line-2 md:shadow-[0_2px_12px_rgba(15,23,42,0.08)] md:dark:shadow-[0_2px_12px_rgba(0,0,0,0.32)]">
-        {!sidebarCollapsed && (
+        {showSidebar && !sidebarCollapsed && (
           <div className="hidden h-full min-h-0 shrink-0 md:flex">
             <Sidebar />
           </div>
