@@ -1,15 +1,30 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import test from "node:test";
 import {
   buildAuthenticatedGitEnv,
   commitProjectChanges,
   normalizeGitRemote,
+  resolveGitWorkTree,
   runAuthenticatedGit,
   type GitRunner,
 } from "./gitOperations.js";
+
+const execFileAsync = promisify(execFile);
+
+async function git(root: string, args: string[]): Promise<void> {
+  await execFileAsync("git", ["-C", root, ...args], { encoding: "utf8" });
+}
+
+async function initRepo(root: string): Promise<void> {
+  await git(root, ["init", "-b", "main"]);
+  await git(root, ["config", "user.email", "git@example.test"]);
+  await git(root, ["config", "user.name", "Git"]);
+}
 
 test("commit can preserve the existing index without staging the working tree", async () => {
   const calls: string[][] = [];
@@ -63,6 +78,8 @@ test("builds a short-lived Git environment without exposing the raw token", () =
     {
       PATH: "test-path",
       GIT_TRACE: "1",
+      GIT_DIR: "/",
+      GIT_WORK_TREE: "/",
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "unsafe.key",
       GIT_CONFIG_VALUE_0: "unsafe-value",
@@ -73,6 +90,8 @@ test("builds a short-lived Git environment without exposing the raw token", () =
 
   assert.equal(env.PATH, "test-path");
   assert.equal(env.GIT_TRACE, undefined);
+  assert.equal(env.GIT_DIR, undefined);
+  assert.equal(env.GIT_WORK_TREE, undefined);
   assert.equal(env.GIT_TERMINAL_PROMPT, "0");
   assert.equal(env.GIT_CONFIG_COUNT, "3");
   assert.equal(env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraHeader");
@@ -157,6 +176,7 @@ test("push disables hooks and redacts credentials from failures", async () => {
 test("requires a matching binding and keeps clone targets inside the project", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-git-operations-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await initRepo(root);
   let calls = 0;
   const runGit: GitRunner = async (args) => {
     calls += 1;
@@ -178,4 +198,66 @@ test("requires a matching binding and keeps clone targets inside the project", a
     /项目目录内/,
   );
   assert.equal(calls, 1);
+});
+
+test("fetch and pull run in a nested clone instead of the empty workspace root", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-git-nested-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const repo = path.join(root, "widgets");
+  await fs.mkdir(repo);
+  await initRepo(repo);
+  await git(repo, ["remote", "add", "origin", "https://github.com/acme/widgets.git"]);
+
+  assert.equal(resolveGitWorkTree(root), repo);
+
+  const calls: Array<{ cwd: string; args: string[] }> = [];
+  const runGit: GitRunner = async (args, options) => {
+    calls.push({ cwd: options.cwd, args });
+    if (args[0] === "remote") return { stdout: "https://github.com/acme/widgets.git\n", stderr: "" };
+    return { stdout: "ok", stderr: "" };
+  };
+
+  await runAuthenticatedGit(
+    "alice",
+    root,
+    { action: "fetch", remote: "missing-remote" },
+    {
+      runGit,
+      getCredential: () => ({ username: "alice", token: "secret" }),
+    },
+  );
+  assert.equal(calls[0]?.cwd, repo);
+  assert.deepEqual(calls[0]?.args, ["remote", "get-url", "missing-remote"]);
+  assert.equal(calls[1]?.cwd, repo);
+
+  await assert.rejects(
+    runAuthenticatedGit("alice", root, { action: "fetch", remote: "missing-remote" }, {
+      getCredential: () => ({ username: "alice", token: "secret" }),
+      baseEnv: { ...process.env, GIT_DIR: "/", GIT_WORK_TREE: "/" },
+    }),
+    (reason: unknown) => {
+      assert.ok(reason instanceof Error);
+      assert.match(reason.message, /无法读取远程仓库|No such remote/);
+      assert.doesNotMatch(reason.message, /not a git repository/i);
+      assert.doesNotMatch(reason.message, /GIT_DISCOVERY_ACROSS_FILESYSTEM/);
+      return true;
+    },
+  );
+});
+
+test("an empty workspace reports the project path instead of discovering from /", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-git-empty-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await assert.rejects(
+    runAuthenticatedGit("alice", root, { action: "fetch" }, {
+      getCredential: () => ({ username: "alice", token: "secret" }),
+    }),
+    (reason: unknown) => {
+      assert.ok(reason instanceof Error);
+      assert.match(reason.message, /当前工作区不是 Git 仓库/);
+      assert.equal(reason.message.includes(root), true);
+      assert.doesNotMatch(reason.message, /GIT_DISCOVERY_ACROSS_FILESYSTEM/);
+      return true;
+    },
+  );
 });
