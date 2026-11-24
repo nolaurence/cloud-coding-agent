@@ -190,6 +190,42 @@ test("agent tools allow workspace CRUD but deny platform writes for non-admins",
   assert.deepEqual(changed, ["workspace"]);
 });
 
+test("quoted YAML skill names list and look up without the quotes", async (t) => {
+  const root = fixture(t);
+  const system = path.join(root, "codex-home", "thread-1", "skills", ".system", "imagegen");
+  fs.mkdirSync(system, { recursive: true });
+  fs.writeFileSync(
+    path.join(system, "SKILL.md"),
+    "---\nname: \"imagegen\"\ndescription: \"Generate images\"\n---\n\n# Imagegen\n",
+  );
+  const workspaceSkill = path.join(root, ".github", "skills", "imagegen");
+  fs.mkdirSync(workspaceSkill, { recursive: true });
+  fs.writeFileSync(
+    path.join(workspaceSkill, "SKILL.md"),
+    "---\nname: 'imagegen'\ndescription: Workspace copy\n---\n\n# Workspace\n",
+  );
+  const extra = [path.join(root, "codex-home", "thread-1", "skills", ".system")];
+  const [skillTool] = createAgentResourceTools({
+    workspacePath: root,
+    canManagePlatform: () => false,
+    engineSkillsDirectory: extra[0],
+    onChanged: () => {},
+  });
+
+  const listedWorkspace = JSON.parse(String(await skillTool.handler!({ action: "list", scope: "workspace" }, {} as never))) as Array<{ name: string }>;
+  const listedPlatform = JSON.parse(String(await skillTool.handler!({ action: "list", scope: "platform" }, {} as never))) as Array<{ name: string }>;
+  assert.equal(listedWorkspace.some((skill) => skill.name === "imagegen"), true);
+  assert.equal(listedWorkspace.some((skill) => skill.name.includes('"')), false);
+  assert.equal(listedPlatform.some((skill) => skill.name === "imagegen"), true);
+
+  const gotWorkspace = JSON.parse(String(await skillTool.handler!({ action: "get", scope: "workspace", name: "imagegen" }, {} as never))) as { name: string };
+  const gotQuoted = JSON.parse(String(await skillTool.handler!({ action: "get", scope: "platform", name: '"imagegen"' }, {} as never))) as { name: string };
+  assert.equal(gotWorkspace.name, "imagegen");
+  assert.equal(gotQuoted.name, "imagegen");
+  assert.equal(getScopedSkill("workspace", "imagegen", root, extra)?.name, "imagegen");
+  assert.equal(getScopedSkill("platform", "imagegen", undefined, extra)?.name, "imagegen");
+});
+
 test("manage_skills can read Codex bundled system skills that are not in the git workspace", async (t) => {
   const root = fixture(t);
   const system = path.join(root, "codex-home", "thread-1", "skills", ".system", "imagegen");

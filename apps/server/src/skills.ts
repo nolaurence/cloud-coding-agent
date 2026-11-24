@@ -19,23 +19,45 @@ function pluginNameOfDirectory(directory: string): string | undefined {
   return relative.split(path.sep)[0];
 }
 
+export function unquoteYamlScalar(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2) {
+    const quote = trimmed[0];
+    if ((quote === '"' || quote === "'") && trimmed.endsWith(quote)) {
+      return trimmed.slice(1, -1).trim();
+    }
+  }
+  return trimmed;
+}
+
 function parseFrontmatter(raw: string): { name?: string; description?: string; body: string } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) return { body: raw };
   const fm = match[1] ?? "";
+  const name = fm.match(/^name:\s*(.+)$/m)?.[1];
+  const description = fm.match(/^description:\s*(.*)$/m)?.[1];
   return {
-    name: fm.match(/^name:\s*(.+)$/m)?.[1]?.trim(),
-    description: fm.match(/^description:\s*(.*)$/m)?.[1]?.trim(),
+    name: name === undefined ? undefined : unquoteYamlScalar(name),
+    description: description === undefined ? undefined : unquoteYamlScalar(description),
     body: match[2] ?? "",
   };
 }
 
 export function normalizeSkillName(input: string): string {
-  const name = input.trim().toLowerCase();
+  const name = unquoteYamlScalar(input).toLowerCase();
   if (!SKILL_NAME.test(name)) {
     throw new Error("技能名称只能包含小写字母、数字和中划线，长度不超过 64 个字符");
   }
   return name;
+}
+
+function listedSkillName(parsedName: string | undefined, entryName: string): string {
+  for (const candidate of [parsedName, entryName]) {
+    if (!candidate) continue;
+    const name = unquoteYamlScalar(candidate).toLowerCase();
+    if (SKILL_NAME.test(name)) return name;
+  }
+  return unquoteYamlScalar(parsedName || entryName);
 }
 
 function isInside(root: string, target: string): boolean {
@@ -105,7 +127,7 @@ function scanSkills(scope: ResourceScope, workspacePath?: string, extraDirectori
         throw error;
       }
       const parsed = parseFrontmatter(raw);
-      const skillName = parsed.name || entry.name;
+      const skillName = listedSkillName(parsed.name, entry.name);
       if (seen.has(skillName)) continue;
       seen.add(skillName);
       const plugin = scope === "platform" ? pluginNameOfDirectory(dir) : undefined;

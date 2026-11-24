@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createWriteStream } from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -11,6 +12,7 @@ import {
   SANDBOX_SYNC_MAX_FILES,
   SANDBOX_WORKSPACE_POLICY_VERSION,
 } from "./dockerSandboxFiles.js";
+import { parseJsonUtf8, writeJsonToStream } from "./sandboxJson.js";
 
 export interface DockerSandboxConfig {
   host: string;
@@ -280,7 +282,7 @@ export function invokeSandbox<T>(config: DockerSandboxConfig, request: object, t
       clearTimeout(timer);
       if (failure) { reject(failure); return; }
       try {
-        const response = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { result: T; error?: string };
+        const response = parseJsonUtf8(Buffer.concat(chunks)) as { result: T; error?: string };
         if (response.error) throw new Error("Docker 沙箱：" + response.error);
         if (code !== 0 || response.result === undefined) throw new Error("Docker 沙箱 SSH 连接失败");
         resolve(response.result);
@@ -288,8 +290,22 @@ export function invokeSandbox<T>(config: DockerSandboxConfig, request: object, t
         reject(error instanceof SyntaxError ? new Error("Docker 沙箱连接失败，请检查 SSH 密钥、主机指纹和远端网关") : error);
       }
     });
-    child.stdin.end(JSON.stringify(request));
+    void writeJsonToStream(child.stdin, request).catch(error => {
+      failure ??= error instanceof Error ? error : new Error(String(error));
+      child.kill();
+    });
   });
+}
+
+async function writeJsonFile(file: string, value: unknown, mode = 0o600): Promise<void> {
+  const stream = createWriteStream(file, { mode });
+  try {
+    await writeJsonToStream(stream, value);
+  } catch (error) {
+    stream.destroy();
+    await fs.rm(file, { force: true });
+    throw error;
+  }
 }
 
 export class DockerSandbox {
@@ -339,7 +355,7 @@ export class DockerSandbox {
       catch (error) {
         const recovery = path.join(DATA_DIR, "sandbox-recovery", id + ".json");
         await fs.mkdir(path.dirname(recovery), { recursive: true, mode: 0o700 });
-        await fs.writeFile(recovery, JSON.stringify(result), { mode: 0o600 });
+        await writeJsonFile(recovery, result);
         throw new Error(`${error instanceof Error ? error.message : "沙箱同步失败"}；结果已保存在服务端 ${recovery}`);
       }
       const { files, deleted, ...output } = result;

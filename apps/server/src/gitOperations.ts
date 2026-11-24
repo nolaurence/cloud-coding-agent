@@ -5,6 +5,7 @@ import { devNull } from "node:os";
 import { defineTool, type Tool } from "@github/copilot-sdk";
 import type { GitCommitResult, GitProvider } from "@cca/protocol";
 import { getGitCredential, type GitCredential } from "./gitBindings.js";
+import { resolveProjectGitRoot } from "./workspace.js";
 
 const GIT_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_GIT_OUTPUT = 2 * 1024 * 1024;
@@ -21,6 +22,7 @@ export interface AuthenticatedGitArgs {
   repository?: string;
   provider?: GitProvider;
   destination?: string;
+  directory?: string;
   branch?: string;
   strategy?: "ff-only" | "rebase" | "merge";
   prune?: boolean;
@@ -191,13 +193,54 @@ function sanitizedGitEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
       key === "SSH_ASKPASS" ||
       key === "GIT_CURL_VERBOSE" ||
       key.startsWith("GIT_TRACE") ||
-      key.startsWith("GCM_TRACE")
+      key.startsWith("GCM_TRACE") ||
+      [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_DIFF_OPTS",
+      ].includes(key)
     ) {
       delete env[key];
     }
   }
   env.GIT_TERMINAL_PROMPT = "0";
   return env;
+}
+
+export function isGitWorkTree(root: string): boolean {
+  try {
+    const stat = fs.lstatSync(path.join(root, ".git"));
+    return stat.isDirectory() || stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Map a CCA workspace onto the git work tree clone actually lives in. */
+export function resolveGitWorkTree(projectRoot: string, directory?: string): string {
+  const root = fs.realpathSync(projectRoot);
+  if (directory?.trim()) {
+    const target = resolveProjectGitRoot(root, directory.trim());
+    if (!isGitWorkTree(target)) throw new Error(`目录 ${directory.trim()} 不是 Git 仓库`);
+    return target;
+  }
+  if (isGitWorkTree(root)) return root;
+  const nested: string[] = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const candidate = path.join(root, entry.name);
+    if (isGitWorkTree(candidate)) nested.push(candidate);
+  }
+  if (nested.length === 1) return nested[0]!;
+  if (nested.length > 1) {
+    throw new Error(`工作区内有多个 Git 仓库（${nested.map((dir) => path.basename(dir)).join("、")}），请指定 directory`);
+  }
+  throw new Error(`当前工作区不是 Git 仓库: ${root}`);
 }
 
 export function buildAuthenticatedGitEnv(
@@ -221,7 +264,7 @@ const defaultGitRunner: GitRunner = (args, options) =>
   new Promise((resolve, reject) => {
     execFile(
       "git",
-      args,
+      ["-C", options.cwd, ...args],
       {
         cwd: options.cwd,
         env: options.env,
@@ -311,11 +354,12 @@ export async function runAuthenticatedGit(
     throw new Error("不支持的 Git 操作");
   }
   const runGit = dependencies.runGit ?? defaultGitRunner;
-  const baseEnv = dependencies.baseEnv ?? process.env;
+  const baseEnv = sanitizedGitEnv(dependencies.baseEnv ?? process.env);
   const branch = validateBranch(args.branch);
   let remote: NormalizedGitRemote;
   let command: string[];
   let localCommand: string[] | undefined;
+  let commandCwd = cwd;
   let localCwd = cwd;
 
   if (args.action === "clone") {
@@ -330,14 +374,17 @@ export async function runAuthenticatedGit(
       destination,
     ];
     localCommand = ["checkout", "--force", branch ?? "HEAD"];
+    commandCwd = cwd;
     localCwd = destination;
   } else {
+    commandCwd = resolveGitWorkTree(cwd, args.directory);
+    localCwd = commandCwd;
     const remoteName = validateRemoteName(args.remote);
     let remoteResult: GitRunResult;
     try {
       remoteResult = await runGit(
         ["remote", "get-url", ...(args.action === "push" ? ["--push"] : []), remoteName],
-        gitOptions(cwd, baseEnv),
+        gitOptions(commandCwd, baseEnv),
       );
     } catch (error) {
       throw commandError(error, `无法读取远程仓库 ${remoteName}`);
@@ -393,7 +440,7 @@ export async function runAuthenticatedGit(
     "base64",
   );
   try {
-    const authenticatedResult = await runGit(command, gitOptions(cwd, env));
+    const authenticatedResult = await runGit(command, gitOptions(commandCwd, env));
     if (!localCommand) return outputFor(args.action, authenticatedResult);
 
     const localEnv = sanitizedGitEnv(baseEnv);
@@ -418,6 +465,7 @@ const TOOL_PARAMETERS = {
     repository: { type: "string", description: "clone 使用的 GitHub/Gitee 仓库地址或 owner/repo" },
     provider: { type: "string", enum: ["github", "gitee"], description: "仓库地址为 owner/repo 时必填" },
     destination: { type: "string", description: "clone 到当前项目目录下的相对路径" },
+    directory: { type: "string", description: "工作区内的一级目录；clone 到子目录后 fetch/pull/push 使用该仓库，省略时自动选择唯一的 Git 仓库" },
     branch: { type: "string", description: "分支名或引用;省略时使用当前分支/默认分支" },
     strategy: { type: "string", enum: ["ff-only", "rebase", "merge"], description: "pull 策略,默认 ff-only" },
     prune: { type: "boolean", description: "fetch 时清理已删除的远程引用" },
