@@ -14,7 +14,27 @@ const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const REPOSITORY_PATH = /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/;
 const GIT_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/;
 
-export type AuthenticatedGitAction = "clone" | "fetch" | "pull" | "push";
+export type AuthenticatedGitAction =
+  | "clone"
+  | "fetch"
+  | "pull"
+  | "push"
+  | "commit"
+  | "init"
+  | "import_bundle";
+
+const AUTHENTICATED_GIT_ACTIONS: readonly AuthenticatedGitAction[] = [
+  "clone",
+  "fetch",
+  "pull",
+  "push",
+  "commit",
+  "init",
+  "import_bundle",
+];
+
+export const BUNDLE_IMPORT_HINT =
+  "若该 bundle 来自沙箱 git init（无关历史），请改用 authenticated_git 的 commit 提交当前工作区文件后再 push，不要让用户在宿主终端导入 bundle。";
 
 export interface AuthenticatedGitArgs {
   action: AuthenticatedGitAction;
@@ -28,6 +48,9 @@ export interface AuthenticatedGitArgs {
   prune?: boolean;
   setUpstream?: boolean;
   forceWithLease?: boolean;
+  message?: string;
+  bundle?: string;
+  stageAll?: boolean;
 }
 
 export interface NormalizedGitRemote {
@@ -221,6 +244,16 @@ export function isGitWorkTree(root: string): boolean {
   }
 }
 
+export function listNestedGitWorkTrees(projectRoot: string): string[] {
+  const nested: string[] = [];
+  for (const entry of fs.readdirSync(projectRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const candidate = path.join(projectRoot, entry.name);
+    if (isGitWorkTree(candidate)) nested.push(candidate);
+  }
+  return nested;
+}
+
 /** Map a CCA workspace onto the git work tree clone actually lives in. */
 export function resolveGitWorkTree(projectRoot: string, directory?: string): string {
   const root = fs.realpathSync(projectRoot);
@@ -230,17 +263,70 @@ export function resolveGitWorkTree(projectRoot: string, directory?: string): str
     return target;
   }
   if (isGitWorkTree(root)) return root;
-  const nested: string[] = [];
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
-    const candidate = path.join(root, entry.name);
-    if (isGitWorkTree(candidate)) nested.push(candidate);
-  }
+  const nested = listNestedGitWorkTrees(root);
   if (nested.length === 1) return nested[0]!;
   if (nested.length > 1) {
     throw new Error(`工作区内有多个 Git 仓库（${nested.map((dir) => path.basename(dir)).join("、")}），请指定 directory`);
   }
   throw new Error(`当前工作区不是 Git 仓库: ${root}`);
+}
+
+function resolveWorkspaceFile(projectRoot: string, relativePath: string | undefined, label: string): string {
+  const value = relativePath?.trim();
+  if (!value || value.length > 512 || value.includes("\0") || path.isAbsolute(value)) {
+    throw new Error(`${label}必须是项目目录内的相对路径`);
+  }
+  const root = fs.realpathSync(projectRoot);
+  const target = path.resolve(root, value);
+  const relative = path.relative(root, target);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label}必须是项目目录内的文件`);
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(target);
+  } catch {
+    throw new Error(`${label}不存在`);
+  }
+  if (stat.isSymbolicLink()) throw new Error(`${label}不能是符号链接`);
+  if (!stat.isFile()) throw new Error(`${label}必须是文件`);
+  const real = fs.realpathSync(target);
+  const realRelative = path.relative(root, real);
+  if (realRelative === ".." || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) {
+    throw new Error(`${label}不能指向项目目录外`);
+  }
+  return real;
+}
+
+function parseBundleHeads(listed: string): string[] {
+  return listed
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/)[1])
+    .filter((ref): ref is string => Boolean(ref));
+}
+
+function selectBundleRef(heads: string[], requested?: string): string {
+  if (requested) return requested;
+  if (heads.includes("HEAD")) return "HEAD";
+  const branch = heads.find((ref) => ref.startsWith("refs/heads/"));
+  if (branch) return branch;
+  if (heads[0]) return heads[0];
+  return "HEAD";
+}
+
+async function repositoryHasHead(
+  cwd: string,
+  runGit: GitRunner,
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  try {
+    const result = await runGit(["rev-parse", "--verify", "--quiet", "HEAD"], gitOptions(cwd, env));
+    return Boolean(result.stdout.trim());
+  } catch (error) {
+    const code = (error as { code?: string | number | null }).code;
+    if (code === 1 || code === 128) return false;
+    throw error;
+  }
 }
 
 export function buildAuthenticatedGitEnv(
@@ -344,17 +430,114 @@ export async function commitProjectChanges(
   }
 }
 
+async function initProjectGit(
+  cwd: string,
+  args: AuthenticatedGitArgs,
+  runGit: GitRunner,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  if (!args.repository) throw new Error("初始化仓库时必须提供仓库地址，以便后续 push");
+  const remote = normalizeGitRemote(args.repository, args.provider);
+  const root = fs.realpathSync(cwd);
+  const branch = validateBranch(args.branch) ?? "main";
+  let target: string;
+  if (args.directory?.trim()) {
+    target = resolveProjectGitRoot(root, args.directory.trim());
+    if (isGitWorkTree(target)) throw new Error(`目录 ${args.directory.trim()} 已经是 Git 仓库`);
+  } else if (isGitWorkTree(root)) {
+    throw new Error("当前工作区已经是 Git 仓库");
+  } else {
+    const nested = listNestedGitWorkTrees(root);
+    if (nested.length === 1) {
+      throw new Error(`工作区已有 Git 仓库（${path.basename(nested[0]!)}），请对该目录 commit/push，或指定 directory`);
+    }
+    if (nested.length > 1) {
+      throw new Error(`工作区内有多个 Git 仓库（${nested.map((dir) => path.basename(dir)).join("、")}），请指定 directory`);
+    }
+    target = root;
+  }
+  await runGit(["init", "-b", branch], gitOptions(target, env));
+  await runGit(["remote", "add", "origin", remote.url], gitOptions(target, env));
+  return `已在 ${target} 初始化 Git 仓库，远程 origin 为 ${remote.url}`;
+}
+
+async function importGitBundle(
+  cwd: string,
+  args: AuthenticatedGitArgs,
+  runGit: GitRunner,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const workTree = resolveGitWorkTree(cwd, args.directory);
+  const bundle = resolveWorkspaceFile(cwd, args.bundle, "Git bundle");
+  const requested = validateBranch(args.branch);
+  let heads: string[] = [];
+  try {
+    const listed = await runGit(["bundle", "list-heads", bundle], gitOptions(workTree, env));
+    heads = parseBundleHeads(listed.stdout);
+  } catch (error) {
+    throw commandError(error, "无法读取 Git bundle");
+  }
+  const ref = selectBundleRef(heads, requested);
+  const fetchEnv = { ...env, GIT_LFS_SKIP_SMUDGE: "1" };
+  try {
+    await runGit(["fetch", bundle, ref], gitOptions(workTree, fetchEnv));
+  } catch (error) {
+    throw commandError(
+      error,
+      `无法从 Git bundle 导入 ${ref}。${BUNDLE_IMPORT_HINT}`,
+    );
+  }
+  if (!(await repositoryHasHead(workTree, runGit, env))) {
+    const checkoutBranch = requested && !requested.includes("/") ? requested : "main";
+    const checkout = await runGit(
+      ["-c", `core.hooksPath=${devNull}`, "checkout", "-B", checkoutBranch, "FETCH_HEAD"],
+      gitOptions(workTree, env),
+    );
+    return outputFor("import_bundle", checkout);
+  }
+  const strategy = args.strategy ?? "ff-only";
+  if (!["ff-only", "rebase", "merge"].includes(strategy)) throw new Error("不支持的 pull 策略");
+  const localCommand =
+    strategy === "rebase"
+      ? ["rebase", "FETCH_HEAD"]
+      : strategy === "merge"
+        ? ["-c", `core.hooksPath=${devNull}`, "merge", "--no-edit", "FETCH_HEAD"]
+        : ["-c", `core.hooksPath=${devNull}`, "merge", "--ff-only", "FETCH_HEAD"];
+  try {
+    const merged = await runGit(localCommand, gitOptions(workTree, env));
+    return outputFor("import_bundle", merged);
+  } catch (error) {
+    throw commandError(error, `无法将 bundle 合并到当前分支。${BUNDLE_IMPORT_HINT}`);
+  }
+}
+
 export async function runAuthenticatedGit(
   ownerId: string,
   cwd: string,
   args: AuthenticatedGitArgs,
   dependencies: GitOperationDependencies = {},
 ): Promise<string> {
-  if (!["clone", "fetch", "pull", "push"].includes(args.action)) {
+  if (!AUTHENTICATED_GIT_ACTIONS.includes(args.action)) {
     throw new Error("不支持的 Git 操作");
   }
   const runGit = dependencies.runGit ?? defaultGitRunner;
   const baseEnv = sanitizedGitEnv(dependencies.baseEnv ?? process.env);
+  if (args.action === "commit") {
+    const workTree = resolveGitWorkTree(cwd, args.directory);
+    const result = await commitProjectChanges(
+      workTree,
+      args.message ?? "",
+      { stageAll: args.stageAll },
+      { runGit, baseEnv },
+    );
+    return result.summary || `已创建提交 ${result.hash}`;
+  }
+  if (args.action === "init") {
+    return initProjectGit(cwd, args, runGit, baseEnv);
+  }
+  if (args.action === "import_bundle") {
+    return importGitBundle(cwd, args, runGit, baseEnv);
+  }
   const branch = validateBranch(args.branch);
   let remote: NormalizedGitRemote;
   let command: string[];
@@ -460,24 +643,41 @@ const TOOL_PARAMETERS = {
   additionalProperties: false,
   required: ["action"],
   properties: {
-    action: { type: "string", enum: ["clone", "fetch", "pull", "push"] },
+    action: {
+      type: "string",
+      enum: ["clone", "fetch", "pull", "push", "commit", "init", "import_bundle"],
+    },
     remote: { type: "string", description: "远程名称,默认 origin" },
-    repository: { type: "string", description: "clone 使用的 GitHub/Gitee 仓库地址或 owner/repo" },
+    repository: {
+      type: "string",
+      description: "clone 或 init 使用的 GitHub/Gitee 仓库地址或 owner/repo",
+    },
     provider: { type: "string", enum: ["github", "gitee"], description: "仓库地址为 owner/repo 时必填" },
     destination: { type: "string", description: "clone 到当前项目目录下的相对路径" },
-    directory: { type: "string", description: "工作区内的一级目录；clone 到子目录后 fetch/pull/push 使用该仓库，省略时自动选择唯一的 Git 仓库" },
+    directory: {
+      type: "string",
+      description:
+        "工作区内的一级目录；clone 到子目录后 fetch/pull/push/commit/import_bundle 使用该仓库，省略时自动选择唯一的 Git 仓库",
+    },
     branch: { type: "string", description: "分支名或引用;省略时使用当前分支/默认分支" },
-    strategy: { type: "string", enum: ["ff-only", "rebase", "merge"], description: "pull 策略,默认 ff-only" },
+    strategy: {
+      type: "string",
+      enum: ["ff-only", "rebase", "merge"],
+      description: "pull 或 import_bundle 的整合策略,默认 ff-only",
+    },
     prune: { type: "boolean", description: "fetch 时清理已删除的远程引用" },
     setUpstream: { type: "boolean", description: "push 时设置上游分支" },
     forceWithLease: { type: "boolean", description: "push 时使用安全的 force-with-lease,仅在用户明确要求时启用" },
+    message: { type: "string", description: "commit 的提交说明" },
+    bundle: { type: "string", description: "import_bundle 使用的工作区内相对路径，例如 spring-frontend-b7405df.bundle" },
+    stageAll: { type: "boolean", description: "commit 前是否 git add --all，默认 true" },
   },
 } as const;
 
 export function createAuthenticatedGitTool(ownerId: string | undefined, cwd: string): Tool<AuthenticatedGitArgs> {
   return defineTool<AuthenticatedGitArgs>("authenticated_git", {
     description:
-      "使用当前用户在设置中绑定的 GitHub 或 Gitee 账号执行认证 Git 网络操作。对 clone、fetch、pull、push 优先使用此工具,不要索取或输出访问令牌。",
+      "在宿主工作区执行 Git。沙箱不同步 .git，run_code 改动的文件会回写宿主；提交与推送必须用本工具，不要在沙箱 git init/commit/bundle，也不要让用户在宿主终端导入 bundle。commit 提交当前工作区；push/fetch/pull/clone 使用绑定的 GitHub 或 Gitee 账号；工作区还不是仓库时用 init（需 repository）或 clone；会话里已有 .bundle 时用 import_bundle。不要索取或输出访问令牌。",
     parameters: TOOL_PARAMETERS,
     defer: "never",
     handler: async (args) => {

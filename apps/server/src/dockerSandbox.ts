@@ -102,7 +102,7 @@ run_code 接收 JavaScript async 函数体，可在同一代码块内使用 for/
 用 print(value) 输出需要反馈给模型的结果，或 return JSON 值；不要每次循环都请求模型。示例：for (const file of await tools.list_files('.')) { print(file); }
 每次执行使用独立 Linux Docker 容器和全新工作目录，源码及普通文件自动同步回工作区；依赖、构建缓存、JS 内存、/tmp 和后台进程均不跨代码块保留。安装依赖、构建和测试必须放在同一个 run_code 中完成，先检查 tools.exec 的 exitCode 再执行后续步骤。
 工作区可能包含多层嵌套或多个工程，先定位 package.json、pyproject.toml/requirements.txt、go.mod/go.work、pom.xml/build.gradle(.kts) 等清单，再用 tools.exec 的 cwd 指定实际工程目录。会话/宿主工作区路径会自动映射到 /workspace；目录不存在时返回 errorCode=ENOENT 和 "directory does not exist"，子命令超时返回 timedOut=true 且 errorCode=TIMEOUT。
-所有层级的 node_modules、Python 虚拟环境/字节码、Go 模块/编译缓存、Maven/Gradle 构建目录、.codex-tmp / .acl-recovery 等临时目录及通用 dist/build/coverage 等生成物均不参与同步。Git 仓库还会遵循 .gitignore。同步默认上限为单文件 512 MiB、合计 1 GiB、50000 个文件；超过单文件或合计上限的内容会被跳过并给出警告，run_code（包括删除大目录）仍可执行。导出失败后可继续执行清理或后续代码块，已修改源码会先收回再继续。保留源码、清单、锁文件、Yarn/Maven/Gradle wrapper 和 Go vendor 源码。需要交付的构建产物请在同一代码块内复制到未排除的目录。Git 元数据不在沙箱中，认证 Git 操作使用平台入口。禁止尝试回退到服务端本地命令执行。`;
+所有层级的 node_modules、Python 虚拟环境/字节码、Go 模块/编译缓存、Maven/Gradle 构建目录、.codex-tmp / .acl-recovery 等临时目录及通用 dist/build/coverage 等生成物均不参与同步。Git 仓库还会遵循 .gitignore。同步默认上限为单文件 512 MiB、合计 1 GiB、50000 个文件；超过单文件或合计上限的内容会被跳过并给出警告，run_code（包括删除大目录）仍可执行。导出失败后可继续执行清理或后续代码块，已修改源码会先收回再继续。保留源码、清单、锁文件、Yarn/Maven/Gradle wrapper 和 Go vendor 源码。需要交付的构建产物请在同一代码块内复制到未排除的目录。Git 元数据（.git）不进入沙箱，也不要在 run_code 里 git init、commit 或创建 bundle。文件改动会同步回宿主工作区；请用平台 authenticated_git 的 commit / push 完成提交与推送。若会话里已有 .bundle，用 authenticated_git 的 import_bundle，不要让用户在宿主终端导入。禁止尝试回退到服务端本地命令执行。`;
 
 export async function readDockerSandboxConfig(): Promise<DockerSandboxConfig | undefined> {
   const file = process.env.CCA_DOCKER_SANDBOX_CONFIG || path.join(DATA_DIR, "docker-sandbox.json");

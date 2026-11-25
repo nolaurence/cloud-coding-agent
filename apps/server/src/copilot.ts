@@ -740,7 +740,7 @@ export class CopilotManager {
     const mcpServers = effectiveMcpServers(project.path);
     const skillConfig = enabledSkillDirectories(project.path);
     const systemInstructions = [
-      "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。不要向用户索取、读取或输出访问令牌。",
+      "GitHub 或 Gitee 的 clone、fetch、pull、push 需要远程认证时,必须使用 authenticated_git 工具。沙箱不同步 .git：run_code 改动会回写宿主工作区，提交用 authenticated_git 的 commit，再 push。不要在 run_code 里 git init、commit 或创建 bundle，也不要让用户在宿主终端导入 bundle。若会话里已有 .bundle，使用 authenticated_git 的 import_bundle。工作区还不是 Git 仓库时使用 init（需 repository）或 clone。不要向用户索取、读取或输出访问令牌。",
     ];
     if (thread.agentMode !== "ultra") {
       systemInstructions.push(...STANDARD_SYSTEM_INSTRUCTIONS);

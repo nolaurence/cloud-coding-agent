@@ -1839,6 +1839,8 @@ test("creates an isolated session with managed resource tools", async (t) => {
   assert.ok(config.tools?.[0]?.handler);
   assert.ok(config.tools?.[1]?.handler);
   assert.match(config.systemMessage?.content ?? "", /authenticated_git/);
+  assert.match(config.systemMessage?.content ?? "", /import_bundle/);
+  assert.match(config.systemMessage?.content ?? "", /不要在 run_code 里 git init/);
   assert.doesNotMatch(config.systemMessage?.content ?? "", /Ultra mode is enabled/);
   await manager.interrupt(threadId);
 });
