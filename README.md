@@ -159,7 +159,7 @@ docker compose -f docker-compose-prod.yml up -d --build
 6. 设置 → MCP / 技能:按需接入平台级外部工具与提示词模块
 7. Agent 可通过 `manage_mcp_servers` 和 `manage_skills` 查询或管理资源;workspace 写操作对工作区所有者开放,平台写操作仅管理员 Agent 可用。workspace 同名 MCP 覆盖平台配置
 
-绑定令牌使用服务端密钥加密保存,按会话所属用户读取。Agent 通过受控的 `authenticated_git` 工具执行远程 Git 操作;令牌不会写入仓库 URL、`.gitconfig` 或 Web 终端环境。HTTPS 和常见 SSH remote 会统一通过对应平台的 HTTPS 认证执行。
+绑定令牌使用服务端密钥加密保存,按会话所属用户读取。Agent 通过受控的 `authenticated_git` 工具执行宿主侧 Git 操作（含 commit / init / import_bundle 与认证 clone/fetch/pull/push）;令牌不会写入仓库 URL、`.gitconfig` 或 Web 终端环境。HTTPS 和常见 SSH remote 会统一通过对应平台的 HTTPS 认证执行。沙箱不同步 `.git`，不要让用户在宿主终端导入 bundle。
 
 ### DSH 对话轨迹
 

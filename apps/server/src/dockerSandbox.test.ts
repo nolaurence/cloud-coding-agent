@@ -5,13 +5,21 @@ import path from "node:path";
 import test from "node:test";
 import fixtures from "./dockerSandboxFixtures.json" with { type: "json" };
 import { spawnSync } from "node:child_process";
-import { applyRecoveredWorkspace, applySandboxChanges, collectWorkspaceSnapshot, DockerSandbox, gitSnapshotNames, isPreviousExportFailed, readDockerSandboxConfig, sandboxSyncLimits, sandboxSyncWarning, snapshotWorkspace, validateWorkspaceName, type SandboxResult } from "./dockerSandbox.js";
+import { applyRecoveredWorkspace, applySandboxChanges, collectWorkspaceSnapshot, DockerSandbox, gitSnapshotNames, isPreviousExportFailed, readDockerSandboxConfig, SANDBOX_INSTRUCTIONS, sandboxSyncLimits, sandboxSyncWarning, snapshotWorkspace, validateWorkspaceName, type SandboxResult } from "./dockerSandbox.js";
 import { SANDBOX_SYNC_MAX_BYTES, SANDBOX_SYNC_MAX_FILE_BYTES, SANDBOX_SYNC_MAX_FILES, SANDBOX_WORKSPACE_POLICY_VERSION } from "./dockerSandboxFiles.js";
 
 const result = (files: Record<string, { data: string; executable: boolean }>, deleted: string[] = []): SandboxResult => ({
   stdout: "", stderr: "", exitCode: 0, timedOut: false, truncated: false, files, deleted,
 });
 const entry = (text: string) => ({ data: Buffer.from(text).toString("base64"), executable: false });
+
+test("sandbox instructions send git operations to authenticated_git instead of host-terminal bundles", () => {
+  assert.match(SANDBOX_INSTRUCTIONS, /authenticated_git/);
+  assert.match(SANDBOX_INSTRUCTIONS, /commit \/ push/);
+  assert.match(SANDBOX_INSTRUCTIONS, /import_bundle/);
+  assert.match(SANDBOX_INSTRUCTIONS, /不要在 run_code 里 git init/);
+  assert.match(SANDBOX_INSTRUCTIONS, /不要让用户在宿主终端导入/);
+});
 
 test("explicit sandbox configuration fails closed when missing or malformed", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cca-sandbox-config-"));
